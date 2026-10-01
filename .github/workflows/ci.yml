@@ -16,6 +16,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m compileall -q app migrations tests
       - run: python -m pytest -q
+      - run: cp .env.example .env
       - run: docker compose --env-file .env.example config --quiet
 
   migrations:
