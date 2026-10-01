@@ -1,0 +1,94 @@
+{
+  "start": "welcome",
+  "nodes": {
+    "welcome": {
+      "type": "text",
+      "text": "Добро пожаловать! Мини-курс: ИИ и профессия PR.",
+      "next": "lesson"
+    },
+    "lesson": {
+      "type": "video",
+      "text": "Урок 1. После просмотра напишите «Продолжить».",
+      "media": "https://example.org/lesson-1.mp4",
+      "next": "ack"
+    },
+    "ack": {
+      "type": "question",
+      "key": "acknowledgement",
+      "text": "Напишите «Продолжить», когда будете готовы.",
+      "options": [
+        "Продолжить"
+      ],
+      "next": "survey"
+    },
+    "survey": {
+      "type": "survey",
+      "key": "survey_completed",
+      "questions": [
+        {
+          "key": "role",
+          "text": "Выберите: PR / Бизнес / Другое",
+          "options": [
+            "PR",
+            "Бизнес",
+            "Другое"
+          ]
+        },
+        {
+          "key": "need",
+          "text": "Какую задачу хотите решить?"
+        }
+      ],
+      "next": "grant"
+    },
+    "grant": {
+      "type": "grant",
+      "product": "book_24_tools",
+      "requires": [
+        "survey_completed"
+      ],
+      "next": "book"
+    },
+    "book": {
+      "type": "document",
+      "text": "Ваш бонус: книга с инструментами.",
+      "media": "https://example.org/book.pdf",
+      "next": "wait"
+    },
+    "wait": {
+      "type": "wait",
+      "seconds": 120,
+      "next": "offer"
+    },
+    "offer": {
+      "type": "question",
+      "key": "interest",
+      "text": "Хотите обсудить обучение? Напишите «Да» или «Нет».",
+      "options": [
+        "Да",
+        "Нет"
+      ],
+      "next": "branch"
+    },
+    "branch": {
+      "type": "condition",
+      "key": "interest",
+      "equals": "Да",
+      "yes": "hot",
+      "no": "finish"
+    },
+    "hot": {
+      "type": "stage",
+      "text": "Горячий",
+      "next": "task"
+    },
+    "task": {
+      "type": "task",
+      "text": "Связаться с участником по поводу обучения",
+      "next": "finish"
+    },
+    "finish": {
+      "type": "finish"
+    }
+  }
+}
