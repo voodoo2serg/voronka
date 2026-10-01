@@ -190,6 +190,6 @@ window.addEventListener("beforeunload",e=>{if(dirty){e.preventDefault();e.return
  tg.ready();const response=await fetch("/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({init_data:tg.initData})});
  const data=await response.json();if(!response.ok)throw Error(JSON.stringify(data.detail));
  token=data.token;role=data.role;$("testChat").value=String(tg.initDataUnsafe?.user?.id||"");
- document.querySelector("main").hidden=false;await refresh();status("Вход выполнен · "+role);
+ await refresh();document.querySelector("main").hidden=false;status("Вход выполнен · "+role);
  }catch(e){status(e.message);}
 })();

@@ -25,12 +25,12 @@ def main():
                 url = base + "/hooks/" + c.id
                 if c.platform == "telegram":
                     response = client.post(f"https://api.telegram.org/bot{token}/setWebhook",
-                        json={"url": url, "secret_token": secret, "allowed_updates": ["message"]})
+                        json={"url": url, "secret_token": secret, "allowed_updates": ["message", "callback_query"]})
                     good = response.json().get("ok")
                 elif c.platform == "max":
                     response = client.post("https://platform-api2.max.ru/subscriptions",
                         headers={"Authorization": token}, json={
-                            "url": url, "secret": secret, "update_types": ["bot_started", "message_created"]})
+                            "url": url, "secret": secret, "update_types": ["bot_started", "message_created", "message_callback"]})
                     good = response.status_code == 200 and response.json().get("success")
                 else:
                     print("Configure VK Callback API in community settings. URL:", url)

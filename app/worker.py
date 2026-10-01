@@ -157,7 +157,12 @@ def main():
         lock = Session.kw["bind"].connect()
         if not lock.execute(text("SELECT pg_try_advisory_lock(730191)")).scalar():
             raise SystemExit("Another worker is already running")
+        lock.commit()
     while True:
+        if lock is not None:
+            # Exit on a lost DB session: its advisory lock may have been released.
+            lock.execute(text("SELECT 1"))
+            lock.commit()
         try:
             cache.setex("worker:heartbeat", 240, str(time.time()))
             sweep()
