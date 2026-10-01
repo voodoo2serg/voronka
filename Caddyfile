@@ -1,0 +1,5 @@
+{$DOMAIN} {
+    reverse_proxy api:8000
+    header X-Content-Type-Options nosniff
+    header Referrer-Policy no-referrer
+}
