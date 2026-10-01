@@ -40,10 +40,10 @@ function renderSteps(){
  card.append(node("div",id+(id===current.graph.start?" · вход":"")+(n.next?" → "+n.next:""),"muted"));$("steps").append(card);}
 }
 function field(label,value,onchange,type="input"){
- const wrap=node("label",label);const input=node(type);input.value=value??"";input.onchange=()=>{onchange(input.value);markDirty();renderSteps();};wrap.append(input);$("stepForm").append(wrap);return input;
+ const wrap=node("label",label);const input=node(type);input.setAttribute("aria-label",label);input.value=value??"";input.onchange=()=>{onchange(input.value);markDirty();renderSteps();};wrap.append(input);$("stepForm").append(wrap);return input;
 }
 function selection(label,choices,value,onchange){
- const wrap=node("label",label),input=node("select");options(input,choices,value);
+ const wrap=node("label",label),input=node("select");input.setAttribute("aria-label",label);options(input,choices,value);
  input.onchange=()=>{onchange(input.value);markDirty();renderSteps();};wrap.append(input);$("stepForm").append(wrap);return input;
 }
 function lines(value){return (value||"").split("\n").map(x=>x.trim()).filter(Boolean);}
