@@ -8,10 +8,19 @@ from sqlalchemy.exc import IntegrityError
 from app.db import Session, Admin, Connection, Destination, Funnel, Version, Entry, Inbox, Outbox, Event, Identity, Run, Task
 from app.auth import actor, permit, allowed, validate_init_data, issue_session, cache
 from app.channels import normalize
-from app.graph import validate_graph
-from app.runtime import uid, event
+from app.graph import validate_graph, validate_bindings
+from app.runtime import uid, event, advance, cancel_run, prompt
+from app.media import router as media_router
+from app.db import Asset, Contact, Destination, now
+from datetime import timedelta
 
 app = FastAPI(title="Воронки", docs_url=None, redoc_url=None)
+app.include_router(media_router)
+
+@app.get("/editor.js")
+def editor_script():
+    from fastapi.responses import Response
+    return Response(Path("app/editor.js").read_text(encoding="utf-8"), media_type="application/javascript")
 
 def require(obj):
     if obj is None:
@@ -101,7 +110,7 @@ def add_connection(body: ConnectionBody, admin=Depends(actor)):
         raise HTTPException(422, "Имя token_env не соответствует платформе")
     if not re.fullmatch(prefix + r"_[A-Z0-9_]+_WEBHOOK_SECRET", body.secret_env):
         raise HTTPException(422, "Неверное имя secret_env")
-    valid_config = {"username", "group_id", "confirmation_env", "default_entry", "target_type"}
+    valid_config = {"username", "group_id", "confirmation_env", "default_entry", "target_type", "welcome_text"}
     if set(body.config) - valid_config:
         raise HTTPException(422, "Неизвестный параметр")
     if body.platform == "vk" and not re.fullmatch(r"VK_[A-Z0-9_]+_CONFIRMATION", body.config.get("confirmation_env", "")):
@@ -134,7 +143,7 @@ def add_destination(body: DestinationBody, admin=Depends(actor)):
     with Session.begin() as db:
         c = require(db.get(Connection, body.connection_id))
         if c.platform != "telegram":
-            raise HTTPException(422, "Публикации на площадках в baseline доступны для Telegram")
+            raise HTTPException(422, "Публичные публикации пока доступны для Telegram")
         d = Destination(id=uid(), **body.model_dump())
         db.add(d)
         event(db, "destination.created", c.id, actor_id=admin.telegram_id, destination=d.id)
@@ -172,6 +181,10 @@ def create_funnel(body: FunnelBody, admin=Depends(actor)):
     with Session.begin() as db:
         for cid in body.connection_ids:
             require(db.get(Connection, cid))
+        try:
+            validate_bindings(db, body.graph, body.connection_ids)
+        except ValueError as error:
+            raise HTTPException(422, str(error))
         funnel = Funnel(id=uid(), name=body.name, connection_ids=body.connection_ids, draft=body.graph)
         db.add(funnel)
         event(db, "funnel.created", actor_id=admin.telegram_id, funnel=funnel.id)
@@ -180,6 +193,8 @@ def create_funnel(body: FunnelBody, admin=Depends(actor)):
 class DraftBody(BaseModel):
     revision: int
     graph: dict
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    connection_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
 
 @app.put("/api/funnels/{fid}/draft")
 def update_draft(fid: str, body: DraftBody, admin=Depends(actor)):
@@ -192,6 +207,19 @@ def update_draft(fid: str, body: DraftBody, admin=Depends(actor)):
         permit(admin, funnel.connection_ids, edit=True)
         if funnel.revision != body.revision:
             raise HTTPException(409, "Сценарий уже изменён другим администратором")
+        requested_connections = body.connection_ids or funnel.connection_ids
+        permit(admin, requested_connections, edit=True)
+        try:
+            validate_bindings(db, body.graph, requested_connections)
+        except ValueError as error:
+            raise HTTPException(422, str(error))
+        if body.name is not None:
+            funnel.name = body.name
+        if body.connection_ids is not None:
+            for old_entry in db.scalars(select(Entry).where(Entry.funnel_id == fid)):
+                if old_entry.connection_id not in requested_connections:
+                    old_entry.active = False
+            funnel.connection_ids = requested_connections
         funnel.draft = body.graph
         funnel.revision += 1
         event(db, "funnel.edited", actor_id=admin.telegram_id, funnel=fid, revision=funnel.revision)
@@ -202,7 +230,11 @@ def publish(fid: str, admin=Depends(actor)):
     with Session.begin() as db:
         funnel = require(db.scalar(select(Funnel).where(Funnel.id == fid).with_for_update()))
         permit(admin, funnel.connection_ids, edit=True)
-        validate_graph(funnel.draft)
+        try:
+            validate_graph(funnel.draft)
+            validate_bindings(db, funnel.draft, funnel.connection_ids)
+        except (ValueError, TypeError, KeyError) as error:
+            raise HTTPException(422, str(error))
         version = Version(id=uid(), funnel_id=fid, graph=funnel.draft)
         db.add(version)
         funnel.published_version_id = version.id
@@ -280,7 +312,7 @@ def manual_message(body: ManualBody, admin=Depends(actor)):
         # Unsent automation is cancelled; in-flight sends cannot be recalled.
         for out in db.scalars(select(Outbox).where(Outbox.identity_id == identity.id,
             Outbox.run_id.is_not(None), Outbox.status == "pending").with_for_update()):
-            out.status = "cancelled"
+            out.status = "held"
         event(db, "manager.message_queued", identity.connection_id, identity.contact_id,
               actor_id=admin.telegram_id, text=body.text)
     return {"ok": True}
@@ -321,6 +353,9 @@ async def webhook(cid: str, request: Request):
             raise HTTPException(400, "Событие не соответствует контракту")
         if msg:
             db.add(Inbox(id=uid(), connection_id=cid, external_event_id=msg["event_id"], payload=msg))
+            if msg.get("callback_id"):
+                db.add(Outbox(id=uid(), connection_id=cid, chat_id=msg["chat_id"],
+                    payload={"type":"ack", "callback_id":msg["callback_id"]}))
             try:
                 db.commit()
             except IntegrityError:
@@ -339,7 +374,7 @@ def contacts(admin=Depends(actor)):
         for identity in db.scalars(query):
             c = db.get(Contact, identity.contact_id)
             result.append({"contact_id": c.id, "identity_id": identity.id,
-                "connection_id": identity.connection_id, "external_user_id": identity.external_user_id,
+                "connection_id": identity.connection_id, "external_user_id": identity.external_user_id, "name": identity.name,
                 "stage": c.stage, "score": c.score})
         return result
 
@@ -365,7 +400,212 @@ def retry_delivery(oid: str, body: RetryBody, admin=Depends(actor)):
             raise HTTPException(409, "Повтор доступен для failed и unknown")
         if row.status == "unknown" and not body.accept_duplicate_risk:
             raise HTTPException(409, "Проверьте канал и подтвердите риск повторной отправки")
-        row.status, row.error = "pending", None
+        row.status, row.error, row.due_at, row.attempts = "pending", None, now(), 0
         event(db, "message.retry_requested", row.connection_id, actor_id=admin.telegram_id,
               outbox_id=row.id, accept_duplicate_risk=body.accept_duplicate_risk)
     return {"ok": True}
+
+
+@app.get("/api/destinations")
+def destinations(admin=Depends(actor)):
+    with Session() as db:
+        return [{"id":d.id,"name":d.name,"connection_id":d.connection_id,
+                 "external_chat_id":d.external_chat_id,"kind":d.kind}
+            for d in db.scalars(select(Destination)) if allowed(admin,d.connection_id)]
+
+@app.get("/api/runs")
+def runs(admin=Depends(actor)):
+    with Session() as db:
+        query = select(Run,Identity).join(Identity,Run.identity_id==Identity.id).order_by(Run.id).limit(200)
+        if admin.role != "owner":
+            query = query.where(Identity.connection_id.in_(admin.connection_ids))
+        return [{"id":r.id,"identity_id":i.id,"contact_id":i.contact_id,"name":i.name,
+                 "connection_id":i.connection_id,"status":r.status,"current":r.current,
+                 "due_at":r.due_at.isoformat() if r.due_at else None} for r,i in db.execute(query)]
+
+class RunAction(BaseModel):
+    action: str
+
+@app.post("/api/runs/{rid}/action")
+def run_action(rid: str, body: RunAction, admin=Depends(actor)):
+    if admin.role not in {"owner","editor","manager"}:
+        raise HTTPException(403)
+    with Session.begin() as db:
+        run = require(db.scalar(select(Run).where(Run.id==rid).with_for_update()))
+        identity = db.get(Identity,run.identity_id)
+        permit(admin,[identity.connection_id])
+        if body.action == "stop":
+            cancel_run(db,run)
+        elif body.action == "pause" and run.status in {"active","waiting","delayed"}:
+            run.state={**run.state,"_before_pause":run.status}
+            run.status="paused"
+            for out in db.scalars(select(Outbox).where(Outbox.run_id==run.id,Outbox.status=="pending")):
+                out.status="held"
+        elif body.action == "resume" and run.status=="paused":
+            state=dict(run.state)
+            previous=state.pop("_before_pause","waiting")
+            run.state,run.status=state,previous
+            if previous=="delayed":
+                # Resume with a full new interval; never instantly flush overdue follow-ups.
+                run.due_at=None
+            for out in db.scalars(select(Outbox).where(Outbox.run_id==run.id,Outbox.status=="held")):
+                out.status,out.due_at="pending",now()
+            if previous=="active":
+                advance(db,run,identity)
+        else:
+            raise HTTPException(409,"Операция недоступна для текущего состояния")
+        event(db,"run."+body.action,identity.connection_id,identity.contact_id,run.id,actor_id=admin.telegram_id)
+    return {"ok":True}
+
+@app.get("/api/entries")
+def entries(admin=Depends(actor)):
+    with Session() as db:
+        return [{"token":e.token,"funnel_id":e.funnel_id,"connection_id":e.connection_id,
+                 "attribution":e.attribution,"active":e.active} for e in db.scalars(select(Entry))
+                 if allowed(admin,e.connection_id)]
+
+class ToggleBody(BaseModel):
+    active: bool
+
+@app.put("/api/entries/{token}")
+def toggle_entry(token: str, body: ToggleBody, admin=Depends(actor)):
+    with Session.begin() as db:
+        e=require(db.get(Entry,token))
+        permit(admin,[e.connection_id],edit=True)
+        e.active=body.active
+        event(db,"entry.updated",e.connection_id,actor_id=admin.telegram_id,token=token,active=e.active)
+    return {"ok":True}
+
+@app.get("/api/admins")
+def admins(admin=Depends(actor)):
+    permit(admin,owner=True)
+    with Session() as db:
+        return [{"telegram_id":a.telegram_id,"role":a.role,"active":a.active,
+                 "connection_ids":a.connection_ids} for a in db.scalars(select(Admin))]
+
+@app.put("/api/tasks/{tid}")
+def complete_task(tid: str, admin=Depends(actor)):
+    if admin.role not in {"owner","editor","manager"}:
+        raise HTTPException(403)
+    with Session.begin() as db:
+        task=require(db.get(Task,tid))
+        permit(admin,[task.connection_id])
+        task.status="done"
+        event(db,"task.completed",task.connection_id,task.contact_id,actor_id=admin.telegram_id,task_id=tid)
+    return {"ok":True}
+
+@app.get("/api/inbox")
+def failed_inputs(admin=Depends(actor)):
+    with Session() as db:
+        query=select(Inbox).where(Inbox.status=="failed").order_by(Inbox.created_at.desc()).limit(200)
+        if admin.role!="owner":
+            query=query.where(Inbox.connection_id.in_(admin.connection_ids))
+        return [{"id":i.id,"connection_id":i.connection_id,"error":i.error} for i in db.scalars(query)]
+
+@app.post("/api/inbox/{iid}/retry")
+def replay_input(iid: str, admin=Depends(actor)):
+    with Session.begin() as db:
+        row=require(db.scalar(select(Inbox).where(Inbox.id==iid).with_for_update()))
+        permit(admin,[row.connection_id],edit=True)
+        if row.status!="failed":
+            raise HTTPException(409)
+        row.status,row.error,row.available_at="pending",None,now()
+        event(db,"inbox.replayed",row.connection_id,actor_id=admin.telegram_id,inbox_id=iid)
+    return {"ok":True}
+
+class TestAssetBody(BaseModel):
+    connection_id: str
+    chat_id: str
+    asset_id: str
+    text: str = "Проверка материала"
+
+@app.post("/api/assets/test-send")
+def test_asset(body: TestAssetBody, admin=Depends(actor)):
+    permit(admin,[body.connection_id],edit=True)
+    with Session.begin() as db:
+        c=require(db.get(Connection,body.connection_id))
+        if c.platform!="telegram":
+            raise HTTPException(422,"Нативная тестовая отправка доступна для Telegram")
+        asset=require(db.get(Asset,body.asset_id))
+        permit(admin,asset.connection_ids,edit=True)
+        if body.connection_id not in asset.connection_ids:
+            raise HTTPException(403)
+        payload={"type":asset.kind,"text":body.text,"asset_id":asset.id}
+        if asset.kind=="video_note":
+            payload["text"]=""
+        out=Outbox(id=uid(),connection_id=c.id,chat_id=body.chat_id,payload=payload)
+        db.add(out)
+        event(db,"asset.test_queued",c.id,actor_id=admin.telegram_id,asset_id=asset.id)
+    return {"outbox_id":out.id}
+
+@app.get("/api/analytics")
+def analytics(admin=Depends(actor)):
+    with Session() as db:
+        q=select(Event)
+        if admin.role!="owner":
+            q=q.where(Event.connection_id.in_(admin.connection_ids))
+        counts={}
+        for item in db.scalars(q):
+            key=item.kind
+            counts[key]=counts.get(key,0)+1
+        return {"events":counts,"note":"Отправка не означает просмотр видео"}
+
+@app.get("/api/templates")
+def templates(admin=Depends(actor)):
+    return json.loads(Path("app/templates.json").read_text(encoding="utf-8"))
+
+@app.post("/api/connections/{cid}/activate")
+def activate_connection(cid: str, admin=Depends(actor)):
+    permit(admin,owner=True)
+    import httpx
+    from app.channels import credential, result
+    with Session.begin() as db:
+        c=require(db.get(Connection,cid))
+        try:
+            token,secret=credential(c.token_env),credential(c.secret_env)
+        except Exception:
+            raise HTTPException(422,"Заполните токен и webhook-секрет в окружении сервера")
+        domain=os.environ.get("DOMAIN","")
+        if not domain or domain=="funnels.example.ru":
+            raise HTTPException(422,"Задайте DOMAIN в окружении сервера")
+        url="https://"+domain+"/hooks/"+cid
+        try:
+            with httpx.Client(timeout=30) as client:
+                if c.platform=="telegram":
+                    info=result(client.post(f"https://api.telegram.org/bot{token}/getMe"),"telegram")["result"]
+                    c.config={**c.config,"username":info["username"]}
+                    result(client.post(f"https://api.telegram.org/bot{token}/setWebhook",json={
+                        "url":url,"secret_token":secret,"allowed_updates":["message","callback_query"]}),"telegram")
+                elif c.platform=="max":
+                    response=client.post("https://platform-api2.max.ru/subscriptions",
+                        headers={"Authorization":token},json={"url":url,"secret":secret,
+                            "update_types":["bot_started","message_created","message_callback"]})
+                    if not result(response,"max").get("success"):
+                        raise ValueError()
+                else:
+                    return {"ok":False,"manual_setup":True,"webhook_url":url}
+        except Exception:
+            raise HTTPException(502,"Платформа не подтвердила подключение. Проверьте токен, секрет и сертификаты")
+        event(db,"connection.activated",cid,actor_id=admin.telegram_id)
+    return {"ok":True,"webhook_url":url}
+
+@app.get("/api/preflight")
+def preflight(admin=Depends(actor)):
+    from app.media import ROOT
+    import shutil
+    checks={"database":False,"redis":False,"media_writable":False,"worker_alive":False}
+    with Session() as db:
+        db.execute(select(1))
+        checks["database"]=True
+        checks["connections"]=[{"id":c.id,"name":c.name,"platform":c.platform,
+            "token_present":bool(os.environ.get(c.token_env)),"secret_present":bool(os.environ.get(c.secret_env))}
+            for c in db.scalars(select(Connection)) if allowed(admin,c.id)]
+    try:
+        checks["redis"]=bool(cache.ping())
+        checks["worker_alive"]=bool(cache.get("worker:heartbeat"))
+    except Exception:
+        pass
+    ROOT.mkdir(parents=True,exist_ok=True)
+    checks["media_writable"]=os.access(ROOT,os.W_OK)
+    checks["media_free_bytes"]=shutil.disk_usage(ROOT).free
+    return checks

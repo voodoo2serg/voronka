@@ -27,6 +27,7 @@ services:
     env_file: .env
     depends_on:
       migrate: {condition: service_completed_successfully}
+    volumes: [media:/data/media]
     restart: unless-stopped
   worker:
     build: .
@@ -34,6 +35,7 @@ services:
     command: python -m app.worker
     depends_on:
       migrate: {condition: service_completed_successfully}
+    volumes: [media:/data/media]
     restart: unless-stopped
   proxy:
     image: caddy:2
@@ -47,3 +49,4 @@ volumes:
   pgdata:
   redisdata:
   caddydata:
+  media:

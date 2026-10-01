@@ -1,84 +1,49 @@
 <!doctype html>
-<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Воронки</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Воронка</title><script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-body{font:16px system-ui;max-width:1000px;margin:24px auto;padding:16px;color:#17253d;background:#fff}
-button{background:#1769e0;color:white;border:0;padding:10px 16px;border-radius:8px;margin:4px;cursor:pointer}
-input,select,textarea{box-sizing:border-box;padding:10px;border:1px solid #bcc9dd;border-radius:6px;width:100%;margin:6px 0}
-textarea{min-height:170px;font:14px monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f5fc;padding:12px}
-section{border-top:1px solid #dae2ef;margin:20px 0;padding:12px 0}label{display:block;margin-top:10px}
-</style>
-<h1>Воронки</h1><p id="status">Проверка входа через Telegram…</p>
-<main hidden>
-<nav><button id="refresh">Обновить данные</button></nav>
-<section><h2>Подключения</h2><pre id="connections"></pre>
-<details><summary>Добавить подключение (владелец)</summary>
-<label>Название<input id="cname"></label><label>Платформа<select id="platform"><option>telegram</option><option>max</option><option>vk</option></select></label>
-<label>Имя переменной токена<input id="tokenenv" placeholder="TG_MAIN_TOKEN"></label>
-<label>Имя переменной секрета<input id="secretenv" placeholder="TG_MAIN_WEBHOOK_SECRET"></label>
-<label>Параметры JSON<textarea id="config">{"username":"your_bot"}</textarea></label><button id="addconnection">Добавить</button>
-</details></section>
-<section><h2>Воронки</h2><select id="funnel"></select>
-<label>Название<input id="fname"></label><label>Подключения (ID через запятую)<input id="fcids"></label>
-<label>Сценарий JSON<textarea id="graph"></textarea></label>
-<button id="createfunnel">Создать</button><button id="savedraft">Сохранить черновик</button><button id="publish">Опубликовать</button>
-<label>Подключение для ссылки<input id="entrycid"></label><label>Источник<textarea id="attribution">{"source":"telegram","campaign":"mini_course"}</textarea></label>
-<button id="entry">Создать точку входа</button><pre id="entryresult"></pre>
-</section>
-<section><h2>Публикации в каналы</h2>
-<label>Площадка JSON<textarea id="destination">{"connection_id":"","name":"Боевая аналитика","external_chat_id":"-100...","kind":"channel"}</textarea></label>
-<button id="adddestination">Добавить площадку</button><pre id="destresult"></pre>
-<label>ID площадок через запятую<input id="destids"></label><label>Текст<textarea id="post"></textarea></label><button id="postbutton">Поставить публикацию в очередь</button>
-</section>
-<section><h2>Администраторы</h2><p>Каждый входит собственным аккаунтом Telegram. Назначение прав доступно владельцу.</p>
-<textarea id="adminjson">{"telegram_id":0,"role":"editor","connection_ids":[],"active":true}</textarea><button id="saveadmin">Сохранить права</button>
-</section>
-<section><h2>Контакты</h2><pre id="contacts"></pre></section><section><h2>Доставка сообщений</h2><pre id="outbox"></pre><label>ID сообщения<input id="retryid"></label><label><input type="checkbox" id="risk"> Я проверил канал и принимаю риск повторной отправки</label><button id="retry">Повторить доставку</button></section><section><h2>Задачи</h2><pre id="tasks"></pre></section>
-<section><h2>Журнал контактов и действий</h2><pre id="timeline"></pre></section>
-<section><h2>Ответ менеджера</h2><label>Identity ID<input id="identity"></label><label>Текст<textarea id="manual"></textarea></label><button id="sendmanual">Отправить и приостановить воронку</button></section>
-</main>
-<script>
-let token = "", funnels = [], revision = 0;
-const el = id => document.getElementById(id);
-const show = (id, data) => el(id).textContent = JSON.stringify(data,null,2);
-const list = id => el(id).value.split(",").map(x=>x.trim()).filter(Boolean);
-async function api(path, method="GET", body) {
-  const r=await fetch(path,{method,headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},
-    ...(body===undefined?{}:{body:JSON.stringify(body)})});
-  const data=await r.json(); if(!r.ok) throw Error(JSON.stringify(data.detail)); return data;
-}
-function bind(id, fn) {el(id).onclick=async()=>{try{await fn();el("status").textContent="Готово";}catch(e){el("status").textContent=e.message;}};}
-function selectFunnel(){
-  const f=funnels.find(x=>x.id===el("funnel").value);if(!f)return;
-  revision=f.revision;el("fname").value=f.name;el("fcids").value=f.connection_ids.join(",");
-  el("graph").value=JSON.stringify(f.graph,null,2);
-}
-async function refresh(){
-  show("connections",await api("/api/connections"));
-  funnels=await api("/api/funnels");el("funnel").replaceChildren();
-  for(const f of funnels){const option=document.createElement("option");option.value=f.id;option.textContent=f.name+" — "+(f.version_id?"опубликована":"черновик");el("funnel").append(option);}
-  selectFunnel(); show("contacts",await api("/api/contacts"));show("outbox",await api("/api/outbox")); show("tasks",await api("/api/tasks"));show("timeline",await api("/api/timeline"));
-}
-el("funnel").onchange=selectFunnel;
-bind("refresh",refresh);
-bind("retry",async()=>{await api("/api/outbox/"+el("retryid").value+"/retry","POST",{accept_duplicate_risk:el("risk").checked});await refresh();});
-bind("addconnection",async()=>{show("connections",await api("/api/connections","POST",{name:el("cname").value,platform:el("platform").value,token_env:el("tokenenv").value,secret_env:el("secretenv").value,config:JSON.parse(el("config").value)}));});
-bind("createfunnel",async()=>{await api("/api/funnels","POST",{name:el("fname").value,connection_ids:list("fcids"),graph:JSON.parse(el("graph").value)});await refresh();});
-bind("savedraft",async()=>{const r=await api("/api/funnels/"+el("funnel").value+"/draft","PUT",{revision,graph:JSON.parse(el("graph").value)});revision=r.revision;});
-bind("publish",async()=>{await api("/api/funnels/"+el("funnel").value+"/publish","POST");await refresh();});
-bind("entry",async()=>show("entryresult",await api("/api/entries","POST",{funnel_id:el("funnel").value,connection_id:el("entrycid").value,attribution:JSON.parse(el("attribution").value)})));
-bind("saveadmin",async()=>api("/api/admins","PUT",JSON.parse(el("adminjson").value)));
-bind("adddestination",async()=>show("destresult",await api("/api/destinations","POST",JSON.parse(el("destination").value))));
-bind("postbutton",async()=>api("/api/publications","POST",{destination_ids:list("destids"),text:el("post").value}));
-bind("sendmanual",async()=>api("/api/messages","POST",{identity_id:el("identity").value,text:el("manual").value}));
-(async()=>{
- try {
- const tg=window.Telegram?.WebApp;if(!tg?.initData)throw Error("Откройте эту панель кнопкой меню административного бота Telegram");
- tg.ready();const r=await fetch("/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({init_data:tg.initData})});
- const auth=await r.json();if(!r.ok)throw Error(JSON.stringify(auth.detail));token=auth.token;
- document.querySelector("main").hidden=false;el("status").textContent="Вход выполнен. Роль: "+auth.role;
- await refresh();
- }catch(e){el("status").textContent=e.message;}
-})();
-</script></html>
+*{box-sizing:border-box}body{margin:0;font:16px system-ui;background:#f4f7fb;color:#16243b}
+header{background:white;padding:18px 24px;border-bottom:1px solid #dce4ef}h1{margin:0;font-size:24px}
+main{max-width:1180px;margin:auto;padding:20px}nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+button{border:1px solid #ccd6e4;border-radius:8px;padding:10px 14px;background:white;color:#163355;cursor:pointer}
+button.primary{background:#176be8;color:white;border-color:#176be8}button.danger{color:#a52323}button:disabled{opacity:.5;cursor:wait}
+input,textarea,select{width:100%;border:1px solid #bdcadb;border-radius:6px;padding:10px;background:white;color:#16243b;margin:6px 0 12px}
+textarea{min-height:90px}label{display:block;font-weight:600;font-size:14px}
+section{background:white;border:1px solid #dce4ef;border-radius:12px;padding:20px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:280px 1fr;gap:20px}.card{padding:14px;border:1px solid #dce4ef;border-radius:8px;margin:8px 0}
+.card.selected{border-color:#176be8;background:#f0f6ff}.muted{color:#5b6d86;font-size:14px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row button{flex:0 0 auto}
+#status{white-space:pre-wrap;margin-top:8px;color:#3b5575}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:600px;overflow:auto}
+video,img{max-width:100%;max-height:380px}table{width:100%;border-collapse:collapse}td,th{text-align:left;border-bottom:1px solid #dce4ef;padding:10px}
+dialog{max-width:90%;border:0;border-radius:12px}details{margin:12px 0}
+@media(max-width:760px){main{padding:12px}.grid{grid-template-columns:1fr}header{padding:16px}section{padding:14px}}
+</style></head>
+<body><header><h1>Воронка</h1><div id="status" role="status">Проверка входа через Telegram…</div></header>
+<main hidden><nav id="nav"></nav>
+<div id="funnels" class="page">
+<section><div class="row"><h2>Ваши воронки</h2><button id="new" class="primary">Новая воронка</button><button id="refresh">Обновить</button></div><div id="funnelCards"></div></section>
+<section id="builder" hidden><div class="row"><h2>Редактор сценария</h2><button id="save" class="primary">Сохранить</button><button id="publish">Опубликовать</button></div>
+<p class="muted">Выберите шаг слева и заполните поля справа. Опубликованные участники продолжают свою версию.</p>
+<label>Название<input id="funnelName"></label><label>Подключения<select id="funnelConnections" multiple size="3"></select></label>
+<div class="row"><label>Шаблон<select id="templates"></select></label><button id="useTemplate">Применить шаблон</button></div>
+<div class="grid"><div><label>Добавить шаг<select id="newType"></select></label><button id="addStep">Добавить</button><div id="steps"></div></div><div id="stepForm"></div></div>
+<details><summary>Экспертный режим: JSON и экспорт</summary><textarea id="json" style="min-height:250px"></textarea><button id="applyJson">Применить JSON</button><button id="export">Скачать сценарий</button></details>
+<div class="card"><h3>Ссылка входа</h3><label>Подключение<select id="entryConnection"></select></label><label>Источник<input id="entrySource" value="telegram"></label><label>Кампания<input id="entryCampaign" value="mini_course"></label><button id="makeEntry">Создать ссылку</button><div id="entryResult"></div></div>
+</section></div>
+<div id="media" class="page" hidden><section><h2>Медиабанк</h2><p>Загрузите файл здесь или отправьте видео, кружок, голосовое сообщение либо PDF вашему пользовательскому Telegram-боту. Материалы принимаются только от разрешённых владельца и помощницы.</p>
+<label>Название<input id="assetName"></label><label>Тип<select id="assetKind"></select></label><label>Подключения<select id="assetConnections" multiple size="3"></select></label>
+<label>Файл<input id="assetFile" type="file"></label><p class="muted">Загрузка: видео MP4/H.264, кружок квадратный до 60 секунд, голос OGG/Opus, MP3 или M4A, документ PDF. Фото до 10 МБ, другие файлы до 50 МБ. Более крупное готовое медиа можно импортировать из Telegram.</p>
+<button id="upload" class="primary">Загрузить</button><button id="refreshMedia">Обновить медиабанк</button><div id="assetCards"></div></section>
+<section><h3>Проверить отправку</h3><label>Материал<select id="testAsset"></select></label><label>Telegram-бот<select id="testConnection"></select></label><label>Ваш Telegram ID<input id="testChat"></label><p class="muted">Сначала откройте выбранного пользовательского бота и нажмите Start.</p><button id="testSend">Отправить материал мне</button></section></div>
+<div id="contacts" class="page" hidden><section><h2>Контакты и ответы</h2><div id="contactCards"></div></section><section><h2>Выполнение воронок</h2><div id="runCards"></div></section><section><h2>Задачи</h2><div id="taskCards"></div></section><section><h2>Журнал</h2><pre id="timeline"></pre></section></div>
+<div id="publications" class="page" hidden><section><h2>Публикации в Telegram-каналы</h2><label>Площадки<select id="postDestinations" multiple size="5"></select></label><label>Текст<textarea id="postText"></textarea></label><button id="post" class="primary">Поставить публикацию в очередь</button></section><section><h3>Добавить площадку</h3><label>Подключение<select id="destinationConnection"></select></label><label>Название<input id="destinationName"></label><label>ID канала или группы<input id="destinationChat" placeholder="-100…"></label><button id="addDestination">Добавить</button></section></div>
+<div id="delivery" class="page" hidden><section><h2>Доставка сообщений</h2><p class="muted">sent означает успешный ответ платформы. unknown требует проверки мессенджера перед повтором.</p><div id="outboxCards"></div></section><section><h2>Ошибки входящих событий</h2><div id="inboxCards"></div></section></div>
+<div id="settings" class="page" hidden><section><h2>Подключения</h2><div id="connectionCards"></div><details><summary>Добавить бота или сообщество</summary>
+<label>Название<input id="connectionName"></label><label>Платформа<select id="platform"><option>telegram</option><option>max</option><option>vk</option></select></label>
+<label>Имя переменной токена<input id="tokenEnv" placeholder="TG_MAIN_TOKEN"></label><label>Имя переменной webhook-секрета<input id="secretEnv" placeholder="TG_MAIN_WEBHOOK_SECRET"></label>
+<label>Параметры JSON<textarea id="connectionConfig">{"welcome_text":"Выберите программу"}</textarea></label><button id="addConnection">Добавить</button></details></section>
+<section><h2>Доступ помощницы</h2><label>Telegram ID<input id="adminId" type="number"></label><label>Роль<select id="adminRole"><option value="editor">Редактор</option><option value="manager">Менеджер</option><option value="viewer">Наблюдатель</option><option value="owner">Владелец</option></select></label><label>Подключения<select id="adminConnections" multiple size="4"></select></label><label><input id="adminActive" type="checkbox" checked style="width:auto"> Доступ активен</label><button id="saveAdmin">Сохранить доступ</button><pre id="adminList"></pre></section>
+<section><h2>Готовность сервера</h2><button id="preflight">Проверить</button><pre id="preflightResult"></pre></section></div>
+</main><dialog id="preview"><button id="closePreview">Закрыть</button><div id="previewBody"></div></dialog>
+<script src="/editor.js"></script></body></html>

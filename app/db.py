@@ -77,6 +77,7 @@ class Identity(Base):
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
     external_user_id: Mapped[str] = mapped_column(String(80))
     chat_id: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200), default="")
 
 class Run(Base):
     __tablename__ = "runs"
@@ -95,9 +96,22 @@ class Inbox(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
     external_event_id: Mapped[str] = mapped_column(String(160))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     error: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class Asset(Base):
+    __tablename__ = "assets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(20))
+    mime: Mapped[str] = mapped_column(String(120), default="")
+    local_path: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    connection_ids: Mapped[list] = mapped_column(JSON, default=list)
+    telegram_refs: Mapped[dict] = mapped_column(JSON, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class Outbox(Base):
@@ -111,6 +125,10 @@ class Outbox(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     external_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 class Event(Base):

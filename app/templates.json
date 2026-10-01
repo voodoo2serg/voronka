@@ -1,0 +1,341 @@
+[
+  {
+    "id": "mini_course",
+    "name": "Мини-курс: пять видео → опрос → книга",
+    "description": "Выберите пять видео и PDF в медиабанке перед сохранением",
+    "graph": {
+      "start": "welcome",
+      "nodes": {
+        "welcome": {
+          "type": "text",
+          "text": "Добро пожаловать! Пройдите уроки и получите книгу.",
+          "next": "lesson1"
+        },
+        "lesson1": {
+          "type": "video",
+          "title": "Урок 1",
+          "text": "Урок 1. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack1"
+        },
+        "ack1": {
+          "type": "question",
+          "title": "Продолжить после урока 1",
+          "key": "lesson_1",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "lesson2"
+        },
+        "lesson2": {
+          "type": "video",
+          "title": "Урок 2",
+          "text": "Урок 2. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack2"
+        },
+        "ack2": {
+          "type": "question",
+          "title": "Продолжить после урока 2",
+          "key": "lesson_2",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "lesson3"
+        },
+        "lesson3": {
+          "type": "video",
+          "title": "Урок 3",
+          "text": "Урок 3. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack3"
+        },
+        "ack3": {
+          "type": "question",
+          "title": "Продолжить после урока 3",
+          "key": "lesson_3",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "lesson4"
+        },
+        "lesson4": {
+          "type": "video",
+          "title": "Урок 4",
+          "text": "Урок 4. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack4"
+        },
+        "ack4": {
+          "type": "question",
+          "title": "Продолжить после урока 4",
+          "key": "lesson_4",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "lesson5"
+        },
+        "lesson5": {
+          "type": "video",
+          "title": "Урок 5",
+          "text": "Урок 5. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack5"
+        },
+        "ack5": {
+          "type": "question",
+          "title": "Продолжить после урока 5",
+          "key": "lesson_5",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "survey"
+        },
+        "survey": {
+          "type": "survey",
+          "title": "Финальный опрос",
+          "key": "survey_completed",
+          "questions": [
+            {
+              "key": "role",
+              "text": "Чем вы занимаетесь?",
+              "options": [
+                "PR",
+                "Бизнес",
+                "Другое"
+              ]
+            },
+            {
+              "key": "task",
+              "text": "Какую задачу хотите решить?"
+            }
+          ],
+          "next": "grant"
+        },
+        "grant": {
+          "type": "grant",
+          "title": "Право на книгу",
+          "product": "book_bonus",
+          "requires": [
+            "survey_completed"
+          ],
+          "next": "book"
+        },
+        "book": {
+          "type": "document",
+          "title": "Книга",
+          "text": "Спасибо! Вот обещанная книга.",
+          "media": "",
+          "next": "goal"
+        },
+        "goal": {
+          "type": "goal",
+          "text": "book_granted",
+          "next": "wait"
+        },
+        "wait": {
+          "type": "wait",
+          "seconds": 120,
+          "next": "offer"
+        },
+        "offer": {
+          "type": "question",
+          "key": "interested",
+          "text": "Хотите узнать о полном курсе?",
+          "options": [
+            "Да",
+            "Нет"
+          ],
+          "next": "branch"
+        },
+        "branch": {
+          "type": "condition",
+          "key": "interested",
+          "equals": "Да",
+          "yes": "hot",
+          "no": "finish"
+        },
+        "hot": {
+          "type": "stage",
+          "text": "Горячий",
+          "next": "task"
+        },
+        "task": {
+          "type": "task",
+          "text": "Связаться с участником по поводу курса",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  },
+  {
+    "id": "lead_magnet",
+    "name": "Лид-магнит: видео → опрос → PDF",
+    "description": "Выберите одно видео и PDF",
+    "graph": {
+      "start": "welcome",
+      "nodes": {
+        "welcome": {
+          "type": "text",
+          "text": "Добро пожаловать! Пройдите уроки и получите книгу.",
+          "next": "lesson1"
+        },
+        "lesson1": {
+          "type": "video",
+          "title": "Урок 1",
+          "text": "Урок 1. После просмотра нажмите «Продолжить».",
+          "media": "",
+          "next": "ack1"
+        },
+        "ack1": {
+          "type": "question",
+          "title": "Продолжить после урока 1",
+          "key": "lesson_1",
+          "text": "Готовы перейти дальше?",
+          "options": [
+            "Продолжить"
+          ],
+          "next": "survey"
+        },
+        "survey": {
+          "type": "survey",
+          "title": "Финальный опрос",
+          "key": "survey_completed",
+          "questions": [
+            {
+              "key": "role",
+              "text": "Чем вы занимаетесь?",
+              "options": [
+                "PR",
+                "Бизнес",
+                "Другое"
+              ]
+            },
+            {
+              "key": "task",
+              "text": "Какую задачу хотите решить?"
+            }
+          ],
+          "next": "grant"
+        },
+        "grant": {
+          "type": "grant",
+          "title": "Право на книгу",
+          "product": "book_bonus",
+          "requires": [
+            "survey_completed"
+          ],
+          "next": "book"
+        },
+        "book": {
+          "type": "document",
+          "title": "Книга",
+          "text": "Спасибо! Вот обещанная книга.",
+          "media": "",
+          "next": "goal"
+        },
+        "goal": {
+          "type": "goal",
+          "text": "book_granted",
+          "next": "wait"
+        },
+        "wait": {
+          "type": "wait",
+          "seconds": 120,
+          "next": "offer"
+        },
+        "offer": {
+          "type": "question",
+          "key": "interested",
+          "text": "Хотите узнать о полном курсе?",
+          "options": [
+            "Да",
+            "Нет"
+          ],
+          "next": "branch"
+        },
+        "branch": {
+          "type": "condition",
+          "key": "interested",
+          "equals": "Да",
+          "yes": "hot",
+          "no": "finish"
+        },
+        "hot": {
+          "type": "stage",
+          "text": "Горячий",
+          "next": "task"
+        },
+        "task": {
+          "type": "task",
+          "text": "Связаться с участником по поводу курса",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  },
+  {
+    "id": "interview",
+    "name": "Кастдев: вопросы → задача менеджеру",
+    "description": "Готовый сценарий интервью",
+    "graph": {
+      "start": "welcome",
+      "nodes": {
+        "welcome": {
+          "type": "text",
+          "text": "Помогите выбрать тему будущего курса.",
+          "next": "survey"
+        },
+        "survey": {
+          "type": "survey",
+          "key": "interview_done",
+          "questions": [
+            {
+              "key": "topic",
+              "text": "Что вам интереснее?",
+              "options": [
+                "Принятие решений",
+                "Бизнес",
+                "ИИ в профессии"
+              ]
+            },
+            {
+              "key": "need",
+              "text": "Какую задачу хотелось бы решить?"
+            }
+          ],
+          "next": "goal"
+        },
+        "goal": {
+          "type": "goal",
+          "text": "interview_completed",
+          "next": "task"
+        },
+        "task": {
+          "type": "task",
+          "text": "Изучить ответы участника интервью",
+          "next": "thanks"
+        },
+        "thanks": {
+          "type": "text",
+          "text": "Спасибо за ответы!",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  }
+]
