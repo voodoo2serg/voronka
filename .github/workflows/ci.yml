@@ -1,0 +1,46 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite://
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app migrations tests
+      - run: python -m pytest -q
+      - run: docker compose --env-file .env.example config --quiet
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: funnel
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: funnel
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U funnel -d funnel"
+          --health-interval 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://funnel:test@localhost:5432/funnel
+      OWNER_TELEGRAM_ID: 123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: alembic downgrade base
+      - run: alembic upgrade head
