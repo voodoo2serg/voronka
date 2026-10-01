@@ -1,4 +1,4 @@
-import hashlib, hmac, json, os, re, secrets
+import hashlib, hmac, json, os, re, secrets, time
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -39,7 +39,15 @@ def health():
     with Session() as db:
         db.execute(select(1))
     cache.ping()
-    return {"status": "ok"}
+    raw = cache.get("worker:heartbeat")
+    try:
+        age = time.time() - float(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(503, "worker is down")
+    # Heartbeat key expires after 240s. A single Telegram upload may take up to 180s.
+    if age > 200:
+        raise HTTPException(503, "worker is stale")
+    return {"status": "ok", "worker_age_seconds": int(age)}
 
 @app.post("/auth")
 def login(body: Login, request: Request):

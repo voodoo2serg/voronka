@@ -20,9 +20,9 @@
 
 ## Сервер
 
-Рекомендуемый старт: 4 vCPU, 8 ГБ RAM, SSD 80–160 ГБ, Ubuntu 24.04 LTS, Docker Engine + Compose plugin. Это инженерная оценка, не нагрузочный результат. Имеющийся сервер с 16 ГБ RAM подходит при свободном ресурсе. Нужны домен, DNS на сервер, входящие 80/443 и исходящий HTTPS.
+Рекомендуемый старт: 4 vCPU, 8 ГБ RAM, SSD 80–160 ГБ, Debian 13 или Ubuntu 24.04 LTS, Docker Engine + Compose plugin. Это инженерная оценка, не нагрузочный результат. Имеющийся сервер с 16 ГБ RAM подходит при свободном ресурсе. Нужны домен, DNS на сервер, входящие 80/443 и исходящий HTTPS.
 
-В Compose: Caddy HTTPS, FastAPI, PostgreSQL 16, Redis 7, один worker, Alembic и постоянный volume media. FFmpeg включён в образ для проверки формата загрузок. PostgreSQL/Redis не открыты наружу. MinIO и Celery для этой версии не нужны.
+В Compose: FastAPI, PostgreSQL 16, Redis 7, один worker, Alembic и постоянный volume media. API слушает только `127.0.0.1`. Если порты 80/443 свободны, HTTPS поднимает Caddy: `docker compose --profile edge up -d --build`. Если их уже занимает nginx, используйте `deploy/nginx-voronka.conf` и не включайте профиль `edge`. FFmpeg включён в образ для проверки формата загрузок. PostgreSQL/Redis не открыты наружу. MinIO и Celery для этой версии не нужны. Загрузка отклоняется, если на диске свободно меньше 5 ГБ.
 
 ## Установка
 
@@ -31,7 +31,7 @@
 3. `cp .env.example .env`
 4. Заполните DOMAIN, OWNER_TELEGRAM_ID, ADMIN_BOT_TOKEN, TG_MAIN_TOKEN, TG_MAIN_WEBHOOK_SECRET. Укажите одинаковый пароль PostgreSQL в POSTGRES_PASSWORD и DATABASE_URL. Токены не коммитить.
 5. Через BotFather создайте два бота: административный для панели и пользовательский для материалов/воронок.
-6. `docker compose up -d --build`
+6. На чистом сервере: `docker compose --profile edge up -d --build`. На сервере, где 80/443 уже заняты nginx: `docker compose up -d --build` и подключите `deploy/nginx-voronka.conf`.
 7. `docker compose exec api python -m scripts.register admin`
 8. Откройте административного бота и меню «Воронки». В разделе «Настройки» добавьте Telegram-подключение с именами переменных TG_MAIN_TOKEN / TG_MAIN_WEBHOOK_SECRET.
 9. Нажмите «Проверить и подключить webhook». Система получит username бота и зарегистрирует события сообщений и кнопок.
@@ -82,7 +82,7 @@ sent означает успешный ответ платформы, а не п
 
 ## Проверки
 
-`python -m pytest -q`
+`pip install -r requirements-dev.txt`, затем `python -m pytest -q`
 
 Браузерные проверки: `pip install -r requirements-dev.txt`, `python -m playwright install chromium`, `RUN_BROWSER=1 python -m pytest -q tests/test_editor_browser.py`.
 

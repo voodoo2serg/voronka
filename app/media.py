@@ -11,6 +11,8 @@ from app.runtime import event
 router = APIRouter(prefix="/api/assets")
 ROOT = Path(os.getenv("MEDIA_ROOT", "/data/media"))
 LIMIT = 50_000_000
+# Leave room for Postgres and neighbouring services on a shared disk.
+MIN_FREE = 5 * 1024 ** 3
 
 def local_file(relative):
     path = (ROOT / relative).resolve()
@@ -83,8 +85,8 @@ async def upload(name: str = Form(...), kind: str = Form(...), connection_ids: s
             if not db.get(Connection, cid):
                 raise HTTPException(404, "Подключение отсутствует")
     ROOT.mkdir(parents=True, exist_ok=True)
-    if shutil.disk_usage(ROOT).free < 2 * LIMIT:
-        raise HTTPException(507, "Недостаточно места на диске")
+    if shutil.disk_usage(ROOT).free < MIN_FREE:
+        raise HTTPException(507, "Недостаточно места на диске: нужно не меньше 5 ГБ свободно")
     asset_id = str(uuid4())
     # Original filename never controls the destination path.
     extension = {"video":".mp4", "video_note":".mp4", "photo":".img", "voice":".audio", "document":".pdf"}.get(kind)
