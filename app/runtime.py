@@ -82,6 +82,9 @@ def consume(db, connection, msg):
     if msg["text"].lower() in {"/stop", "стоп"}:
         if run:
             run.status = "stopped"
+            for out in db.scalars(select(Outbox).where(Outbox.run_id == run.id,
+                Outbox.status == "pending").with_for_update()):
+                out.status = "cancelled"
         event(db, "contact.stopped", connection.id, identity.contact_id)
         return
     if msg["start"]:
