@@ -224,5 +224,8 @@ def consume(db, connection, msg):
         state[node["key"]], state[node["key"] + "_answers"] = True, answers
         event(db, "survey.completed", connection.id, identity.contact_id, run.id, answers=answers)
     state.pop("_prompt", None)
-    run.state, run.current, run.status = state, node["next"], "active"
+    nxt = node["next"]
+    if node["type"] == "question":
+        nxt = (node.get("routes") or {}).get(text) or nxt
+    run.state, run.current, run.status = state, nxt, "active"
     advance(db, run, identity)

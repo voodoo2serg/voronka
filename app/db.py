@@ -19,6 +19,12 @@ class Admin(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     connection_ids: Mapped[list] = mapped_column(JSON, default=list)
 
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    goal: Mapped[str] = mapped_column(String(400), default="")
+
 class Connection(Base):
     __tablename__ = "connections"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -28,6 +34,8 @@ class Connection(Base):
     secret_env: Mapped[str] = mapped_column(String(80))
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    role: Mapped[str] = mapped_column(String(20), default="bot")
 
 class Destination(Base):
     __tablename__ = "destinations"
@@ -42,6 +50,7 @@ class Funnel(Base):
     __tablename__ = "funnels"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(160))
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     connection_ids: Mapped[list] = mapped_column(JSON)
     draft: Mapped[dict] = mapped_column(JSON)
     revision: Mapped[int] = mapped_column(Integer, default=1)

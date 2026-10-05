@@ -53,6 +53,19 @@ def validate_graph(graph):
             checked_key(node.get("key"))
             if "equals" not in node:
                 node = {**node, "equals": True}
+        if kind == "question":
+            options = checked_options(node.get("options", []))
+            if len(options) > 5:
+                raise ValueError("Голосование: не больше 5 кнопок")
+            routes = node.get("routes") or {}
+            if not isinstance(routes, dict):
+                raise ValueError("Сценарии кнопок заданы неверно")
+            if set(routes) - set(options):
+                raise ValueError("Сценарий указан для неизвестной кнопки")
+            if routes:
+                outgoing = []
+                for option in options:
+                    outgoing.append(routes.get(option, node.get("next")))
         if any(not isinstance(x, str) or x not in nodes for x in outgoing):
             raise ValueError(f"Неверный переход из {key}")
         refs[key] = outgoing
@@ -86,7 +99,6 @@ def validate_graph(graph):
                 raise ValueError("У вопросов и опросов должны быть разные ключи")
             response_keys.add(response_key)
         if kind == "question":
-            checked_options(node.get("options", []))
             if node.get("answer_type", "text") not in {"text", "email", "phone"}:
                 raise ValueError("Тип ответа: text/email/phone")
         if kind == "survey":

@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
-from app.db import Session, Admin, Connection, Destination, Funnel, Version, Entry, Inbox, Outbox, Event, Identity, Run, Task
+from app.db import Session, Admin, Connection, Destination, Funnel, Version, Entry, Inbox, Outbox, Event, Identity, Run, Task, Project
 from app.auth import actor, permit, allowed, validate_init_data, issue_session, cache
 from app.channels import normalize
 from app.graph import validate_graph, validate_bindings
@@ -134,8 +134,60 @@ def add_connection(body: ConnectionBody, admin=Depends(actor)):
 @app.get("/api/connections")
 def connections(admin=Depends(actor)):
     with Session() as db:
-        return [{"id": c.id, "name": c.name, "platform": c.platform, "active": c.active}
+        return [{"id": c.id, "name": c.name, "platform": c.platform, "active": c.active,
+                 "project_id": c.project_id, "role": c.role or "bot"}
                 for c in db.scalars(select(Connection)) if allowed(admin, c.id)]
+
+class ProjectBody(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    goal: str = Field(default="", max_length=400)
+
+@app.get("/api/projects")
+def list_projects(admin=Depends(actor)):
+    with Session() as db:
+        rows = []
+        for project in db.scalars(select(Project)):
+            accounts = [{"id": c.id, "name": c.name, "role": c.role or "bot", "platform": c.platform, "kind": "account"}
+                for c in db.scalars(select(Connection).where(Connection.project_id == project.id)) if allowed(admin, c.id)]
+            chats = [{"id": d.id, "name": d.name, "role": "chat" if d.kind == "group" else "channel",
+                "platform": "telegram", "kind": d.kind, "external_chat_id": d.external_chat_id}
+                for d in db.scalars(select(Destination))
+                if allowed(admin, d.connection_id) and db.get(Connection, d.connection_id)
+                and db.get(Connection, d.connection_id).project_id == project.id]
+            scripts = [{"id": f.id, "name": f.name} for f in db.scalars(select(Funnel).where(Funnel.project_id == project.id))
+                if all(allowed(admin, c) for c in f.connection_ids)]
+            rows.append({"id": project.id, "name": project.name, "goal": project.goal,
+                "accounts": accounts + chats, "scripts": scripts})
+        return rows
+
+@app.post("/api/projects")
+def add_project(body: ProjectBody, admin=Depends(actor)):
+    permit(admin, edit=True)
+    with Session.begin() as db:
+        project = Project(id=uid(), name=body.name, goal=body.goal.strip())
+        db.add(project)
+        event(db, "project.created", actor_id=admin.telegram_id, project=project.id)
+    return {"id": project.id}
+
+class ConnectionUpdate(BaseModel):
+    project_id: str
+    role: str
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+
+@app.put("/api/connections/{cid}")
+def update_connection(cid: str, body: ConnectionUpdate, admin=Depends(actor)):
+    permit(admin, owner=True)
+    if body.role not in {"bot", "seller", "chat", "channel"}:
+        raise HTTPException(422, "Роль: бот, продающий, чат или канал")
+    with Session.begin() as db:
+        connection = require(db.get(Connection, cid))
+        require(db.get(Project, body.project_id))
+        connection.project_id = body.project_id
+        connection.role = body.role
+        if body.name:
+            connection.name = body.name
+        event(db, "connection.assigned", connection.id, actor_id=admin.telegram_id, project=body.project_id, role=body.role)
+    return {"ok": True}
 
 class DestinationBody(BaseModel):
     connection_id: str
@@ -178,6 +230,7 @@ class FunnelBody(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     connection_ids: list[str] = Field(min_length=1, max_length=100)
     graph: dict
+    project_id: str | None = None
 
 @app.post("/api/funnels")
 def create_funnel(body: FunnelBody, admin=Depends(actor)):
@@ -193,7 +246,9 @@ def create_funnel(body: FunnelBody, admin=Depends(actor)):
             validate_bindings(db, body.graph, body.connection_ids)
         except ValueError as error:
             raise HTTPException(422, str(error))
-        funnel = Funnel(id=uid(), name=body.name, connection_ids=body.connection_ids, draft=body.graph)
+        if body.project_id:
+            require(db.get(Project, body.project_id))
+        funnel = Funnel(id=uid(), name=body.name, connection_ids=body.connection_ids, draft=body.graph, project_id=body.project_id)
         db.add(funnel)
         event(db, "funnel.created", actor_id=admin.telegram_id, funnel=funnel.id)
     return {"id": funnel.id, "revision": funnel.revision}
@@ -203,6 +258,7 @@ class DraftBody(BaseModel):
     graph: dict
     name: str | None = Field(default=None, min_length=1, max_length=160)
     connection_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    project_id: str | None = None
 
 @app.put("/api/funnels/{fid}/draft")
 def update_draft(fid: str, body: DraftBody, admin=Depends(actor)):
@@ -223,6 +279,9 @@ def update_draft(fid: str, body: DraftBody, admin=Depends(actor)):
             raise HTTPException(422, str(error))
         if body.name is not None:
             funnel.name = body.name
+        if body.project_id:
+            require(db.get(Project, body.project_id))
+            funnel.project_id = body.project_id
         if body.connection_ids is not None:
             for old_entry in db.scalars(select(Entry).where(Entry.funnel_id == fid)):
                 if old_entry.connection_id not in requested_connections:
@@ -254,7 +313,7 @@ def funnels(admin=Depends(actor)):
     with Session() as db:
         return [{"id": f.id, "name": f.name, "revision": f.revision,
                  "connection_ids": f.connection_ids, "graph": f.draft,
-                 "version_id": f.published_version_id}
+                 "project_id": f.project_id, "version_id": f.published_version_id}
                 for f in db.scalars(select(Funnel))
                 if all(allowed(admin, c) for c in f.connection_ids)]
 

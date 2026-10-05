@@ -1,7 +1,26 @@
 <!doctype html>
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Воронка</title><script src="https://telegram.org/js/telegram-web-app.js"></script>
+<title>Воронка</title>
+<script>
+(function () {
+  var hash = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+  var initData = hash.get("tgWebAppData") || "";
+  var user = null;
+  try { user = JSON.parse(new URLSearchParams(initData).get("user") || "null"); } catch (e) {}
+  var current = (window.Telegram && window.Telegram.WebApp) || {};
+  if (!current.initData) {
+    window.Telegram = window.Telegram || {};
+    window.Telegram.WebApp = {
+      initData: initData,
+      initDataUnsafe: {user: user},
+      platform: hash.get("tgWebAppPlatform") || "",
+      ready: function () {},
+      expand: function () {}
+    };
+  }
+})();
+</script>
 <style>
 *{box-sizing:border-box}body{margin:0;font:16px system-ui;background:#f4f7fb;color:#16243b}
 header{background:white;padding:18px 24px;border-bottom:1px solid #dce4ef}h1{margin:0;font-size:24px}
@@ -19,19 +38,46 @@ video,img{max-width:100%;max-height:380px}table{width:100%;border-collapse:colla
 dialog{max-width:90%;border:0;border-radius:12px}details{margin:12px 0}
 @media(max-width:760px){main{padding:12px}.grid{grid-template-columns:1fr}header{padding:16px}section{padding:14px}}
 </style></head>
-<body><header><h1>Воронка</h1><div id="status" role="status">Проверка входа через Telegram…</div></header>
+<body><header><h1>Воронка</h1><div id="status" role="status">Закройте обычный браузер. В чате @Prazdnik_ubilei_bot нажмите кнопку «Воронки» слева от поля сообщения.</div></header>
 <main hidden><nav id="nav"></nav>
-<div id="funnels" class="page">
-<section><div class="row"><h2>Ваши воронки</h2><button id="new" class="primary">Новая воронка</button><button id="refresh">Обновить</button></div><div id="funnelCards"></div></section>
-<section id="builder" hidden><div class="row"><h2>Редактор сценария</h2><button id="save" class="primary">Сохранить</button><button id="publish">Опубликовать</button></div>
-<p class="muted">Выберите шаг слева и заполните поля справа. Опубликованные участники продолжают свою версию.</p>
-<label>Название<input id="funnelName"></label><label>Подключения<select id="funnelConnections" multiple size="3"></select></label>
+<div id="projects" class="page">
+<section><div class="row"><h2>Проекты</h2><button id="refreshProjects">Обновить</button></div>
+<p class="muted">Сначала заводится проект — одна задача. Потом в него добавляются аккаунты: продающий, бот, который отвечает, и чат.</p>
+<label>Название<input id="projectName" placeholder="Праздник и юбилей"></label>
+<label>Задача<input id="projectGoal" placeholder="Привести людей в канал и выдать запись"></label>
+<button id="addProject" class="primary">Новый проект</button>
+<div id="projectCards"></div></section></div>
+<div id="accounts" class="page" hidden>
+<section><h2>Подключения</h2>
+<p class="muted">Аккаунт всегда входит в проект. Уже работающего бота можно включить в проект. Чат и канал задаются номером, бот должен уже быть в этом проекте.</p>
+<label>Проект<select id="accountProject"></select></label>
+<label>Роль<select id="accountRole"><option value="bot">Бот, который отвечает</option><option value="seller">Продающий аккаунт</option><option value="chat">Чат</option><option value="channel">Канал</option></select></label>
+<label>Название<input id="accountName" placeholder="Как показывать в проекте"></label>
+<label id="existingWrap">Уже подключённый бот<select id="accountExisting"></select></label>
+<label id="chatWrap" hidden>ID чата или канала<input id="accountChat" placeholder="-100…"></label>
+<button id="addAccount" class="primary">Добавить в проект</button>
+<div id="connectionCards"></div>
+<details><summary>Подключить нового бота</summary>
+<label>Название<input id="connectionName"></label>
+<label>Платформа<select id="platform"><option>telegram</option><option>max</option><option>vk</option></select></label>
+<label>Имя переменной токена на сервере<input id="tokenEnv" placeholder="TG_SECOND_TOKEN"></label>
+<label>Имя переменной секрета на сервере<input id="secretEnv" placeholder="TG_SECOND_WEBHOOK_SECRET"></label>
+<button id="addConnection">Создать бота</button></details>
+</section></div>
+<div id="funnels" class="page" hidden>
+<section><div class="row"><h2>Сценарии</h2><button id="new" class="primary">Новый сценарий</button><button id="refresh">Обновить</button></div><div id="funnelCards"></div></section>
+<section id="builder" hidden><div class="row"><h2>Сценарий</h2><button id="save" class="primary">Сохранить</button><button id="publish">Опубликовать</button></div>
+<p class="muted">Сверху вниз: что происходит, какая пауза, какая ссылка и с какой подписью. Голосование — вопрос и до пяти кнопок, у каждой свой следующий шаг.</p>
+<div id="story"></div>
+<label>Название<input id="funnelName"></label>
+<label>Проект<select id="funnelProject"></select></label>
+<label>Боты, которые ведут сценарий<select id="funnelConnections" multiple size="3"></select></label>
 <div class="row"><label>Шаблон<select id="templates"></select></label><button id="useTemplate">Применить шаблон</button></div>
 <div class="grid"><div><label>Добавить шаг<select id="newType"></select></label><button id="addStep">Добавить</button><div id="steps"></div></div><div id="stepForm"></div></div>
 <details><summary>Экспертный режим: JSON и экспорт</summary><textarea id="json" style="min-height:250px"></textarea><button id="applyJson">Применить JSON</button><button id="export">Скачать сценарий</button></details>
 <div class="card"><h3>Ссылка входа</h3><label>Подключение<select id="entryConnection"></select></label><label>Источник<input id="entrySource" value="telegram"></label><label>Кампания<input id="entryCampaign" value="mini_course"></label><button id="makeEntry">Создать ссылку</button><div id="entryResult"></div></div>
 </section></div>
-<div id="media" class="page" hidden><section><h2>Медиабанк</h2><p>Загрузите файл здесь или отправьте видео, кружок, голосовое сообщение либо PDF вашему пользовательскому Telegram-боту. Материалы принимаются только от разрешённых владельца и помощницы.</p>
+<div id="media" class="page" hidden><section><h2>Медиабанк</h2><p>Загрузите файл здесь или отправьте видео, кружок, голосовое сообщение либо PDF боту. Материалы принимают владелец и редакторы с доступом к этому боту.</p>
 <label>Название<input id="assetName"></label><label>Тип<select id="assetKind"></select></label><label>Подключения<select id="assetConnections" multiple size="3"></select></label>
 <label>Файл<input id="assetFile" type="file"></label><p class="muted">Загрузка: видео MP4/H.264, кружок квадратный до 60 секунд, голос OGG/Opus, MP3 или M4A, документ PDF. Фото до 10 МБ, другие файлы до 50 МБ. Более крупное готовое медиа можно импортировать из Telegram.</p>
 <button id="upload" class="primary">Загрузить</button><button id="refreshMedia">Обновить медиабанк</button><div id="assetCards"></div></section>
@@ -39,11 +85,9 @@ dialog{max-width:90%;border:0;border-radius:12px}details{margin:12px 0}
 <div id="contacts" class="page" hidden><section><h2>Контакты и ответы</h2><div id="contactCards"></div></section><section><h2>Выполнение воронок</h2><div id="runCards"></div></section><section><h2>Задачи</h2><div id="taskCards"></div></section><section><h2>Журнал</h2><pre id="timeline"></pre></section></div>
 <div id="publications" class="page" hidden><section><h2>Публикации в Telegram-каналы</h2><label>Площадки<select id="postDestinations" multiple size="5"></select></label><label>Текст<textarea id="postText"></textarea></label><button id="post" class="primary">Поставить публикацию в очередь</button></section><section><h3>Добавить площадку</h3><label>Подключение<select id="destinationConnection"></select></label><label>Название<input id="destinationName"></label><label>ID канала или группы<input id="destinationChat" placeholder="-100…"></label><button id="addDestination">Добавить</button></section></div>
 <div id="delivery" class="page" hidden><section><h2>Доставка сообщений</h2><p class="muted">sent означает успешный ответ платформы. unknown требует проверки мессенджера перед повтором.</p><div id="outboxCards"></div></section><section><h2>Ошибки входящих событий</h2><div id="inboxCards"></div></section></div>
-<div id="settings" class="page" hidden><section><h2>Подключения</h2><div id="connectionCards"></div><details><summary>Добавить бота или сообщество</summary>
-<label>Название<input id="connectionName"></label><label>Платформа<select id="platform"><option>telegram</option><option>max</option><option>vk</option></select></label>
-<label>Имя переменной токена<input id="tokenEnv" placeholder="TG_MAIN_TOKEN"></label><label>Имя переменной webhook-секрета<input id="secretEnv" placeholder="TG_MAIN_WEBHOOK_SECRET"></label>
-<label>Параметры JSON<textarea id="connectionConfig">{"welcome_text":"Выберите программу"}</textarea></label><button id="addConnection">Добавить</button></details></section>
-<section><h2>Доступ помощницы</h2><label>Telegram ID<input id="adminId" type="number"></label><label>Роль<select id="adminRole"><option value="editor">Редактор</option><option value="manager">Менеджер</option><option value="viewer">Наблюдатель</option><option value="owner">Владелец</option></select></label><label>Подключения<select id="adminConnections" multiple size="4"></select></label><label><input id="adminActive" type="checkbox" checked style="width:auto"> Доступ активен</label><button id="saveAdmin">Сохранить доступ</button><pre id="adminList"></pre></section>
+<div id="access" class="page" hidden><section><h2>Совместный доступ</h2>
+<p class="muted">Редакторы открывают того же бота и кнопку «Воронки». Нужен личный числовой ID из @userinfobot. Номер чата начинается с -100 и вход по нему не откроется.</p>
+<label>Telegram ID<input id="adminId" type="number"></label><label>Роль<select id="adminRole"><option value="editor">Редактор</option><option value="manager">Менеджер</option><option value="viewer">Наблюдатель</option><option value="owner">Владелец</option></select></label><label>Боты<select id="adminConnections" multiple size="4"></select></label><label><input id="adminActive" type="checkbox" checked style="width:auto"> Доступ активен</label><button id="saveAdmin">Сохранить доступ</button><div id="adminList"></div></section>
 <section><h2>Готовность сервера</h2><button id="preflight">Проверить</button><pre id="preflightResult"></pre></section></div>
 </main><dialog id="preview"><button id="closePreview">Закрыть</button><div id="previewBody"></div></dialog>
 <script src="/editor.js"></script></body></html>
