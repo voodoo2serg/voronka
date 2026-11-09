@@ -157,6 +157,9 @@ def consume(db, connection, msg):
     if callback.startswith("e:"):
         msg = {**msg, "start": True, "payload": callback[2:]}
     if msg.get("start"):
+        if connection.project_id:
+            from app.outreach import mark_started_for_identity
+            mark_started_for_identity(db, identity, connection)
         if run:
             return
         token = msg.get("payload") or connection.config.get("default_entry")

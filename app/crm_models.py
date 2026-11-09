@@ -204,3 +204,52 @@ class Recovery(Base):
     purpose: Mapped[str] = mapped_column(String(30))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class OutreachBatch(Base):
+    """Warm-up invite batches. Never routes through Campaign/Outbox/available_identity."""
+    __tablename__ = "crm_outreach_batches"
+    __table_args__ = (
+        CheckConstraint("daily_cap >= 1 AND daily_cap <= 50"),
+        CheckConstraint("mode IN ('dry_run', 'live')"),
+        CheckConstraint("transport IN ('manual', 'pymax')"),
+        CheckConstraint("state IN ('draft', 'prepared', 'paused', 'cancelled', 'completed')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    invite_text: Mapped[str] = mapped_column(Text)
+    entry_token: Mapped[str] = mapped_column(ForeignKey("entries.token"))
+    entry_connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
+    daily_cap: Mapped[int] = mapped_column(Integer, default=30)
+    mode: Mapped[str] = mapped_column(String(20), default="dry_run")
+    transport: Mapped[str] = mapped_column(String(20), default="manual")
+    state: Mapped[str] = mapped_column(String(30), default="draft")
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("admins.telegram_id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OutreachRecipient(Base):
+    __tablename__ = "crm_outreach_recipients"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "profile_id"),
+        CheckConstraint(
+            "state IN ('pending', 'prepared', 'invited', 'started', 'skipped', 'failed', 'stopped')"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("crm_outreach_batches.id"), index=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("crm_profiles.id"), index=True)
+    phone: Mapped[str] = mapped_column(String(80), default="")
+    state: Mapped[str] = mapped_column(String(30), default="pending")
+    invite_text: Mapped[str] = mapped_column(Text, default="")
+    bot_link: Mapped[str] = mapped_column(String(500), default="")
+    entry_token: Mapped[str] = mapped_column(String(40), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+    outcome_note: Mapped[str] = mapped_column(Text, default="")
+    prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
