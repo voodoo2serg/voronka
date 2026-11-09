@@ -27,6 +27,9 @@ export default function Workspace() {
   const [orders, setOrders] = useState<Row[]>([]);
   const [tasks, setTasks] = useState<Row[]>([]);
   const [campaigns, setCampaigns] = useState<Row[]>([]);
+  const [outreach, setOutreach] = useState<Row[]>([]);
+  const [outreachDetail, setOutreachDetail] = useState<Row | null>(null);
+  const [entries, setEntries] = useState<Row[]>([]);
   const [promos, setPromos] = useState<Row[]>([]);
   const [staff, setStaff] = useState<Row[]>([]);
   const [query, setQuery] = useState('');
@@ -75,7 +78,7 @@ export default function Workspace() {
   async function load(p = pid) {
     if (!p) return;
     const version = ++loadVersion.current;
-    const [o, c, d, pr, t, ord, ca, pc, st, ib] = await Promise.all([
+    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en] = await Promise.all([
       api(`/projects/${p}/overview`),
       api(`/projects/${p}/contacts?q=${encodeURIComponent(query)}&offset=${offset}&limit=100`),
       api(`/projects/${p}/deals`),
@@ -83,9 +86,11 @@ export default function Workspace() {
       api(`/projects/${p}/tasks`),
       api(`/projects/${p}/orders`),
       api(`/projects/${p}/campaigns`),
+      api(`/projects/${p}/outreach-batches`),
       api(`/projects/${p}/promos`),
       api('/staff'),
       api(`/projects/${p}/inbox`),
+      api('/api/entries').catch(() => []),
     ]);
     if (version !== loadVersion.current) return;
     setOverview(o);
@@ -96,9 +101,11 @@ export default function Workspace() {
     setTasks(t);
     setOrders(ord);
     setCampaigns(ca);
+    setOutreach(ob);
     setPromos(pc);
     setStaff(st);
     setInbox(ib.items || []);
+    setEntries(Array.isArray(en) ? en.filter((e: Row) => e.active !== false) : []);
   }
 
   useEffect(() => {
@@ -363,6 +370,64 @@ export default function Workspace() {
           `Черновик создан. Доступных диалогов: ${c.report.recipients.filter((r: Row) => r.eligible).length} из ${selected.length}. Импортированные ID не активируются автоматически.`,
         );
         setSection('campaigns');
+        await load();
+      },
+    });
+  }
+
+  function outreachForm() {
+    const bots = (overview.connections || []).filter((c: Row) => ['telegram', 'max'].includes(c.platform));
+    const entryOptions: [string, string][] = entries
+      .filter((e: Row) => bots.some((c: Row) => c.id === e.connection_id))
+      .map((e: Row) => {
+        const conn = bots.find((c: Row) => c.id === e.connection_id);
+        return [String(e.token), `${conn?.name || e.connection_id} · ${String(e.token).slice(0, 10)}…`];
+      });
+    setForm({
+      title: 'Партия прогрева (dry_run)',
+      fields: [
+        { key: 'title', label: 'Название партии', required: true },
+        {
+          key: 'entry_token',
+          label: 'Entry официального бота',
+          type: 'select',
+          options: entryOptions,
+          required: true,
+        },
+        {
+          key: 'daily_cap',
+          label: 'Дневной лимит (1–50)',
+          type: 'number',
+          value: '30',
+          required: true,
+        },
+        {
+          key: 'invite_text',
+          label: 'Текст: {name}, {link}, {phone}',
+          type: 'textarea',
+          value: 'Здравствуйте, {name}! Напишите официальному боту: {link}',
+          required: true,
+        },
+      ],
+      save: async (v) => {
+        const entry = entries.find((e: Row) => e.token === v.entry_token);
+        if (!entry) throw new Error('Сначала создайте Entry в редакторе воронок');
+        const batch = await api(`/projects/${pid}/outreach-batches`, 'POST', {
+          title: v.title,
+          invite_text: v.invite_text,
+          profile_ids: selected,
+          entry_token: v.entry_token,
+          entry_connection_id: entry.connection_id,
+          daily_cap: Number(v.daily_cap) || 30,
+          mode: 'dry_run',
+          transport: 'manual',
+        });
+        const eligible = (batch.report?.preview || []).filter((r: Row) => r.eligible).length;
+        setNotice(
+          `Партия прогрева создана. С телефоном и без отказа: ${eligible} из ${selected.length}. Dry_run не пишет в Outbox и не шлёт через PyMax.`,
+        );
+        setSection('outreach');
+        setSelected([]);
         await load();
       },
     });
@@ -648,6 +713,7 @@ export default function Workspace() {
                     <div className="selection">
                       Выбрано: {selected.length}
                       <button onClick={campaignForm}>Приветственная кампания</button>
+                      <button onClick={outreachForm}>Прогрев (dry_run)</button>
                       <button onClick={() => setSelected([])}>Снять выбор</button>
                     </div>
                   )}
@@ -1127,6 +1193,172 @@ export default function Workspace() {
                     </article>
                   ))}
                   {!campaigns.length && <div className="empty">Кампаний пока нет</div>}
+                </section>
+              )}
+              {section === 'outreach' && (
+                <section className="panel">
+                  <h2>Прогрев телефонной базы</h2>
+                  <p className="muted">
+                    Партия готовит текст и Entry-ссылку на официальный MAX/Telegram бот. Dry_run не использует Campaign/Outbox и не требует PyMax.
+                    После Start контакт появляется в «Диалогах» через обычный Identity.
+                  </p>
+                  {!entries.length && (
+                    <p className="fine">Сначала опубликуйте воронку и создайте Entry в редакторе воронок — без точки входа прогрев некуда вести.</p>
+                  )}
+                  {outreach.map((b) => (
+                    <article className="campaign" key={b.id}>
+                      <div className="row">
+                        <h3>{b.title}</h3>
+                        <span className="badge">{stateNames[b.state] || b.state}</span>
+                        <span className="tag">{b.mode}</span>
+                        <small>лимит {b.daily_cap}/сутки</small>
+                      </div>
+                      <p>{b.invite_text}</p>
+                      <p className="fine">Статусы: {JSON.stringify(b.recipient_states || {})}</p>
+                      <div className="row">
+                        <button
+                          onClick={() =>
+                            void act(async () => {
+                              setOutreachDetail(await api('/outreach-batches/' + b.id));
+                            })
+                          }
+                        >
+                          Получатели
+                        </button>
+                        {['draft', 'prepared', 'paused'].includes(b.state) && (
+                          <button
+                            className="primary"
+                            onClick={() =>
+                              void act(async () => {
+                                const r = await api('/outreach-batches/' + b.id + '/prepare', 'POST');
+                                setNotice(
+                                  `Подготовлено: ${r.prepared}. Пропущено: ${r.skipped}. Outbox не использовался. Пример ссылки: ${r.bot_link_example || '—'}`,
+                                );
+                                await load();
+                                setOutreachDetail(await api('/outreach-batches/' + b.id));
+                              })
+                            }
+                          >
+                            Dry_run: подготовить тексты
+                          </button>
+                        )}
+                        {['draft', 'prepared'].includes(b.state) && (
+                          <button
+                            onClick={() =>
+                              void act(async () => {
+                                await api('/outreach-batches/' + b.id + '/control', 'POST', { action: 'pause' });
+                                await load();
+                              })
+                            }
+                          >
+                            Пауза
+                          </button>
+                        )}
+                        {b.state === 'paused' && (
+                          <button
+                            onClick={() =>
+                              void act(async () => {
+                                await api('/outreach-batches/' + b.id + '/control', 'POST', { action: 'resume' });
+                                await load();
+                              })
+                            }
+                          >
+                            Продолжить
+                          </button>
+                        )}
+                        {b.state !== 'cancelled' && (
+                          <button
+                            onClick={() =>
+                              void act(async () => {
+                                await api('/outreach-batches/' + b.id + '/control', 'POST', { action: 'cancel' });
+                                await load();
+                                setOutreachDetail(null);
+                              })
+                            }
+                          >
+                            Отменить
+                          </button>
+                        )}
+                      </div>
+                      {outreachDetail && outreachDetail.id === b.id && (
+                        <div className="preview-scroll" style={{ marginTop: 12 }}>
+                          {(outreachDetail.recipients || []).map((r: Row) => (
+                            <div className="preview-row" key={r.id}>
+                              <b>
+                                {clientName(r.profile_id)} · {stateNames[r.state] || r.state}
+                              </b>
+                              <small>{r.phone}</small>
+                              {r.bot_link && (
+                                <small>
+                                  <a href={r.bot_link} target="_blank" rel="noreferrer">
+                                    {r.bot_link}
+                                  </a>
+                                </small>
+                              )}
+                              {r.invite_text && <p className="fine">{r.invite_text}</p>}
+                              {r.last_error && <span className="danger-text">{r.last_error}</span>}
+                              <div className="button-stack">
+                                {['prepared', 'invited'].includes(r.state) && (
+                                  <>
+                                    <button
+                                      onClick={() =>
+                                        void act(async () => {
+                                          await api(`/outreach-batches/${b.id}/recipients/${r.id}/outcome`, 'POST', {
+                                            state: 'invited',
+                                            note: 'Отправлено вручную / с отдельной SIM',
+                                          });
+                                          setOutreachDetail(await api('/outreach-batches/' + b.id));
+                                          await load();
+                                        })
+                                      }
+                                    >
+                                      Отметить «приглашён»
+                                    </button>
+                                    <button
+                                      onClick={() =>
+                                        void act(async () => {
+                                          await api(`/outreach-batches/${b.id}/recipients/${r.id}/outcome`, 'POST', {
+                                            state: 'started',
+                                            note: 'Пользователь нажал Start',
+                                          });
+                                          setOutreachDetail(await api('/outreach-batches/' + b.id));
+                                          await load();
+                                        })
+                                      }
+                                    >
+                                      Start бота
+                                    </button>
+                                  </>
+                                )}
+                                {r.state !== 'stopped' && r.state !== 'started' && (
+                                  <button
+                                    onClick={() =>
+                                      void act(async () => {
+                                        await api(`/outreach-batches/${b.id}/recipients/${r.id}/outcome`, 'POST', {
+                                          state: 'stopped',
+                                          note: 'Отказ от outreach',
+                                        });
+                                        setOutreachDetail(await api('/outreach-batches/' + b.id));
+                                        await load();
+                                      })
+                                    }
+                                  >
+                                    Отказ
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                  {!outreach.length && (
+                    <div className="empty">
+                      <h2>Партий прогрева пока нет</h2>
+                      <p>Выберите клиентов с телефонами в таблице и нажмите «Прогрев (dry_run)».</p>
+                    </div>
+                  )}
                 </section>
               )}
               {section === 'imports' && (

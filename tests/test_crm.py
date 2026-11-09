@@ -16,8 +16,8 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns):
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -229,6 +229,8 @@ def test_migration_0004_matches_models_and_downgrades(crm):
     from app.db import Base
     bind=crm.db.kw['bind']
     if bind.dialect.name!='sqlite': pytest.skip('Uses isolated SQLite metadata, PG upgrade tested in CI')
+    # Tables added after 0004 are covered by later migration tests.
+    later={'crm_outreach_batches','crm_outreach_recipients'}
     with bind.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             if table.name.startswith('crm_'): table.drop(conn)
@@ -238,10 +240,35 @@ def test_migration_0004_matches_models_and_downgrades(crm):
             module.upgrade()
             inspector=inspect(conn)
             for table in Base.metadata.sorted_tables:
-                if table.name.startswith('crm_'):
+                if table.name.startswith('crm_') and table.name not in later:
                     assert set(c.name for c in table.columns)=={c['name'] for c in inspector.get_columns(table.name)}
             module.downgrade()
         assert not any(n.startswith('crm_') for n in inspect(conn).get_table_names())
+
+
+def test_migration_0006_outreach_matches_models_and_downgrades(crm):
+    import importlib.util
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect
+    from app.db import Base
+    bind=crm.db.kw['bind']
+    if bind.dialect.name!='sqlite': pytest.skip('Uses isolated SQLite metadata, PG upgrade tested in CI')
+    outreach={'crm_outreach_batches','crm_outreach_recipients'}
+    with bind.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name in outreach: table.drop(conn, checkfirst=True)
+        # 0006 assumes baseline CRM tables from create_all / prior migrations.
+        spec=importlib.util.spec_from_file_location('outreach_migration','migrations/versions/0006_outreach_batches.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with Operations.context(MigrationContext.configure(conn)):
+            module.upgrade()
+            inspector=inspect(conn)
+            for table in Base.metadata.sorted_tables:
+                if table.name in outreach:
+                    assert set(c.name for c in table.columns)=={c['name'] for c in inspector.get_columns(table.name)}
+            module.downgrade()
+        assert not outreach.intersection(inspect(conn).get_table_names())
 
 
 def test_email_requires_permission_and_uses_real_smtp_transport(crm,monkeypatch):
@@ -393,3 +420,105 @@ def test_inbox_lists_dialog_identities(crm):
     assert r.status_code==200
     assert r.json()['total']==1 and r.json()['items'][0]['id']==a['id']
     assert r.json()['items'][0]['identities']
+
+
+def _published_entry(crm):
+    from test_operational import graph
+    r=crm.client.post('/api/funnels',json={'name':'Outreach','connection_ids':['tg'],'graph':graph(),'project_id':'p'})
+    assert r.status_code==200,r.text
+    fid=r.json()['id']
+    assert crm.client.post('/api/funnels/'+fid+'/publish').status_code==200
+    entry=crm.client.post('/api/entries',json={'funnel_id':fid,'connection_id':'tg','attribution':{'source':'outreach'}}).json()
+    return entry['payload']
+
+
+def test_outreach_dry_run_respects_phone_optout_cap_and_skips_outbox(crm):
+    from app.crm_models import OutreachRecipient, Activity
+    token=_published_entry(crm)
+    ok=contact(crm,name='С телефоном',phone='+79991234567')
+    no_phone=contact(crm,name='Без телефона')
+    stopped=contact(crm,name='Отказ',phone='+79997654321',stopped=True)
+    only_import=contact(crm,name='Импорт ID',phone='+79990001122',extra={'telegram_id':'777'})
+    body={
+        'title':'Прогрев MAX/TG','invite_text':'Здравствуйте, {name}! Бот: {link}',
+        'profile_ids':[ok['id'],no_phone['id'],stopped['id'],only_import['id']],
+        'entry_token':token,'entry_connection_id':'tg','daily_cap':2,'mode':'dry_run','transport':'manual',
+    }
+    created=crm.client.post('/api/crm/projects/p/outreach-batches',json=body)
+    assert created.status_code==200,created.text
+    batch=created.json(); bid=batch['id']
+    preview={row['profile_id']:row for row in batch['report']['preview']}
+    assert preview[ok['id']]['eligible'] and preview[only_import['id']]['eligible']
+    assert not preview[no_phone['id']]['eligible'] and not preview[stopped['id']]['eligible']
+    prepared=crm.client.post('/api/crm/outreach-batches/'+bid+'/prepare')
+    assert prepared.status_code==200,prepared.text
+    report=prepared.json()
+    assert report['outbox_used'] is False and report['mode']=='dry_run'
+    assert report['prepared']==2  # daily_cap; stopped/no_phone skipped, fourth hits cap or is prepared
+    with crm.db() as db:
+        assert not list(db.scalars(select(Outbox)))
+        states={r.profile_id:r.state for r in db.scalars(select(OutreachRecipient).where(OutreachRecipient.batch_id==bid))}
+        assert states[ok['id']]=='prepared'
+        assert states[stopped['id']]=='stopped'
+        assert states[no_phone['id']]=='skipped'
+        assert 't.me/real_bot?start='+token in db.scalar(
+            select(OutreachRecipient).where(OutreachRecipient.profile_id==ok['id'])).bot_link
+        assert db.scalar(select(Activity).where(Activity.profile_id==ok['id'],Activity.kind=='outreach'))
+        # Imported telegram_id still has no Identity — phone invite ≠ write permission.
+        assert not db.scalar(select(Identity).where(Identity.contact_id==only_import['contact_id']))
+    detail=crm.client.get('/api/crm/outreach-batches/'+bid).json()
+    recipient=next(r for r in detail['recipients'] if r['profile_id']==ok['id'])
+    assert crm.client.post(
+        f"/api/crm/outreach-batches/{bid}/recipients/{recipient['id']}/outcome",
+        json={'state':'invited','note':'Отправлено с отдельной SIM'},
+    ).status_code==200
+    # After official Start, same contact_id marks recipient started and lands in inbox.
+    with crm.db.begin() as db:
+        db.add(Identity(id='after-start',contact_id=ok['contact_id'],connection_id='tg',
+                        external_user_id='910',chat_id='910',name='С телефоном'))
+    from app.outreach import mark_started_for_identity
+    with crm.db.begin() as db:
+        identity=db.get(Identity,'after-start'); connection=db.get(Connection,'tg')
+        assert mark_started_for_identity(db,identity,connection)==1
+    with crm.db() as db:
+        assert db.scalar(select(OutreachRecipient).where(OutreachRecipient.profile_id==ok['id'])).state=='started'
+    inbox=crm.client.get('/api/crm/projects/p/inbox').json()
+    assert any(item['id']==ok['id'] for item in inbox['items'])
+
+
+def test_outreach_live_pymax_disabled_without_credentials(crm):
+    token=_published_entry(crm)
+    person=contact(crm,name='Live stub',phone='+79991112233')
+    batch=crm.client.post('/api/crm/projects/p/outreach-batches',json={
+        'title':'Live stub','invite_text':'Hi {name} {link}','profile_ids':[person['id']],
+        'entry_token':token,'entry_connection_id':'tg','mode':'live','transport':'pymax','daily_cap':20,
+    }).json()
+    report=crm.client.post('/api/crm/outreach-batches/'+batch['id']+'/prepare').json()
+    assert report['prepared']==0 and report['errors']
+    assert report['errors'][0]['error']=='pymax_disabled'
+    with crm.db() as db:
+        assert not list(db.scalars(select(Outbox)))
+
+
+def test_outreach_does_not_use_available_identity_campaign_path(crm):
+    """Warm-up must remain separate from Campaign eligibility/Outbox launch."""
+    from app.crm_service import available_identity
+    token=_published_entry(crm)
+    person=contact(crm,name='Только телефон',phone='+79995556677',extra={'telegram_id':'888'})
+    with crm.db() as db:
+        profile=db.get(Profile,person['id'])
+        identity,reason=available_identity(db,profile,'tg')
+        assert identity is None
+        assert 'Нет подтверждённого диалога' in reason
+    batch=crm.client.post('/api/crm/projects/p/outreach-batches',json={
+        'title':'Не кампания','invite_text':'{link}','profile_ids':[person['id']],
+        'entry_token':token,'entry_connection_id':'tg','daily_cap':20,
+    }).json()
+    assert crm.client.post('/api/crm/outreach-batches/'+batch['id']+'/prepare').json()['prepared']==1
+    campaign=crm.client.post('/api/crm/projects/p/campaigns',json={
+        'connection_id':'tg','title':'Обычная','text':'Hi','profile_ids':[person['id']],
+    }).json()
+    assert campaign['report']['recipients'][0]['eligible'] is False
+    assert crm.client.post('/api/crm/campaigns/'+campaign['id']+'/launch').json()['queued']==0
+    with crm.db() as db:
+        assert not list(db.scalars(select(Outbox)))

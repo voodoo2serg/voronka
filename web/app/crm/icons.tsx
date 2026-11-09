@@ -8,6 +8,7 @@ export function Icon({ name }: { name: string }) {
     tasks: 'M5 12l4 4L20 5',
     orders: 'M8 21V3h6a5 5 0 010 10H5 M5 17h11',
     campaigns: 'M5 19L19 5 M5 5h14v14',
+    outreach: 'M12 3v18 M5 10l7-7 7 7 M8 21h8',
     imports: 'M7 3v17 M3 16l4 4 4-4 M17 21V4 M13 8l4-4 4 4',
     settings: 'M12 8a4 4 0 100 8 4 4 0 000-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2',
   };
