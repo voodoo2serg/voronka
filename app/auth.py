@@ -1,10 +1,11 @@
 import hashlib, hmac, json, os, secrets, time
 from urllib.parse import parse_qsl
 import redis
-from fastapi import Header, HTTPException
+from fastapi import Cookie, Header, HTTPException
 from app.db import Session, Admin
 
 cache = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+CRM_SESSION_COOKIE = "crm_session"
 
 def validate_init_data(raw, token, current_time=None):
     pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
@@ -36,10 +37,27 @@ def issue_session(admin_id):
     cache.expire(f"admin-sessions:{admin_id}", 8 * 3600)
     return token
 
-def actor(authorization: str = Header(default="")):
-    if not authorization.startswith("Bearer "):
+def revoke_sessions(admin_id):
+    for key in cache.smembers(f"admin-sessions:{admin_id}"):
+        cache.delete(key)
+    cache.delete(f"admin-sessions:{admin_id}")
+
+def read_session_token(authorization: str = "", cookie: str | None = None):
+    if authorization.startswith("Bearer ") and authorization[7:]:
+        return authorization[7:]
+    if cookie:
+        return cookie
+    return ""
+
+def actor(
+    authorization: str = Header(default=""),
+    crm_session: str | None = Cookie(default=None, alias=CRM_SESSION_COOKIE),
+):
+    # Prefer Authorization Bearer (Telegram Mini App + CRM clients); fall back to HttpOnly CRM cookie.
+    token = read_session_token(authorization, crm_session)
+    if not token:
         raise HTTPException(401, "Откройте панель из Telegram")
-    value = cache.get(session_key(authorization[7:]))
+    value = cache.get(session_key(token))
     if not value:
         raise HTTPException(401, "Сессия истекла")
     with Session() as db:

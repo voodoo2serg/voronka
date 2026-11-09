@@ -8,14 +8,17 @@ import pytest
 from sqlalchemy import select
 from test_operational import system
 from app import crm_api, auth, runtime, worker
-from app.db import Project, Connection, Admin, Contact, Identity, Outbox, now
+from app.db import Project, Connection, Admin, Contact, Identity, Outbox, Event, now
 from app.crm_models import Account, Profile, Payment, Campaign, AccessGrant, Order, Invoice
 from app.crm_service import password_hash
 
 
 @pytest.fixture
 def crm(system, monkeypatch):
-    monkeypatch.setattr(crm_api, 'Session', system.db)
+    from app import crm_deps
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns):
+        monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
         db.add(Project(id='secret', name='Секрет', goal='Закрытый проект'))
@@ -197,6 +200,8 @@ def test_registration_not_exposed_and_recovery_requires_verified_email(crm,monke
     monkeypatch.setenv('SMTP_HOST','mail.test')
     monkeypatch.setenv('SMTP_FROM','team@example.ru')
     codes=[]
+    from app.crm_routers import auth_staff
+    monkeypatch.setattr(auth_staff,'mail_code',lambda email,code:codes.append(code))
     monkeypatch.setattr(crm_api,'mail_code',lambda email,code:codes.append(code))
     assert crm.client.post('/api/crm/recovery/start',json={'login':'owner'}).status_code==200
     assert not codes
@@ -266,6 +271,8 @@ def test_email_requires_permission_and_uses_real_smtp_transport(crm,monkeypatch)
 def test_manager_cannot_change_catalog_prices_or_record_money(crm):
     c=contact(crm);p=product(crm);o=order(crm,c,p)
     assert crm.client.post('/api/crm/staff',json={'login':'manager','password':'manager-password-123','project_ids':['p']}).status_code==200
+    mid=next(s['id'] for s in crm.client.get('/api/crm/staff').json() if s['login']=='manager')
+    with crm.db.begin() as db: db.get(Profile,c['id']).owner_id=mid
     login=crm.client.post('/api/crm/login',json={'login':'manager','password':'manager-password-123'}).json()
     crm.client.headers['Authorization']='Bearer '+login['token']
     assert crm.client.put('/api/crm/products/'+p['id'],json={'name':'Цена','kind':'audit','price_minor':1}).status_code==403
@@ -295,3 +302,94 @@ def test_raga_draft_is_scoped_and_never_sends(crm,monkeypatch):
         assert r.status_code==200 and not r.json()['sent']
         assert post.call_args.kwargs['json']['model']=='solo-sales'
     with crm.db() as db: assert not list(db.scalars(select(Outbox)))
+
+
+def test_staff_cannot_create_owner_role(crm):
+    r=crm.client.post('/api/crm/staff',json={'login':'second-owner','password':'second-owner-12','role':'owner','project_ids':['p']})
+    assert r.status_code==422
+
+
+def test_disable_staff_revokes_redis_sessions(crm):
+    assert crm.client.post('/api/crm/staff',json={'login':'to-disable','password':'disable-password-12','project_ids':['p']}).status_code==200
+    login=crm.client.post('/api/crm/login',json={'login':'to-disable','password':'disable-password-12'})
+    assert login.status_code==200
+    token=login.json()['token']
+    assert crm.cache.get(auth.session_key(token))
+    staff=crm.client.get('/api/crm/staff').json()
+    aid=next(s['id'] for s in staff if s['login']=='to-disable')
+    assert crm.client.post(f'/api/crm/staff/{aid}/disable').status_code==200
+    assert crm.cache.get(auth.session_key(token)) is None
+    limited=crm.client.__class__(crm.client.app)
+    limited.headers['Authorization']='Bearer '+token
+    assert limited.get('/api/crm/me').status_code in (401,403)
+    limited.close()
+
+
+def test_manager_sees_only_assigned_contacts_deals_and_export(crm):
+    mine=contact(crm,name='Мой клиент')
+    other=contact(crm,name='Чужой клиент')
+    assert crm.client.post('/api/crm/staff',json={'login':'acl-manager','password':'manager-password-123','role':'manager','project_ids':['p']}).status_code==200
+    staff=crm.client.get('/api/crm/staff').json()
+    mid=next(s['id'] for s in staff if s['login']=='acl-manager')
+    with crm.db.begin() as db:
+        db.get(Profile,mine['id']).owner_id=mid
+        db.get(Profile,other['id']).owner_id=123
+    deal_mine=crm.client.post('/api/crm/projects/p/deals',json={'profile_id':mine['id'],'title':'Моя сделка','owner_id':mid}).json()
+    crm.client.post('/api/crm/projects/p/deals',json={'profile_id':other['id'],'title':'Чужая сделка','owner_id':123})
+    login=crm.client.post('/api/crm/login',json={'login':'acl-manager','password':'manager-password-123'}).json()
+    crm.client.headers['Authorization']='Bearer '+login['token']
+    listed=crm.client.get('/api/crm/projects/p/contacts').json()
+    assert listed['total']==1 and listed['items'][0]['id']==mine['id']
+    assert crm.client.get('/api/crm/contacts/'+other['id']).status_code==404
+    deals=crm.client.get('/api/crm/projects/p/deals').json()
+    assert [d['id'] for d in deals]==[deal_mine['id']]
+    export=crm.client.get('/api/crm/projects/p/export')
+    assert export.status_code==200 and 'Мой клиент' in export.text and 'Чужой клиент' not in export.text
+    assert crm.client.post('/api/crm/projects/p/campaigns',json={'connection_id':'tg','title':'x','text':'hi','profile_ids':[other['id']]}).status_code==404
+
+
+def test_import_clears_rows_after_commit_keeps_fingerprint(crm):
+    from app.crm_models import ImportBatch
+    raw='name;email\nБорис;boris@example.ru'.encode()
+    p=crm.client.post('/api/crm/projects/p/imports/preview',files={'file':('b.csv',raw)}).json()
+    report=crm.client.post('/api/crm/imports/'+p['id']+'/commit').json()
+    assert report['created']==1
+    with crm.db() as db:
+        batch=db.get(ImportBatch,p['id'])
+        assert batch.state=='done' and batch.rows==[]
+    assert crm.client.post('/api/crm/projects/p/imports/preview',files={'file':('b.csv',raw)}).json()['id']==p['id']
+    assert crm.client.post('/api/crm/imports/'+p['id']+'/commit').json()==report
+
+
+def test_robokassa_overview_uses_test_passwords_in_test_mode(crm,monkeypatch):
+    monkeypatch.setenv('ROBOKASSA_LOGIN','merchant')
+    monkeypatch.setenv('ROBOKASSA_TEST','1')
+    monkeypatch.delenv('ROBOKASSA_PASSWORD1',raising=False)
+    monkeypatch.delenv('ROBOKASSA_PASSWORD2',raising=False)
+    monkeypatch.setenv('ROBOKASSA_TEST_PASSWORD1','test-first')
+    monkeypatch.setenv('ROBOKASSA_TEST_PASSWORD2','test-second')
+    assert crm.client.get('/api/crm/projects/p/overview').json()['integrations']['robokassa'] is True
+    monkeypatch.delenv('ROBOKASSA_TEST_PASSWORD1',raising=False)
+    assert crm.client.get('/api/crm/projects/p/overview').json()['integrations']['robokassa'] is False
+
+
+def test_login_sets_httponly_session_cookie(crm):
+    r=crm.client.post('/api/crm/login',json={'login':'owner','password':'owner-password-123'})
+    assert r.status_code==200
+    assert auth.CRM_SESSION_COOKIE in r.cookies
+    bare=crm.client.__class__(crm.client.app)
+    bare.cookies.set(auth.CRM_SESSION_COOKIE,r.cookies[auth.CRM_SESSION_COOKIE])
+    assert bare.get('/api/crm/me').status_code==200
+    bare.close()
+
+
+def test_inbox_lists_dialog_identities(crm):
+    a=contact(crm,name='С диалогом')
+    contact(crm,name='Без диалога')
+    with crm.db.begin() as db:
+        db.add(Identity(id='inbox-id',contact_id=a['contact_id'],connection_id='tg',external_user_id='901',chat_id='901',name='Анна'))
+        db.add(Event(id='evt1',connection_id='tg',contact_id=a['contact_id'],kind='message.received',payload={'text':'Привет'}))
+    r=crm.client.get('/api/crm/projects/p/inbox')
+    assert r.status_code==200
+    assert r.json()['total']==1 and r.json()['items'][0]['id']==a['id']
+    assert r.json()['items'][0]['identities']

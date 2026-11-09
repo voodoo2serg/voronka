@@ -24,6 +24,22 @@ async def constraint_conflict(request: Request, exception: IntegrityError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
 
+@app.middleware("http")
+async def crm_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/crm"):
+        # Static CRM export: same-origin API only; no third-party scripts.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
 # Built Next.js static export shares the same origin and authenticated API.
 from fastapi.staticfiles import StaticFiles
 if Path("app/crm_static").is_dir():

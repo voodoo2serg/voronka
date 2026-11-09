@@ -59,11 +59,56 @@ def project_access(db, admin, project_id):
         raise HTTPException(404, "Проект недоступен")
 
 
+def manager_scope(admin):
+    """Managers only see assigned clients/deals; owners and editors keep project scope."""
+    return admin.role == "manager"
+
+
+def profile_visible(admin, profile):
+    if not manager_scope(admin):
+        return True
+    return profile.owner_id == admin.telegram_id
+
+
+def deal_visible(admin, deal, profile=None):
+    if not manager_scope(admin):
+        return True
+    if deal.owner_id == admin.telegram_id:
+        return True
+    if profile is not None:
+        return profile.owner_id == admin.telegram_id
+    return False
+
+
+def assigned_profile_filter(admin):
+    from sqlalchemy import true
+    if not manager_scope(admin):
+        return true()
+    return Profile.owner_id == admin.telegram_id
+
+
 def get_profile(db, admin, profile_id):
     row = db.get(Profile, profile_id)
     if row is None:
         raise HTTPException(404, "Клиент не найден")
     project_access(db, admin, row.project_id)
+    if not profile_visible(admin, row):
+        raise HTTPException(404, "Клиент не найден")
+    return row
+
+
+def get_deal(db, admin, deal_id, for_update=False):
+    from app.crm_models import Deal
+    query = select(Deal).where(Deal.id == deal_id)
+    if for_update:
+        query = query.with_for_update()
+    row = db.scalar(query)
+    if row is None:
+        raise HTTPException(404, "Не найдено")
+    project_access(db, admin, row.project_id)
+    profile = db.get(Profile, row.profile_id)
+    if not deal_visible(admin, row, profile):
+        raise HTTPException(404, "Не найдено")
     return row
 
 

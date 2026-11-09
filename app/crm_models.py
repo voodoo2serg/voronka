@@ -106,7 +106,7 @@ class ImportBatch(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     fingerprint: Mapped[str] = mapped_column(String(64))
     mapping: Mapped[dict] = mapped_column(JSON)
-    rows: Mapped[list] = mapped_column(JSON)
+    rows: Mapped[list | None] = mapped_column(JSON, nullable=True)
     state: Mapped[str] = mapped_column(String(30), default="preview")
     report: Mapped[dict] = mapped_column(JSON, default=dict)
     actor_id: Mapped[int] = mapped_column(ForeignKey("admins.telegram_id"))
