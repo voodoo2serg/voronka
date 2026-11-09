@@ -39,6 +39,25 @@ def result(response, platform):
     return data
 
 def send(connection, chat_id, payload, message_key):
+    if connection.platform == "email":
+        import smtplib
+        from email.message import EmailMessage
+        if not os.getenv("SMTP_HOST") or not os.getenv("SMTP_FROM"):
+            raise DeliveryRejected("smtp_not_configured")
+        message = EmailMessage()
+        message["From"], message["To"] = os.environ["SMTP_FROM"], chat_id
+        message["Subject"] = payload.get("subject", "Сообщение Соло-PR")
+        message["Message-ID"] = f"<{message_key}@voronka.local>"
+        message.set_content(payload.get("text", ""))
+        try:
+            with smtplib.SMTP(os.environ["SMTP_HOST"], int(os.getenv("SMTP_PORT", "587")), timeout=20) as smtp:
+                smtp.starttls()
+                if os.getenv("SMTP_USER"):
+                    smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+                smtp.send_message(message)
+        except smtplib.SMTPRecipientsRefused:
+            raise DeliveryRejected("email_recipient_rejected")
+        return DeliveryReceipt(message["Message-ID"])
     token = credential(connection.token_env)
     kind, text = payload.get("type", "text"), payload.get("text", "")
     with httpx.Client(timeout=httpx.Timeout(180, connect=10)) as client:

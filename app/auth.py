@@ -30,7 +30,10 @@ def session_key(token):
 
 def issue_session(admin_id):
     token = secrets.token_urlsafe(32)
-    cache.setex(session_key(token), 8 * 3600, str(admin_id))
+    key = session_key(token)
+    cache.setex(key, 8 * 3600, str(admin_id))
+    cache.sadd(f"admin-sessions:{admin_id}", key)
+    cache.expire(f"admin-sessions:{admin_id}", 8 * 3600)
     return token
 
 def actor(authorization: str = Header(default="")):
@@ -43,6 +46,12 @@ def actor(authorization: str = Header(default="")):
         admin = db.get(Admin, int(value))
         if not admin or not admin.active:
             raise HTTPException(403, "Доступ отозван")
+        from app.crm_models import Account, Membership
+        from app.db import Connection
+        from sqlalchemy import select
+        if admin.role != "owner" and db.scalar(select(Account.id).where(Account.admin_id == admin.telegram_id)):
+            projects = select(Membership.project_id).where(Membership.admin_id == admin.telegram_id)
+            admin.connection_ids = list(db.scalars(select(Connection.id).where(Connection.project_id.in_(projects))))
         return admin
 
 def permit(admin, connections=(), edit=False, owner=False):

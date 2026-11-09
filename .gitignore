@@ -5,3 +5,8 @@ __pycache__/
 .pytest_cache/
 *.pyc
 backups/
+web/node_modules/
+web/.next/
+web/out/
+web/*.tsbuildinfo
+app/crm_static/

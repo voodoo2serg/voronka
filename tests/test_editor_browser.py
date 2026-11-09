@@ -47,7 +47,7 @@ def test_build_five_lesson_funnel_without_json(width):
             data = {"version_id":"v1"}
         route.fulfill(content_type="application/json", body=json.dumps(data))
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = playwright.chromium.launch(executable_path=os.getenv('PLAYWRIGHT_EXECUTABLE_PATH') or None,args=['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-zygote'])
         page = browser.new_page(viewport={"width":width,"height":900})
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("dialog", lambda dialog: dialog.accept())

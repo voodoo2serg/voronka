@@ -16,6 +16,18 @@ from datetime import timedelta
 
 app = FastAPI(title="Воронки", docs_url=None, redoc_url=None)
 app.include_router(media_router)
+from app.crm_api import router as crm_router
+app.include_router(crm_router)
+
+@app.exception_handler(IntegrityError)
+async def constraint_conflict(request: Request, exception: IntegrityError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
+
+# Built Next.js static export shares the same origin and authenticated API.
+from fastapi.staticfiles import StaticFiles
+if Path("app/crm_static").is_dir():
+    app.mount("/crm", StaticFiles(directory="app/crm_static", html=True), name="crm")
 
 @app.get("/editor.js")
 def editor_script():
@@ -156,8 +168,9 @@ def list_projects(admin=Depends(actor)):
                 and db.get(Connection, d.connection_id).project_id == project.id]
             scripts = [{"id": f.id, "name": f.name} for f in db.scalars(select(Funnel).where(Funnel.project_id == project.id))
                 if all(allowed(admin, c) for c in f.connection_ids)]
-            rows.append({"id": project.id, "name": project.name, "goal": project.goal,
-                "accounts": accounts + chats, "scripts": scripts})
+            if admin.role == "owner" or accounts or chats or scripts:
+                rows.append({"id": project.id, "name": project.name, "goal": project.goal,
+                    "accounts": accounts + chats, "scripts": scripts})
         return rows
 
 @app.post("/api/projects")

@@ -110,6 +110,26 @@ def outgoing():
         if not connection or not connection.active:
             row.status, row.error = "failed", "connection_disabled"
             return True
+        if row.payload.get("crm_campaign_id"):
+            from app.crm_models import Campaign, Profile
+            campaign = db.get(Campaign, row.payload["crm_campaign_id"])
+            profile = db.get(Profile, row.payload.get("crm_profile_id"))
+            if not campaign or campaign.state == "cancelled" or not profile or profile.stopped or connection.project_id != profile.project_id:
+                row.status, row.error = "cancelled", "campaign_or_contact_stopped"
+                return True
+            if campaign.state == "paused":
+                row.status = "held"
+                return True
+            if connection.platform == "email" and (not profile.extra.get("email_allowed") or profile.email != row.chat_id):
+                row.status, row.error = "cancelled", "email_permission_or_address_changed"
+                return True
+        # Per-bot cap complements the existing per-chat cap; platform 429 still wins.
+        bucket = f"bot-rate:{connection.id}:{int(time.time())}"
+        count = cache.incr(bucket)
+        if count == 1:
+            cache.expire(bucket, 3)
+        if count > int(os.getenv("BOT_MESSAGES_PER_SECOND", "20")):
+            return False
         try:
             payload = resolved_payload(db, connection, row.payload)
         except DeliveryRejected as error:
