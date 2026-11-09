@@ -16,6 +16,34 @@ from datetime import timedelta
 
 app = FastAPI(title="Воронки", docs_url=None, redoc_url=None)
 app.include_router(media_router)
+from app.crm_api import router as crm_router
+app.include_router(crm_router)
+
+@app.exception_handler(IntegrityError)
+async def constraint_conflict(request: Request, exception: IntegrityError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
+
+@app.middleware("http")
+async def crm_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/crm"):
+        # Static CRM export: same-origin API only; no third-party scripts.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
+# Built Next.js static export shares the same origin and authenticated API.
+from fastapi.staticfiles import StaticFiles
+if Path("app/crm_static").is_dir():
+    app.mount("/crm", StaticFiles(directory="app/crm_static", html=True), name="crm")
 
 @app.get("/editor.js")
 def editor_script():
@@ -136,7 +164,7 @@ def connections(admin=Depends(actor)):
     with Session() as db:
         return [{"id": c.id, "name": c.name, "platform": c.platform, "active": c.active,
                  "project_id": c.project_id, "role": c.role or "bot"}
-                for c in db.scalars(select(Connection)) if allowed(admin, c.id)]
+                for c in db.scalars(select(Connection)) if c.platform != "email" and allowed(admin, c.id)]
 
 class ProjectBody(BaseModel):
     name: str = Field(min_length=1, max_length=160)
@@ -148,7 +176,7 @@ def list_projects(admin=Depends(actor)):
         rows = []
         for project in db.scalars(select(Project)):
             accounts = [{"id": c.id, "name": c.name, "role": c.role or "bot", "platform": c.platform, "kind": "account"}
-                for c in db.scalars(select(Connection).where(Connection.project_id == project.id)) if allowed(admin, c.id)]
+                for c in db.scalars(select(Connection).where(Connection.project_id == project.id, Connection.platform != "email")) if allowed(admin, c.id)]
             chats = [{"id": d.id, "name": d.name, "role": "chat" if d.kind == "group" else "channel",
                 "platform": "telegram", "kind": d.kind, "external_chat_id": d.external_chat_id}
                 for d in db.scalars(select(Destination))
@@ -156,8 +184,9 @@ def list_projects(admin=Depends(actor)):
                 and db.get(Connection, d.connection_id).project_id == project.id]
             scripts = [{"id": f.id, "name": f.name} for f in db.scalars(select(Funnel).where(Funnel.project_id == project.id))
                 if all(allowed(admin, c) for c in f.connection_ids)]
-            rows.append({"id": project.id, "name": project.name, "goal": project.goal,
-                "accounts": accounts + chats, "scripts": scripts})
+            if admin.role == "owner" or accounts or chats or scripts:
+                rows.append({"id": project.id, "name": project.name, "goal": project.goal,
+                    "accounts": accounts + chats, "scripts": scripts})
         return rows
 
 @app.post("/api/projects")
@@ -666,7 +695,7 @@ def preflight(admin=Depends(actor)):
         checks["database"]=True
         checks["connections"]=[{"id":c.id,"name":c.name,"platform":c.platform,
             "token_present":bool(os.environ.get(c.token_env)),"secret_present":bool(os.environ.get(c.secret_env))}
-            for c in db.scalars(select(Connection)) if allowed(admin,c.id)]
+            for c in db.scalars(select(Connection)) if c.platform != "email" and allowed(admin,c.id)]
     try:
         checks["redis"]=bool(cache.ping())
         checks["worker_alive"]=bool(cache.get("worker:heartbeat"))

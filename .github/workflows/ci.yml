@@ -74,7 +74,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
-      - run: python -m pytest -q tests/test_operational.py
+      - run: python -m pytest -q tests/test_operational.py tests/test_crm.py
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -94,5 +94,21 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix web
+      - run: npm run --prefix web build
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest -q tests/test_editor_browser.py
+      - run: python -m pytest -q tests/test_editor_browser.py tests/test_crm_browser.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix web
+      - run: npm run --prefix web build
+      - run: npm run --prefix web typecheck

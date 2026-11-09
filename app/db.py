@@ -129,7 +129,7 @@ class Outbox(Base):
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
     identity_id: Mapped[str | None] = mapped_column(ForeignKey("identities.id"), nullable=True)
     run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
-    chat_id: Mapped[str] = mapped_column(String(80))
+    chat_id: Mapped[str] = mapped_column(String(250))
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     external_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -166,3 +166,6 @@ class Task(Base):
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
     title: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="open")
+
+# Register the additive CRM tables for metadata, tests and Alembic.
+from app import crm_models  # noqa: E402,F401

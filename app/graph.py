@@ -145,6 +145,8 @@ def validate_bindings(db, graph, connection_ids):
         connection = db.get(Connection, cid)
         if not connection or not connection.active:
             raise ValueError("Подключение отсутствует или отключено")
+        if connection.platform not in {"telegram", "max", "vk"}:
+            raise ValueError("Это подключение используется только для CRM-рассылок")
         for node in graph["nodes"].values():
             if node.get("asset_id"):
                 asset = db.get(Asset, node["asset_id"])

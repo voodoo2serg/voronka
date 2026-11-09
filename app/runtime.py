@@ -138,10 +138,16 @@ def consume(db, connection, msg):
         event(db, "contact.created", connection.id, contact.id)
     elif msg.get("name"):
         identity.name = msg["name"][:200]
+    if connection.project_id:
+        from app.crm_service import ensure_profile
+        ensure_profile(db, identity, connection.project_id)
     run = db.scalar(select(Run).where(Run.identity_id == identity.id,
         Run.status.in_(LIVE)).with_for_update())
     text, callback = msg.get("text", ""), msg.get("callback", "")
     if text.strip().lower() in {"/stop", "стоп"}:
+        if connection.project_id:
+            from app.crm_service import ensure_profile
+            ensure_profile(db, identity, connection.project_id).stopped = True
         # Also cancel undelivered messages of a completed run.
         for previous in db.scalars(select(Run).where(Run.identity_id == identity.id)):
             if previous.status in LIVE or previous.status == "completed":
