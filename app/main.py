@@ -148,7 +148,7 @@ def connections(admin=Depends(actor)):
     with Session() as db:
         return [{"id": c.id, "name": c.name, "platform": c.platform, "active": c.active,
                  "project_id": c.project_id, "role": c.role or "bot"}
-                for c in db.scalars(select(Connection)) if allowed(admin, c.id)]
+                for c in db.scalars(select(Connection)) if c.platform != "email" and allowed(admin, c.id)]
 
 class ProjectBody(BaseModel):
     name: str = Field(min_length=1, max_length=160)
@@ -160,7 +160,7 @@ def list_projects(admin=Depends(actor)):
         rows = []
         for project in db.scalars(select(Project)):
             accounts = [{"id": c.id, "name": c.name, "role": c.role or "bot", "platform": c.platform, "kind": "account"}
-                for c in db.scalars(select(Connection).where(Connection.project_id == project.id)) if allowed(admin, c.id)]
+                for c in db.scalars(select(Connection).where(Connection.project_id == project.id, Connection.platform != "email")) if allowed(admin, c.id)]
             chats = [{"id": d.id, "name": d.name, "role": "chat" if d.kind == "group" else "channel",
                 "platform": "telegram", "kind": d.kind, "external_chat_id": d.external_chat_id}
                 for d in db.scalars(select(Destination))
@@ -679,7 +679,7 @@ def preflight(admin=Depends(actor)):
         checks["database"]=True
         checks["connections"]=[{"id":c.id,"name":c.name,"platform":c.platform,
             "token_present":bool(os.environ.get(c.token_env)),"secret_present":bool(os.environ.get(c.secret_env))}
-            for c in db.scalars(select(Connection)) if allowed(admin,c.id)]
+            for c in db.scalars(select(Connection)) if c.platform != "email" and allowed(admin,c.id)]
     try:
         checks["redis"]=bool(cache.ping())
         checks["worker_alive"]=bool(cache.get("worker:heartbeat"))

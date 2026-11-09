@@ -52,9 +52,11 @@ def test_build_five_lesson_funnel_without_json(width):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("dialog", lambda dialog: dialog.accept())
         page.route("**/*", handle)
+        page.add_init_script('window.Telegram={WebApp:{initData:"test",initDataUnsafe:{user:{id:123}},ready(){},expand(){}}};')
         page.goto("https://voronka.test/")
-        page.get_by_role("button", name="Новая воронка", exact=True).click()
-        page.get_by_label("Название", exact=True).first.fill("Боевой мини-курс")
+        page.get_by_role("button", name="Сценарии", exact=True).click()
+        page.get_by_role("button", name="Новый сценарий", exact=True).click()
+        page.locator("#funnelName").fill("Боевой мини-курс")
         page.get_by_role("button", name="Применить шаблон", exact=True).click()
         for i in range(1,6):
             page.get_by_role("button", name="Урок "+str(i), exact=True).click()

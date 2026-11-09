@@ -195,6 +195,7 @@ def test_campaign_excludes_imported_ids_replay_pause_and_optout(crm):
 def test_registration_not_exposed_and_recovery_requires_verified_email(crm,monkeypatch):
     assert crm.client.post('/api/crm/register',json={}).status_code==404
     monkeypatch.setenv('SMTP_HOST','mail.test')
+    monkeypatch.setenv('SMTP_FROM','team@example.ru')
     codes=[]
     monkeypatch.setattr(crm_api,'mail_code',lambda email,code:codes.append(code))
     assert crm.client.post('/api/crm/recovery/start',json={'login':'owner'}).status_code==200
@@ -243,6 +244,7 @@ def test_email_requires_permission_and_uses_real_smtp_transport(crm,monkeypatch)
     from types import SimpleNamespace
     a=contact(crm,email='anna@example.ru')
     connection=crm.client.post('/api/crm/projects/p/email-connection').json()['id']
+    assert connection not in [c['id'] for c in crm.client.get('/api/connections').json()]
     data={'connection_id':connection,'title':'Знакомство','text':'Привет, {name}','profile_ids':[a['id']]}
     preview=crm.client.post('/api/crm/projects/p/campaigns',json=data).json()
     assert not preview['report']['recipients'][0]['eligible']

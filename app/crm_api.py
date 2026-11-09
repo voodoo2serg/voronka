@@ -159,7 +159,7 @@ class RecoveryStart(Body):
 
 def mail_code(email, code):
     host = os.getenv("SMTP_HOST")
-    if not host:
+    if not host or not os.getenv("SMTP_FROM"):
         raise HTTPException(503, "Почта не настроена; обратитесь к владельцу")
     message = EmailMessage()
     message["From"] = os.environ["SMTP_FROM"]
@@ -176,7 +176,7 @@ def mail_code(email, code):
 @router.post("/recovery/start")
 def recovery_start(body: RecoveryStart, request: Request):
     throttle(request, "recovery", 5)
-    if not os.getenv("SMTP_HOST"):
+    if not os.getenv("SMTP_HOST") or not os.getenv("SMTP_FROM"):
         raise HTTPException(503, "Почта не настроена; обратитесь к владельцу")
     with Session.begin() as db:
         account = db.scalar(select(Account).where(Account.login == body.login.strip().lower()))
@@ -610,7 +610,7 @@ class OrderBody(Body):
     profile_id: str
     product_id: str
     request_key: str = Field(min_length=8, max_length=100)
-    promo_code: str = ""
+    promo_code: str = Field(default="", max_length=60)
     installments: list[Installment] = Field(default_factory=list, max_length=36)
     agreed_price_minor: int | None = Field(default=None, ge=0, le=10**12)
     price_reason: str = Field(default="", max_length=1000)
@@ -926,7 +926,7 @@ def overview(pid: str, admin=Depends(crm_actor)):
                 "received_minor": sum(balance(db, o)["paid_minor"] for o in db.scalars(select(Order).where(Order.project_id == pid))),
                 "connections": [{"id": c.id, "name": c.name, "platform": c.platform, "active": c.active} for c in db.scalars(select(Connection).where(Connection.project_id == pid))],
                 "integrations": {"robokassa": bool(os.getenv("ROBOKASSA_LOGIN") and os.getenv("ROBOKASSA_PASSWORD1") and os.getenv("ROBOKASSA_PASSWORD2")),
-                                 "email": bool(os.getenv("SMTP_HOST")), "raga": bool(os.getenv("RAG_API_URL")), "chamilo": "not_implemented"}}
+                                 "email": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_FROM")), "raga": bool(os.getenv("RAG_API_URL")), "chamilo": "not_implemented"}}
 
 
 @router.post("/projects/{pid}/sync-contacts")
