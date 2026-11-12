@@ -15,7 +15,14 @@ from app.crm_models import (
 from app.db import Asset, Identity, Outbox, Connection
 from app.capabilities import platform_capabilities
 from app.entitlement import process_pending
-from app.integrations import drain_outbox, sign_payload
+from app.integrations import (
+    drain_outbox,
+    sign_payload,
+    format_signature,
+    build_wire_payload,
+    delivery_headers,
+    verify_bearer_or_hmac,
+)
 
 
 def _auth_headers(secret: str, body: bytes):
@@ -25,6 +32,27 @@ def _auth_headers(secret: str, body: bytes):
         "Authorization": f"Bearer {secret}",
         "X-Voronka-Timestamp": ts,
         "X-Voronka-Signature": sign_payload(secret, body, ts),
+        "Content-Type": "application/json",
+    }
+
+
+def _solo_hmac_headers(secret: str, body: bytes):
+    """solo_pr-style headers only (no Bearer) — wire contract alias path."""
+    from app.db import now
+    ts = str(int(now().timestamp()))
+    return {
+        "X-Solo-Timestamp": ts,
+        "X-Solo-Signature": format_signature(sign_payload(secret, body, ts)),
+        "Content-Type": "application/json",
+    }
+
+
+def _lms_hmac_headers(secret: str, body: bytes):
+    from app.db import now
+    ts = str(int(now().timestamp()))
+    return {
+        "X-Lms-Timestamp": ts,
+        "X-Lms-Signature": format_signature(sign_payload(secret, body, ts)),
         "Content-Type": "application/json",
     }
 
@@ -257,3 +285,137 @@ def test_public_checkout_quote_idempotent(crm, monkeypatch):
     assert r1.status_code == 200 and r1.json()["duplicate"] is False
     r2 = crm.client.post("/api/crm/integrations/commerce/quote", content=raw, headers=headers)
     assert r2.status_code == 200 and r2.json()["duplicate"] is True and r2.json()["id"] == r1.json()["id"]
+
+
+def test_lead_accepts_solo_nested_envelope_and_x_solo_hmac(crm, monkeypatch):
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-shared")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    payload = {
+        "type": "lead.created",
+        "idempotency_key": "solo-lead-99",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "email",
+            "contact": "nested@example.ru",
+            "email": "nested@example.ru",
+            "name": "Nested",
+            "kind": "Консультация",
+            "message": "С сайта",
+            "consent": True,
+            "ads_consent": False,
+            "created": "2026-11-12T00:00:00Z",
+        },
+    }
+    raw = json.dumps(payload).encode()
+    headers = _solo_hmac_headers("solo-shared", raw)
+    r = crm.client.post("/api/crm/integrations/solo_pr/leads", content=raw, headers=headers)
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    with crm.db() as db:
+        inbox = db.scalar(select(IntegrationInbox))
+        assert inbox.event_key == "solo-lead-99"
+        assert inbox.payload["service"] == "Консультация"
+
+
+def test_completion_accepts_lms_fields_and_x_lms_hmac(crm, monkeypatch):
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "shared-secret")
+    person = contact(crm, email="lms-student@example.ru")
+    with crm.db.begin() as db:
+        profile = db.get(__import__("app.crm_models", fromlist=["Profile"]).Profile, person["id"])
+        profile.extra = {**(profile.extra or {}), "keycloak_sub": "kc-sub-1"}
+    item = product(crm, kind="course", name="Курс Wire", config={"course_id": "course-wire-1"})
+    o = order(crm, person=person, item=item, request_key="wire-learn-1")
+    payload = {
+        "event_id": "lms-complete-1",
+        "type": "learning.completed",
+        "course_id": "course-wire-1",
+        "keycloak_sub": "kc-sub-1",
+        "source": "lms_end",
+        "evidence": "OpenOlat done",
+    }
+    raw = json.dumps(payload).encode()
+    headers = _lms_hmac_headers("shared-secret", raw)
+    assert crm.client.post("/api/crm/integrations/lms_end/completions", content=raw, headers=headers).status_code == 200
+    with crm.db() as db:
+        from app.crm_models import Order
+        assert db.get(Order, o["id"]).academic_complete is True
+
+
+def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
+    monkeypatch.setenv("SOLO_PR_EVENTS_URL", "https://solo.example/api/integrations/voronka")
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-secret")
+    monkeypatch.setenv("LMS_END_ENROLLMENT_URL", "https://lms.example/api/integrations/voronka/enrollment")
+    monkeypatch.setenv("LMS_END_WEBHOOK_SECRET", "lms-secret")
+    person = contact(crm, email="buyer-wire@example.ru")
+    with crm.db.begin() as db:
+        profile = db.get(__import__("app.crm_models", fromlist=["Profile"]).Profile, person["id"])
+        profile.extra = {**(profile.extra or {}), "keycloak_sub": "kc-buyer"}
+    item = product(crm, kind="course", name="Курс Dual", config={"course_id": "c-dual", "club": "club-a"})
+    o = order(crm, person=person, item=item, request_key="wire-pay-1")
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/grants", json={
+        "resource": "c-dual", "capability": "course.view", "min_paid_percent": 100,
+    }).status_code == 200
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/payments", json={
+        "amount_minor": 100000, "external_id": "wire-pay-ext-1", "evidence": "Выписка банка",
+    }).status_code == 200
+    captured = []
+
+    def fake_post(url, content=None, headers=None, **kwargs):
+        captured.append({"url": url, "body": json.loads(content), "headers": headers})
+        class Resp:
+            status_code = 200
+        return Resp()
+
+    with crm.db.begin() as db:
+        assert process_pending(db) >= 1
+        with patch("httpx.Client.post", side_effect=fake_post):
+            assert drain_outbox(db) >= 1
+        rows = list(db.scalars(select(IntegrationOutbox)))
+        kinds = {r.kind for r in rows}
+        assert {"deal.paid", "access.granted", "enrollment.desired"} <= kinds
+        for row in rows:
+            wire = build_wire_payload(row)
+            assert wire["type"] == wire["kind"] == row.kind
+            assert wire["event_id"] == wire["idempotency_key"] == row.event_id
+            if row.kind == "deal.paid":
+                assert wire.get("course_id") == "c-dual"
+                assert wire.get("club") == "club-a"
+                assert wire.get("external_id")
+            if row.kind == "enrollment.desired":
+                assert wire["schema_version"] == "1"
+                assert wire["action"] == "grant"
+                assert wire["capability"] == "course.view"
+                assert wire["course_id"] == "c-dual"
+                assert wire["commerce_product_id"] == o["product_id"]
+                assert wire["keycloak_sub"] == "kc-buyer"
+                assert wire["voronka_profile_id"] == person["id"]
+    assert captured
+    solo_calls = [c for c in captured if "solo.example" in c["url"]]
+    lms_calls = [c for c in captured if "lms.example" in c["url"]]
+    assert solo_calls and lms_calls
+    solo_h = solo_calls[0]["headers"]
+    assert solo_h.get("X-Voronka-Signature", "").startswith("sha256=")
+    assert solo_h.get("X-Solo-Signature", "").startswith("sha256=")
+    assert solo_h.get("X-Solo-Timestamp")
+    lms_h = lms_calls[0]["headers"]
+    assert lms_h.get("X-Voronka-Signature", "").startswith("sha256=")
+    assert lms_h.get("X-Lms-Signature", "").startswith("sha256=")
+    assert lms_calls[0]["body"]["action"] == "grant"
+
+
+def test_verify_accepts_sha256_prefix_and_alias_headers(monkeypatch):
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "alias-secret")
+    from app.db import now
+    body = b'{"ok":true}'
+    ts = str(int(now().timestamp()))
+    dig = sign_payload("alias-secret", body, ts)
+    assert verify_bearer_or_hmac(
+        {"x-solo-timestamp": ts, "x-solo-signature": format_signature(dig)},
+        body,
+    )
+    assert verify_bearer_or_hmac(
+        {"X-Lms-Timestamp": ts, "X-Lms-Signature": dig},
+        body,
+    )
+    headers = delivery_headers("solo_pr", "alias-secret", body, "evt-1")
+    assert headers["X-Voronka-Signature"] == headers["X-Solo-Signature"]
+    assert headers["X-Voronka-Signature"].startswith("sha256=")
