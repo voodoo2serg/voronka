@@ -15,9 +15,9 @@ from app.crm_service import password_hash
 
 @pytest.fixture
 def crm(system, monkeypatch):
-    from app import crm_deps
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach):
+    from app import crm_deps, observability
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, observability):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -229,8 +229,12 @@ def test_migration_0004_matches_models_and_downgrades(crm):
     from app.db import Base
     bind=crm.db.kw['bind']
     if bind.dialect.name!='sqlite': pytest.skip('Uses isolated SQLite metadata, PG upgrade tested in CI')
-    # Tables added after 0004 are covered by later migration tests.
-    later={'crm_outreach_batches','crm_outreach_recipients'}
+    # Tables/columns added after 0004 are covered by later migration tests.
+    later={
+        'crm_outreach_batches','crm_outreach_recipients',
+        'crm_provider_events','crm_entitlement_jobs','crm_integration_outbox','crm_integration_inbox','crm_ai_rules',
+    }
+    later_columns={'crm_campaigns': {'asset_id'}}
     with bind.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             if table.name.startswith('crm_'): table.drop(conn)
@@ -241,7 +245,8 @@ def test_migration_0004_matches_models_and_downgrades(crm):
             inspector=inspect(conn)
             for table in Base.metadata.sorted_tables:
                 if table.name.startswith('crm_') and table.name not in later:
-                    assert set(c.name for c in table.columns)=={c['name'] for c in inspector.get_columns(table.name)}
+                    expected={c.name for c in table.columns} - later_columns.get(table.name, set())
+                    assert expected=={c['name'] for c in inspector.get_columns(table.name)}
             module.downgrade()
         assert not any(n.startswith('crm_') for n in inspect(conn).get_table_names())
 
@@ -269,6 +274,38 @@ def test_migration_0006_outreach_matches_models_and_downgrades(crm):
                     assert set(c.name for c in table.columns)=={c['name'] for c in inspector.get_columns(table.name)}
             module.downgrade()
         assert not outreach.intersection(inspect(conn).get_table_names())
+
+
+def test_migration_0007_integrations_matches_models_and_downgrades(crm):
+    import importlib.util
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect
+    from app.db import Base
+    bind = crm.db.kw['bind']
+    if bind.dialect.name != 'sqlite':
+        pytest.skip('Uses isolated SQLite metadata, PG upgrade tested in CI')
+    tables = {
+        'crm_provider_events', 'crm_entitlement_jobs', 'crm_integration_outbox',
+        'crm_integration_inbox', 'crm_ai_rules',
+    }
+    with bind.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name in tables:
+                table.drop(conn, checkfirst=True)
+        spec = importlib.util.spec_from_file_location('integ_migration', 'migrations/versions/0007_integrations_ai_entitlement.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        with Operations.context(MigrationContext.configure(conn)):
+            module.upgrade()
+            inspector = inspect(conn)
+            for table in Base.metadata.sorted_tables:
+                if table.name in tables:
+                    assert set(c.name for c in table.columns) == {c['name'] for c in inspector.get_columns(table.name)}
+            assert 'asset_id' in {c['name'] for c in inspector.get_columns('crm_campaigns')}
+            module.downgrade()
+        assert not tables.intersection(inspect(conn).get_table_names())
+        # asset_id may remain on SQLite after downgrade; recreate full metadata for later tests.
+        Base.metadata.create_all(bind)
 
 
 def test_email_requires_permission_and_uses_real_smtp_transport(crm,monkeypatch):

@@ -58,9 +58,27 @@
 
 ## Резервные копии
 
-Ежедневный pg_dump, копия вне сервера, шифрование и отдельный ключ восстановления. Рекомендуемая политика: 7 дневных, 4 недельных, 3 месячных; это предлагаемые параметры, а не настроенная автоматизация.
+Ежедневный pg_dump, копия вне сервера, шифрование и отдельный ключ восстановления. Политика: 7 дневных, 4 недельных, 3 месячных.
 
-Redis можно восстановить без бизнес-данных: пользователи повторно войдут в админку. PostgreSQL терять нельзя. Скрипт backup.sh сохраняет БД и media volume. Он временно останавливает API/worker для согласованной копии и запускает их обратно. После добавления S3 резервировать и объектное хранилище.
+Redis можно восстановить без бизнес-данных: пользователи повторно войдут в админку. PostgreSQL терять нельзя. Скрипт `scripts/backup.sh` сохраняет БД и media volume (останавливает API/worker). Обёртка `scripts/backup_offsite.sh` копирует снимки в `BACKUP_OFFSITE_DIR` и опционально шифрует (`BACKUP_GPG_RECIPIENT`).
+
+Автоматизация home server:
+
+```bash
+sudo cp deploy/voronka-backup.service deploy/voronka-backup.timer /etc/systemd/system/
+# WorkingDirectory=/opt/voronka — поправьте путь
+sudo systemctl enable --now voronka-backup.timer
+# Алерт stale worker /health 503:
+# */5 * * * * VORONKA_HEALTH_URL=http://127.0.0.1:18080/health sh /opt/voronka/deploy/voronka-alert-stale.sh
+```
+
+Проверка restore: поднять staging Compose, `pg_restore` dump на пустую БД, распаковать media, прогнать `/health` и тестовый ResultURL. После добавления S3 резервировать и объектное хранилище.
+
+## Метрики очереди
+
+- `GET /metrics` (CRM/admin auth): oldest pending Outbox age, failed/unknown counts, worker heartbeat age, media free bytes, entitlement/integration pending.
+- Worker печатает строку `voronka_metrics ...` roughly раз в минуту.
+- `/health` → 503 при отсутствии heartbeat или age > `WORKER_STALE_SECONDS` (по умолчанию 200).
 
 ## Ограничения эксплуатации baseline
 
@@ -86,6 +104,8 @@ Redis можно восстановить без бизнес-данных: по
 
 Без пунктов 2 и 5 **не включать** `ROBOKASSA_LIVE_READY`. Индикатор в обзоре CRM отражает готовность текущего режима (тест vs live), а не «магазин готов к продажам».
 
+После live ResultURL создаётся `ProviderEvent` + `EntitlementJob` (выдача/уведомление соседей). Payment сохраняется даже при сбое job. Границы данных и API сайта — [DATA_BOUNDARIES.md](./DATA_BOUNDARIES.md).
+
 ## CRM: сессии и XSS
 
 Кабинет `/crm/` отдаёт CSP (`default-src 'self'`, без сторонних скриптов). Сессия CRM ставится HttpOnly-cookie `crm_session` (SameSite=Lax) и дополнительно возвращает Bearer-токен для совместимости. Отключение сотрудника и смена пароля явно отзывают Redis-сессии. `CRM_COOKIE_SECURE=0` допустим только на локальном HTTP.
@@ -99,4 +119,12 @@ Redis можно восстановить без бизнес-данных: по
 3. Отправку с отдельной SIM выполняйте вручную (или будущим адаптером); отметьте outcome в партии.
 4. После Start пользователя Identity и «Диалоги» работают как обычно.
 
-Ограничения: `daily_cap` ≤ 50; `OUTREACH_MAX_ENABLED` по умолчанию `0`. Не смешивать боевой личный номер владельца бренда с warm-up SIM. Подробности — [OUTREACH.md](OUTREACH.md). Миграция `0006` добавляет таблицы партий.
+Ограничения: `daily_cap` ≤ 50; `OUTREACH_MAX_ENABLED` по умолчанию `0`. Не смешивать боевой личный номер владельца бренда с warm-up SIM. Подробности — [OUTREACH.md](OUTREACH.md). Миграция `0006` добавляет таблицы партий. Экспорт для ручной SIM: `GET /api/crm/outreach-batches/{id}/export`.
+
+## Rate limits рассылок
+
+Worker соблюдает: 1 сообщение/сек на чат и `BOT_MESSAGES_PER_SECOND` (по умолчанию 20) на connection. Перед launch кампании — `POST /api/crm/campaigns/{id}/preflight`. Retry failed/unknown только с `acknowledge_duplicate_risk=true`.
+
+## Медиа кружков
+
+User-bot forward → mediabank достаточен для broadcast; отдельный admin-бот опционален как UX приёма, не вторая медиасистема. Campaign принимает `asset_id`; без локального файла / при чужом `file_id` UI/API возвращает блокер.

@@ -169,6 +169,21 @@ def sweep():
             row.status, row.error = "unknown", "worker_interrupted"
             event(db, "message.unknown", row.connection_id, run_id=row.run_id, outbox_id=row.id)
 
+def integrations_tick():
+    """Entitlement jobs + signed neighbor outbox. Failures never delete Payments."""
+    from app.entitlement import process_pending
+    from app.integrations import drain_outbox
+    from app.observability import queue_metrics, metrics_log_line
+    did = False
+    with Session.begin() as db:
+        did = process_pending(db) > 0 or did
+        did = drain_outbox(db) > 0 or did
+        # Periodic structured metrics line (no secrets).
+        if int(time.time()) % 60 < 2:
+            print(metrics_log_line(queue_metrics(db)), flush=True)
+    return did
+
+
 def main():
     # PostgreSQL advisory lock prevents accidental deployment of two worker processes.
     lock = None
@@ -189,6 +204,7 @@ def main():
             did_work = incoming()
             did_work = outgoing() or did_work
             did_work = timers() or did_work
+            did_work = integrations_tick() or did_work
             time.sleep(0.05 if did_work else 0.5)
         except Exception as error:
             print("worker_error", type(error).__name__, flush=True)

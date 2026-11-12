@@ -331,6 +331,42 @@ def mark_outcome(bid: str, rid: str, body: OutcomeBody, admin=Depends(crm_actor)
         return encode(recipient)
 
 
+@router.get("/outreach-batches/{bid}/export")
+def export_batch(bid: str, admin=Depends(crm_actor)):
+    """Export prepared invite_text + bot_link for manual SIM send. Never writes bot Outbox."""
+    with Session.begin() as db:
+        batch = must(db.get(OutreachBatch, bid))
+        project_access(db, admin, batch.project_id)
+        rows = []
+        for recipient in db.scalars(select(OutreachRecipient).where(OutreachRecipient.batch_id == bid)):
+            if recipient.state not in {"prepared", "invited"}:
+                continue
+            if manager_scope(admin):
+                try:
+                    get_profile(db, admin, recipient.profile_id)
+                except HTTPException:
+                    continue
+            rows.append({
+                "recipient_id": recipient.id,
+                "profile_id": recipient.profile_id,
+                "phone": recipient.phone,
+                "invite_text": recipient.invite_text,
+                "bot_link": recipient.bot_link,
+                "entry_token": recipient.entry_token,
+                "state": recipient.state,
+            })
+        audit(db, admin, "outreach.exported", batch_id=bid, exported=len(rows), outbox_used=False)
+        return {
+            "batch_id": bid,
+            "mode": batch.mode,
+            "transport": batch.transport,
+            "outbox_used": False,
+            "rows": rows,
+            "format": "manual_sim",
+            "hint": "Отправьте тексты с отдельной SIM вручную, затем отметьте outcome в CRM.",
+        }
+
+
 @router.post("/outreach-batches/{bid}/control")
 def control_batch(bid: str, body: OutreachControl, admin=Depends(crm_actor)):
     with Session.begin() as db:
