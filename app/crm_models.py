@@ -182,9 +182,93 @@ class Campaign(Base):
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
     title: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
+    asset_id: Mapped[str | None] = mapped_column(ForeignKey("assets.id"), nullable=True)
     profile_ids: Mapped[list] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(30), default="draft")
     report: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProviderEvent(Base):
+    """Auditable payment-provider notifications (payload redacted)."""
+    __tablename__ = "crm_provider_events"
+    __table_args__ = (UniqueConstraint("provider", "event_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    event_key: Mapped[str] = mapped_column(String(200))
+    order_id: Mapped[str | None] = mapped_column(ForeignKey("crm_orders.id"), nullable=True)
+    invoice_id: Mapped[str | None] = mapped_column(ForeignKey("crm_invoices.id"), nullable=True)
+    payload_redacted: Mapped[dict] = mapped_column(JSON, default=dict)
+    payload_hash: Mapped[str] = mapped_column(String(64), default="")
+    state: Mapped[str] = mapped_column(String(30), default="received")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class EntitlementJob(Base):
+    """Idempotent payment → AccessGrant / neighbor-event pipeline."""
+    __tablename__ = "crm_entitlement_jobs"
+    __table_args__ = (UniqueConstraint("payment_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("crm_payments.id"))
+    order_id: Mapped[str] = mapped_column(ForeignKey("crm_orders.id"), index=True)
+    state: Mapped[str] = mapped_column(String(30), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class IntegrationOutbox(Base):
+    """Signed outbound events to solo_pr / lms_end (no shared DB)."""
+    __tablename__ = "crm_integration_outbox"
+    __table_args__ = (UniqueConstraint("event_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(80))
+    destination: Mapped[str] = mapped_column(String(40))
+    kind: Mapped[str] = mapped_column(String(60))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String(30), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class IntegrationInbox(Base):
+    """Idempotent inbound events from solo_pr / lms_end."""
+    __tablename__ = "crm_integration_inbox"
+    __table_args__ = (UniqueConstraint("source", "event_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source: Mapped[str] = mapped_column(String(40))
+    event_key: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(60))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String(30), default="applied")
+    profile_id: Mapped[str | None] = mapped_column(ForeignKey("crm_profiles.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AiRule(Base):
+    """AI sales-engine rules: global / project / connection override."""
+    __tablename__ = "crm_ai_rules"
+    __table_args__ = (
+        UniqueConstraint("scope", "project_id", "connection_id"),
+        CheckConstraint("scope IN ('global', 'project', 'connection')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(20))
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    connection_id: Mapped[str | None] = mapped_column(ForeignKey("connections.id"), nullable=True)
+    provider: Mapped[str] = mapped_column(String(30), default="inherit")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    system_rules: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
 
 
 class CampaignRecipient(Base):

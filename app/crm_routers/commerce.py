@@ -13,11 +13,13 @@ from pydantic import Field
 from sqlalchemy import select
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner, robokassa_ready
-from app.crm_models import Product, Promo, Order, Payment, Invoice, AccessGrant, Profile
+from app.crm_models import Product, Promo, Order, Payment, Invoice, AccessGrant, Profile, ProviderEvent, EntitlementJob
 from app.crm_service import (
     uid, KINDS, project_access, get_profile, audit, balance, money_minor, manager_scope,
 )
 from app.db import now as db_now
+from app.entitlement import queue_for_payment, redact_robokassa_params
+from app import integrations
 
 router = APIRouter()
 
@@ -207,15 +209,19 @@ def record_money(oid: str, body: MoneyBody, admin=Depends(crm_actor)):
         else:
             if body.kind == "refund" and body.amount_minor > balance(db, order)["paid_minor"]:
                 raise HTTPException(422, "Возврат больше подтверждённой оплаты")
-            db.add(Payment(id=uid(), order_id=oid, provider="manual", **body.model_dump()))
+            payment = Payment(id=uid(), order_id=oid, provider="manual", **body.model_dump())
+            db.add(payment)
             db.flush()
+            if body.kind == "payment":
+                queue_for_payment(db, payment)
             audit(db, admin, "money.recorded", order_id=oid, amount_minor=body.amount_minor, payment_kind=body.kind)
         return balance(db, order)
 
 
 class GrantBody(Body):
     resource: str = Field(min_length=1, max_length=200)
-    capability: Literal["course.enter", "video.play", "document.view", "document.download", "archive.view", "live.join", "certificate.issue"]
+    # course.view is canonical for LMS enrollment; course.enter kept as alias.
+    capability: Literal["course.view", "course.enter", "video.play", "document.view", "document.download", "archive.view", "live.join", "certificate.issue"]
     min_paid_percent: int = Field(default=100, ge=0, le=100)
     expires_at: datetime | None = None
 
@@ -232,6 +238,20 @@ def grant_access(oid: str, body: GrantBody, admin=Depends(crm_actor)):
             raise HTTPException(422, "Укажите часовой пояс")
         row = AccessGrant(id=uid(), order_id=oid, **body.model_dump())
         db.add(row); db.flush(); audit(db, admin, "grant.created", grant_id=row.id)
+        profile = db.get(Profile, order.profile_id)
+        financial = balance(db, order)
+        threshold_ok = financial["paid_minor"] * 100 >= order.total_minor * row.min_paid_percent
+        if threshold_ok:
+            integrations.enqueue_access_event(
+                db, kind="access.granted", grant=row, order=order, profile=profile, financial=financial
+            )
+            if row.capability in {"course.view", "course.enter"}:
+                integrations.enqueue_enrollment(db, grant=row, order=order, profile=profile, revision=1, revoke=False)
+        # Unlock entitlement jobs waiting for a late grant after payment.
+        for job in db.scalars(select(EntitlementJob).where(EntitlementJob.order_id == oid, EntitlementJob.state.in_(["waiting_grant", "applied", "pending"]))):
+            if job.state in {"waiting_grant", "applied"}:
+                job.state = "pending"
+            job.updated_at = db_now()
         return encode(row)
 
 
@@ -322,6 +342,8 @@ async def robokassa_result(request: Request):
     if algorithm not in {"md5", "sha256", "sha512"}:
         raise HTTPException(503, "Неизвестный алгоритм Robokassa")
     amount = money_minor(value)
+    flat = {k: str(params[k]) for k in params.keys()}
+    event_key = f"robokassa:{number}:{value}:{hashlib.sha256(signature.lower().encode()).hexdigest()[:24]}"
     with Session.begin() as db:
         invoice = must(db.scalar(select(Invoice).where(Invoice.number == number).with_for_update()))
         password = os.getenv("ROBOKASSA_TEST_PASSWORD2" if invoice.test else "ROBOKASSA_PASSWORD2")
@@ -332,9 +354,55 @@ async def robokassa_result(request: Request):
             raise HTTPException(403, "Неверная подпись")
         if invoice.amount_minor != amount:
             raise HTTPException(400, "Сумма не совпадает")
+        prior_event = db.scalar(select(ProviderEvent).where(ProviderEvent.provider == "robokassa", ProviderEvent.event_key == event_key))
+        if not prior_event:
+            prior_event = ProviderEvent(
+                id=uid(),
+                provider="robokassa",
+                event_key=event_key,
+                order_id=invoice.order_id,
+                invoice_id=invoice.id,
+                payload_redacted=redact_robokassa_params(flat),
+                payload_hash=hashlib.sha256(repr(sorted(flat.items())).encode()).hexdigest(),
+                state="received",
+                verified_at=db_now(),
+                created_at=db_now(),
+            )
+            db.add(prior_event)
+            db.flush()
         if invoice.state != "paid":
             if not invoice.test:
-                db.add(Payment(id=uid(), order_id=invoice.order_id, provider="robokassa", external_id=number,
-                               amount_minor=amount, evidence="verified ResultURL"))
+                payment = Payment(
+                    id=uid(),
+                    order_id=invoice.order_id,
+                    provider="robokassa",
+                    external_id=number,
+                    amount_minor=amount,
+                    evidence="verified ResultURL",
+                )
+                db.add(payment)
+                db.flush()
+                # Live money stays even if entitlement/outbox later fails.
+                queue_for_payment(db, payment)
             invoice.state = "paid"
+        prior_event.state = "processed"
+        prior_event.processed_at = db_now()
     return Response("OK" + number, media_type="text/plain")
+
+
+@router.get("/orders/{oid}/entitlement-jobs")
+def entitlement_jobs(oid: str, admin=Depends(crm_actor)):
+    with Session() as db:
+        order = must(db.get(Order, oid))
+        project_access(db, admin, order.project_id)
+        get_profile(db, admin, order.profile_id)
+        return [encode(j) for j in db.scalars(select(EntitlementJob).where(EntitlementJob.order_id == oid))]
+
+
+@router.get("/orders/{oid}/provider-events")
+def provider_events(oid: str, admin=Depends(crm_actor)):
+    with Session() as db:
+        order = must(db.get(Order, oid))
+        project_access(db, admin, order.project_id)
+        get_profile(db, admin, order.profile_id)
+        return [encode(e) for e in db.scalars(select(ProviderEvent).where(ProviderEvent.order_id == oid))]

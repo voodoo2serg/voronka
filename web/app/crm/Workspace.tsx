@@ -22,6 +22,10 @@ export default function Workspace() {
   const [contacts, setContacts] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
   const [inbox, setInbox] = useState<Row[]>([]);
+  const [inboxFilters, setInboxFilters] = useState({ connection_id: '', unread: false, delivery_errors: false, mine: false });
+  const [connectionHub, setConnectionHub] = useState<Row[]>([]);
+  const [mediaAssets, setMediaAssets] = useState<Row[]>([]);
+  const [aiStatus, setAiStatus] = useState<Row | null>(null);
   const [deals, setDeals] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
   const [orders, setOrders] = useState<Row[]>([]);
@@ -75,10 +79,15 @@ export default function Workspace() {
     }
   }
 
-  async function load(p = pid) {
+  async function load(p = pid, filters = inboxFilters) {
     if (!p) return;
     const version = ++loadVersion.current;
-    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en] = await Promise.all([
+    const inboxQs = new URLSearchParams();
+    if (filters.connection_id) inboxQs.set('connection_id', filters.connection_id);
+    if (filters.unread) inboxQs.set('unread', 'true');
+    if (filters.delivery_errors) inboxQs.set('delivery_errors', 'true');
+    if (filters.mine && me?.id) inboxQs.set('owner_id', String(me.id));
+    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en, hub, assets, ai] = await Promise.all([
       api(`/projects/${p}/overview`),
       api(`/projects/${p}/contacts?q=${encodeURIComponent(query)}&offset=${offset}&limit=100`),
       api(`/projects/${p}/deals`),
@@ -89,8 +98,11 @@ export default function Workspace() {
       api(`/projects/${p}/outreach-batches`),
       api(`/projects/${p}/promos`),
       api('/staff'),
-      api(`/projects/${p}/inbox`),
+      api(`/projects/${p}/inbox?${inboxQs.toString()}`),
       api('/api/entries').catch(() => []),
+      api(`/projects/${p}/connections/hub`).catch(() => ({ items: [] })),
+      api(`/projects/${p}/media-assets`).catch(() => ({ items: [] })),
+      api('/ai/status').catch(() => null),
     ]);
     if (version !== loadVersion.current) return;
     setOverview(o);
@@ -106,6 +118,9 @@ export default function Workspace() {
     setStaff(st);
     setInbox(ib.items || []);
     setEntries(Array.isArray(en) ? en.filter((e: Row) => e.active !== false) : []);
+    setConnectionHub(hub.items || []);
+    setMediaAssets(assets.items || []);
+    setAiStatus(ai);
   }
 
   useEffect(() => {
@@ -317,7 +332,8 @@ export default function Workspace() {
           label: 'Действие',
           type: 'select',
           options: [
-            ['course.enter', 'Вход в курс'],
+            ['course.view', 'Курс (LMS course.view)'],
+            ['course.enter', 'Курс (alias course.enter)'],
             ['video.play', 'Видео'],
             ['document.view', 'Документ'],
             ['archive.view', 'Архив'],
@@ -334,7 +350,7 @@ export default function Workspace() {
           min_paid_percent: Number(v.min_paid_percent),
           expires_at: v.expires_at ? new Date(v.expires_at).toISOString() : null,
         });
-        setNotice('Назначение сохранено. Подключение LMS выполняется отдельно.');
+        setNotice('Назначение сохранено. События access/enrollment уйдут в outbox соседей.');
       },
     });
   }
@@ -351,6 +367,13 @@ export default function Workspace() {
   }
 
   function campaignForm() {
+    const assetOptions: [string, string][] = [
+      ['', 'Только текст'],
+      ...mediaAssets.map((a: Row): [string, string] => [
+        String(a.id),
+        `${a.kind} · ${a.name}${a.blocker ? ' · БЛОКЕР' : ''}`,
+      ]),
+    ];
     setForm({
       title: 'Приветственная кампания',
       fields: [
@@ -359,15 +382,29 @@ export default function Workspace() {
           key: 'connection_id',
           label: 'Подключение',
           type: 'select',
-          options: (overview.connections || []).map((c: Row) => [c.id, `${c.name} · ${c.platform}`]),
+          options: (overview.connections || []).map((c: Row) => {
+            const vn = c.capabilities?.video_note;
+            const note = vn && !vn.available ? ' · video_note недоступно' : '';
+            return [c.id, `${c.name} · ${c.platform}${note}`];
+          }),
           required: true,
         },
         { key: 'text', label: 'Сообщение, {name} — имя клиента', type: 'textarea', required: true },
+        {
+          key: 'asset_id',
+          label: 'Медиа (кружок/видео из медиабанка)',
+          type: 'select',
+          options: assetOptions,
+        },
       ],
       save: async (v) => {
-        const c = await api(`/projects/${pid}/campaigns`, 'POST', { ...v, profile_ids: selected });
+        const payload = { ...v, profile_ids: selected, asset_id: v.asset_id || null };
+        const c = await api(`/projects/${pid}/campaigns`, 'POST', payload);
+        const blocker = c.report?.asset_blocker;
         setNotice(
-          `Черновик создан. Доступных диалогов: ${c.report.recipients.filter((r: Row) => r.eligible).length} из ${selected.length}. Импортированные ID не активируются автоматически.`,
+          blocker
+            ? `Черновик создан, но медиа заблокировано: ${blocker}`
+            : `Черновик создан. Доступных диалогов: ${c.report.recipients.filter((r: Row) => r.eligible).length} из ${selected.length}. Импортированные ID не активируются автоматически.`,
         );
         setSection('campaigns');
         await load();
@@ -666,6 +703,13 @@ export default function Workspace() {
                   refresh={async () => {
                     await load();
                   }}
+                  connections={overview.connections || []}
+                  filters={inboxFilters}
+                  setFilters={(next) => {
+                    setInboxFilters(next);
+                    void act(() => load(pid, next));
+                  }}
+                  meId={typeof me?.id === 'number' ? me.id : undefined}
                 />
               )}
               {section === 'contacts' && (
@@ -1135,35 +1179,60 @@ export default function Workspace() {
               {section === 'campaigns' && (
                 <section className="panel">
                   <h2>Приветственные кампании</h2>
-                  <p className="muted">Выберите клиентов в таблице, затем создайте кампанию. Импорт контакта не подтверждает возможность отправки.</p>
+                  <p className="muted">
+                    Текст или кружок из медиабанка (`asset_id`). Импорт контакта не подтверждает возможность отправки. Лимит: BOT_MESSAGES_PER_SECOND на бота.
+                  </p>
+                  {mediaAssets.length > 0 && (
+                    <p className="fine">
+                      Медиа для рассылки: {mediaAssets.filter((a) => !a.blocker).length} готовы,{' '}
+                      {mediaAssets.filter((a) => a.blocker).length} с блокером.
+                    </p>
+                  )}
                   {campaigns.map((c) => (
                     <article className="campaign" key={c.id}>
                       <div className="row">
                         <h3>{c.title}</h3>
                         <span className="badge">{stateNames[c.state]}</span>
+                        {c.asset_id && <span className="tag">media</span>}
                       </div>
                       <p>{c.text}</p>
+                      {c.report?.asset_blocker && <p className="fine">Блокер медиа: {c.report.asset_blocker}</p>}
                       <p className="fine">
-                        {JSON.stringify(c.delivery)} {c.report.excluded?.length ? `Исключено: ${c.report.excluded.length}` : ''}
+                        {JSON.stringify(c.delivery)} {c.report?.excluded?.length ? `Исключено: ${c.report.excluded.length}` : ''}
                       </p>
-                      {c.report.recipients && (
+                      {c.problems?.length > 0 && (
+                        <p className="fine">Проблемы доставки: {c.problems.length} (retry только с подтверждением риска дубликата)</p>
+                      )}
+                      {c.report?.recipients && (
                         <p className="fine">
                           Доступных диалогов: {c.report.recipients.filter((r: Row) => r.eligible).length} / {c.profile_ids.length}
                         </p>
                       )}
                       <div className="row">
                         {c.state === 'draft' && (
-                          <button
-                            className="primary"
-                            onClick={() =>
-                              void act(async () => {
-                                await api('/campaigns/' + c.id + '/launch', 'POST');
-                                await load();
-                              })
-                            }
-                          >
-                            Запустить отправку
-                          </button>
+                          <>
+                            <button
+                              onClick={() =>
+                                void act(async () => {
+                                  const r = await api('/campaigns/' + c.id + '/preflight', 'POST');
+                                  setNotice(r.ready ? 'Preflight OK' : `Preflight: ${r.asset_blocker || 'есть исключения'}`);
+                                })
+                              }
+                            >
+                              Preflight
+                            </button>
+                            <button
+                              className="primary"
+                              onClick={() =>
+                                void act(async () => {
+                                  await api('/campaigns/' + c.id + '/launch', 'POST');
+                                  await load();
+                                })
+                              }
+                            >
+                              Запустить отправку
+                            </button>
+                          </>
                         )}
                         {['queued', 'paused'].includes(c.state) && (
                           <button
@@ -1175,6 +1244,18 @@ export default function Workspace() {
                             }
                           >
                             {c.state === 'paused' ? 'Продолжить' : 'Пауза'}
+                          </button>
+                        )}
+                        {c.problems?.length > 0 && (
+                          <button
+                            onClick={() =>
+                              void act(async () => {
+                                await api('/campaigns/' + c.id + '/retry', 'POST', { acknowledge_duplicate_risk: true });
+                                await load();
+                              })
+                            }
+                          >
+                            Retry failed
                           </button>
                         )}
                         {c.state !== 'cancelled' && (
@@ -1224,6 +1305,17 @@ export default function Workspace() {
                           }
                         >
                           Получатели
+                        </button>
+                        <button
+                          onClick={() =>
+                            void act(async () => {
+                              const exp = await api('/outreach-batches/' + b.id + '/export');
+                              setNotice(`Экспорт SIM: ${exp.rows?.length || 0} строк (без Outbox)`);
+                              setOutreachDetail({ ...(await api('/outreach-batches/' + b.id)), export_rows: exp.rows });
+                            })
+                          }
+                        >
+                          Экспорт SIM
                         </button>
                         {['draft', 'prepared', 'paused'].includes(b.state) && (
                           <button
@@ -1541,11 +1633,26 @@ export default function Workspace() {
                         </button>
                       )}
                     </div>
-                    {overview.connections?.map((c: Row) => (
+                    {(connectionHub.length ? connectionHub : overview.connections || []).map((c: Row) => (
                       <div className="direction" key={c.id}>
                         <b>{c.name}</b>
-                        <span>{c.platform}</span>
+                        <span>{c.platform}{c.role ? ` · ${c.role}` : ''}</span>
                         <span className={c.active ? 'badge good' : 'badge'}>{c.active ? 'Включено' : 'Выключено'}</span>
+                        {c.webhook_preflight && (
+                          <small>
+                            webhook: {c.webhook_preflight.ok ? 'ok' : 'не готов'}
+                            {c.last_error ? ` · err: ${c.last_error}` : ''}
+                            {c.media_writable === false ? ' · media RO' : ''}
+                          </small>
+                        )}
+                        {c.capabilities?.video_note && (
+                          <small>
+                            video_note: {c.capabilities.video_note.available ? 'native' : 'недоступно'}
+                          </small>
+                        )}
+                        {me.role === 'owner' && c.token_env && (
+                          <small>env: {c.token_env}{c.token_present ? ' ✓' : ' ✗'} (значение скрыто)</small>
+                        )}
                       </div>
                     ))}
                     <h3>Интеграции</h3>
@@ -1557,7 +1664,28 @@ export default function Workspace() {
                         </small>
                       </div>
                     ))}
-                    <p className="fine">Секреты задаются на сервере. Наличие настроек не доказывает успешную доставку или доступность сервиса.</p>
+                    <h3>ИИ (черновики)</h3>
+                    {aiStatus ? (
+                      <div className="direction">
+                        <small>
+                          RAGA: {aiStatus.raga?.configured ? 'настроен' : 'не настроено'} · OpenRouter:{' '}
+                          {aiStatus.openrouter?.configured ? 'настроен' : 'не настроено'} · Ollama:{' '}
+                          {aiStatus.ollama?.configured ? 'настроен' : 'не настроено'} · автоотправка: нет
+                        </small>
+                      </div>
+                    ) : (
+                      <p className="fine">Статус ИИ недоступен</p>
+                    )}
+                    {overview.queue && (
+                      <>
+                        <h3>Очередь</h3>
+                        <p className="fine">
+                          pending {overview.queue.outbox_pending} · failed {overview.queue.outbox_failed} · unknown{' '}
+                          {overview.queue.outbox_unknown} · worker_stale {String(overview.queue.worker_stale)}
+                        </p>
+                      </>
+                    )}
+                    <p className="fine">Секреты задаются на сервере. Наличие настроек не доказывает успешную доставку или доступность сервиса. Chatwoot/Espo не используются.</p>
                   </section>
                 </div>
               )}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Voronka DB+media backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/voronka
+EnvironmentFile=-/opt/voronka/.env
+ExecStart=/bin/sh /opt/voronka/scripts/backup_offsite.sh
+Nice=10

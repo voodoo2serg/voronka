@@ -73,9 +73,20 @@ def health():
     except (TypeError, ValueError):
         raise HTTPException(503, "worker is down")
     # Heartbeat key expires after 240s. A single Telegram upload may take up to 180s.
-    if age > 200:
+    threshold = int(os.getenv("WORKER_STALE_SECONDS", "200"))
+    if age > threshold:
         raise HTTPException(503, "worker is stale")
-    return {"status": "ok", "worker_age_seconds": int(age)}
+    return {"status": "ok", "worker_age_seconds": int(age), "stale_threshold_seconds": threshold}
+
+
+@app.get("/metrics")
+def metrics(admin=Depends(actor)):
+    """Queue/disk/worker metrics for home-server alerting. No secrets."""
+    from app.observability import queue_metrics, metrics_log_line
+    with Session() as db:
+        data = queue_metrics(db)
+    print(metrics_log_line(data), flush=True)
+    return data
 
 @app.post("/auth")
 def login(body: Login, request: Request):
