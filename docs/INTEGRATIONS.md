@@ -17,6 +17,17 @@ Robokassa ResultURL
 
 Сбой job/outbox **не** удаляет Payment.
 
+## Wire contract v1 (dual-read / dual-emit)
+
+Межрепо HTTP без shared DB. Приём **и** старых, **и** новых имён; исходящие шлют оба варианта.
+
+| Направление | Поля | Auth |
+|---|---|---|
+| solo_pr → voronka `lead.created` | `type`\|`kind`, `idempotency_key`\|`event_id`, nested `data` или flat | Bearer **или** HMAC `X-Voronka-*` / `X-Solo-*` (`sha256=<hex>`, base `{ts}.{body}`, skew ≤300s) |
+| voronka → solo_pr `deal.paid` / `access.*` | emit `type` **и** `kind`, `event_id` **и** `idempotency_key`; product + optional `course_id`/`club`/`commerce_product_id`/`external_id` | `X-Voronka-*` **и** `X-Solo-*` + Bearer |
+| voronka → lms_end enrollment | LMS `EnrollmentBody`: `schema_version`, `action` grant\|revoke, `keycloak_sub`/email/`voronka_profile_id`, `course_id`\|`commerce_product_id`, `capability=course.view` (+ internal `resource`/`revoke`/`kind`) | Bearer + `X-Voronka-*` (+ `X-Lms-*` aliases) |
+| lms_end → voronka completion | accept `course_id`/`commerce_product_id`/`resource`, email/`voronka_profile_id`/`keycloak_sub` | Bearer **или** `X-Voronka-*` / `X-Lms-*` |
+
 ## Фискализация / live
 
 `ROBOKASSA_LIVE_READY` остаётся `0`, пока не закрыт чек-лист в [OPERATIONS.md](./OPERATIONS.md). Адаптер **не** передаёт `Receipt`.

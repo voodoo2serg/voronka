@@ -21,11 +21,11 @@ Chatwoot и EspoCRM **не** входят в стек.
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| `POST` | `/api/crm/integrations/solo_pr/leads` | `lead.created` (идемпотентно по `event_id`) |
+| `POST` | `/api/crm/integrations/solo_pr/leads` | `lead.created` (идемпотентно по `event_id`\|`idempotency_key`; dual-read `type`\|`kind`, nested `data`\|flat) |
 | `POST` | `/api/crm/integrations/commerce/quote` | Checkout quote / Order в ledger voronka |
 | `GET\|POST` | `/api/crm/robokassa/result` | ResultURL провайдера (или proxy с сайта на этот URL) |
 
-Auth: `Authorization: Bearer <INTEGRATION_INBOUND_TOKEN|SOLO_PR_WEBHOOK_SECRET>` **или** HMAC `X-Voronka-Timestamp` + `X-Voronka-Signature`.
+Auth: `Authorization: Bearer <INTEGRATION_INBOUND_TOKEN|SOLO_PR_WEBHOOK_SECRET>` **или** HMAC `X-Voronka-*` / `X-Solo-*` / `X-Lms-*` (`Timestamp` + `Signature: sha256=<hex>`).
 
 ## Исходящие события voronka
 
@@ -35,13 +35,13 @@ Auth: `Authorization: Bearer <INTEGRATION_INBOUND_TOKEN|SOLO_PR_WEBHOOK_SECRET>`
 | `access.granted` / `access.revoked` | solo_pr | то же |
 | `enrollment.desired` / `enrollment.revoked` | lms_end | `LMS_END_ENROLLMENT_URL` + `LMS_END_WEBHOOK_SECRET` / `LMS_M2M_TOKEN` |
 
-Очередь: таблица `crm_integration_outbox`, доставка worker'ом, идемпотентность по `event_id`.
+Очередь: таблица `crm_integration_outbox`, доставка worker'ом, идемпотентность по `event_id`. Outbound dual-emit: `type`+`kind`, `event_id`+`idempotency_key`; solo headers `X-Voronka-*`+`X-Solo-*`; LMS EnrollmentBody (`action`, `course_id`\|`commerce_product_id`, `capability=course.view`) + `X-Voronka-*`/`X-Lms-*`.
 
 ## Входящие от LMS
 
 | Событие | Путь |
 |---|---|
-| `learning.completed` | `POST /api/crm/integrations/lms_end/completions` |
+| `learning.completed` | `POST /api/crm/integrations/lms_end/completions` (dual-read `course_id`/`commerce_product_id`/`resource`, `keycloak_sub`; auth `X-Lms-*` или `X-Voronka-*` / Bearer) |
 
 ## Миграции
 
