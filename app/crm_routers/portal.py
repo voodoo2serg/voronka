@@ -42,7 +42,7 @@ def portals_chrome(admin=Depends(crm_actor)):
         "crm_host": portals.PORTAL_HOSTS["crm"],
         "links": portals.portal_chrome(admin.role),
         "mailu_webmail": portals.MAILU_WEBMAIL_URL,
-        "voronka_ops": portals.voronka_public_base() + "/",
+        "voronka_ops": portals.voronka_public_base() + "/ops/",
         "role": admin.role,
     }
 
@@ -113,8 +113,8 @@ def mail_status(pid: str, admin=Depends(crm_actor)):
         status["email_connection"] = (
             {"id": row.id, "name": row.name, "active": row.active, "platform": row.platform} if row else None
         )
-        status["messenger_blasts_url"] = portals.voronka_public_base() + "/"
-        status["messenger_note"] = "Мессенджер-рассылки остаются на voronka.solo-pr.ru — не дублируем bot ops в CRM."
+        status["messenger_blasts_url"] = portals.voronka_public_base() + "/ops/"
+        status["messenger_note"] = "Мессенджер-рассылки — voronka.solo-pr.ru/ops/ (Рассылки). Не дублируем bot ops в CRM."
         return status
 
 

@@ -286,6 +286,107 @@
     }
   },
   {
+    "id": "channel_wait_dm",
+    "name": "Канал → ожидание → личное",
+    "description": "После вступления: wait N дней, затем DM. Мастер на voronka.solo-pr.ru/ops/",
+    "graph": {
+      "start": "joined",
+      "nodes": {
+        "joined": {
+          "type": "text",
+          "text": "Спасибо, что присоединились к каналу. Скоро напишем лично.",
+          "next": "wait_dm"
+        },
+        "wait_dm": {
+          "type": "wait",
+          "seconds": 86400,
+          "next": "personal"
+        },
+        "personal": {
+          "type": "text",
+          "text": "Здравствуйте! Напишите, если есть вопросы — поможем.",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  },
+  {
+    "id": "support_menu",
+    "name": "Поддержка: меню → ветки → эскалация",
+    "description": "Пайплайн поддержки без Chatwoot; эскалация → CRM inbox",
+    "graph": {
+      "start": "menu",
+      "nodes": {
+        "menu": {
+          "type": "question",
+          "title": "Меню поддержки",
+          "key": "support_choice",
+          "text": "Чем помочь?",
+          "options": [
+            "Оплата",
+            "Доступ к курсу",
+            "Другое"
+          ],
+          "routes": {
+            "Оплата": "pay",
+            "Доступ к курсу": "access",
+            "Другое": "other"
+          },
+          "next": "finish"
+        },
+        "pay": {
+          "type": "text",
+          "text": "Оплата проходит через CRM. Если чек не пришёл — напишите «менеджер».",
+          "next": "finish"
+        },
+        "access": {
+          "type": "text",
+          "text": "Доступ выдаётся после оплаты. Проверьте письмо или кабинет на solo-pr.ru.",
+          "next": "finish"
+        },
+        "other": {
+          "type": "text",
+          "text": "Передаю менеджеру — ответим в ближайшее время.",
+          "next": "escalate_task"
+        },
+        "escalate_task": {
+          "type": "task",
+          "text": "Эскалация: ответить в CRM inbox",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  },
+  {
+    "id": "meeting_reminder",
+    "name": "Напоминание о встрече / вебинаре",
+    "description": "DM «вебинар через N»; join URL из LMS/CMS. Voronka не хостит BBB.",
+    "graph": {
+      "start": "wait_before",
+      "nodes": {
+        "wait_before": {
+          "type": "wait",
+          "seconds": 3600,
+          "next": "remind"
+        },
+        "remind": {
+          "type": "text",
+          "text": "Напоминание: встреча скоро. Ссылка: https://lms.solo-pr.ru/ (подставьте join URL).",
+          "next": "finish"
+        },
+        "finish": {
+          "type": "finish"
+        }
+      }
+    }
+  },
+  {
     "id": "interview",
     "name": "Кастдев: вопросы → задача менеджеру",
     "description": "Готовый сценарий интервью",

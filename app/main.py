@@ -25,31 +25,37 @@ async def constraint_conflict(request: Request, exception: IntegrityError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
 
+_PORTAL_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+)
+
+
 @app.middleware("http")
-async def crm_host_and_security(request: Request, call_next):
-    # crm.solo-pr.ru → Workspace at /crm/ (nginx may also rewrite; app-level is host-aware).
+async def portal_host_and_security(request: Request, call_next):
+    # crm.solo-pr.ru → Workspace at /crm/; voronka.* keeps Mini App at / (webhooks/Telegram URL stable).
     host = request.headers.get("host")
     path = request.url.path
     if portals.is_crm_host(host) and path in {"/", ""}:
         return RedirectResponse(url="/crm/", status_code=302)
     response = await call_next(request)
-    if path.startswith("/crm"):
-        # Static CRM export: same-origin API only; no third-party scripts.
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
-            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-        )
+    if path.startswith("/crm") or path.startswith("/ops"):
+        response.headers.setdefault("Content-Security-Policy", _PORTAL_CSP)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Frame-Options", "DENY")
     return response
 
-# Built Next.js static export shares the same origin and authenticated API.
+# Built Next.js static exports share the same origin and authenticated API.
 from fastapi.staticfiles import StaticFiles
 if Path("app/crm_static").is_dir():
     app.mount("/crm", StaticFiles(directory="app/crm_static", html=True), name="crm")
+if Path("app/ops_static").is_dir():
+    app.mount("/ops", StaticFiles(directory="app/ops_static", html=True), name="ops")
+
+from app.ops_routers import build_router as build_ops_router
+app.include_router(build_ops_router())
 
 @app.get("/editor.js")
 def editor_script():

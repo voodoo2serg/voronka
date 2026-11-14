@@ -24,8 +24,31 @@ class CampaignBody(Body):
     connection_id: str
     title: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=4000)
-    profile_ids: list[str] = Field(min_length=1, max_length=1000)
+    profile_ids: list[str] = Field(default_factory=list, max_length=1000)
+    identity_ids: list[str] = Field(default_factory=list, max_length=1000)
     asset_id: str | None = None
+
+
+def _resolve_profile_ids(db, admin, pid: str, body: CampaignBody) -> list[str]:
+    """Ops may pass identity_ids; CRM keeps profile_ids. At least one audience required."""
+    from app.db import Identity
+    from app.crm_service import ensure_profile
+
+    ids = list(body.profile_ids or [])
+    for iid in body.identity_ids or []:
+        identity = db.get(Identity, iid)
+        if not identity:
+            raise HTTPException(404, f"Identity не найден: {iid}")
+        if identity.connection_id != body.connection_id:
+            raise HTTPException(422, "Identity другого подключения")
+        profile = ensure_profile(db, identity, pid)
+        ids.append(profile.id)
+    unique = list(dict.fromkeys(ids))
+    if not unique:
+        raise HTTPException(422, "Укажите profile_ids или identity_ids")
+    if len(unique) > 1000:
+        raise HTTPException(422, "Аудитория: не больше 1000")
+    return unique
 
 
 def _asset_blocker(db, connection: Connection, asset_id: str | None) -> str | None:
@@ -57,14 +80,19 @@ def add_campaign(pid: str, body: CampaignBody, admin=Depends(crm_actor)):
         connection = must(db.get(Connection, body.connection_id))
         if connection.project_id != pid or (admin.role != "owner" and connection.id not in admin.connection_ids):
             raise HTTPException(404, "Подключение недоступно")
+        # Instant messenger blasts live on voronka ops; email stays on CRM.
+        profile_ids = _resolve_profile_ids(db, admin, pid, body)
         blocker = _asset_blocker(db, connection, body.asset_id)
         report = []
-        for profile_id in set(body.profile_ids):
+        for profile_id in profile_ids:
             profile = get_profile(db, admin, profile_id)
             if profile.project_id != pid: raise HTTPException(404, "Клиент другого проекта")
             identity, reason = available_identity(db, profile, connection.id)
             report.append({"profile_id": profile_id, "eligible": identity is not None and not blocker, "reason": blocker or reason})
-        row = Campaign(id=uid(), project_id=pid, **body.model_dump(), report={"recipients": report, "asset_blocker": blocker})
+        payload = body.model_dump()
+        payload["profile_ids"] = profile_ids
+        payload.pop("identity_ids", None)
+        row = Campaign(id=uid(), project_id=pid, **payload, report={"recipients": report, "asset_blocker": blocker})
         db.add(row); db.flush()
         return encode(row)
 
