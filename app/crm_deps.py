@@ -60,13 +60,5 @@ def clear_session_cookie(response: Response):
 
 
 def robokassa_ready():
-    login = os.getenv("ROBOKASSA_LOGIN")
-    test = os.getenv("ROBOKASSA_TEST", "1") == "1"
-    if test:
-        return bool(login and os.getenv("ROBOKASSA_TEST_PASSWORD1") and os.getenv("ROBOKASSA_TEST_PASSWORD2"))
-    return bool(
-        login
-        and os.getenv("ROBOKASSA_PASSWORD1")
-        and os.getenv("ROBOKASSA_PASSWORD2")
-        and os.getenv("ROBOKASSA_LIVE_READY") == "1"
-    )
+    from app.portals import robokassa_status
+    return robokassa_status()["ready"]

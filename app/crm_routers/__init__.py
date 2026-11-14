@@ -1,4 +1,4 @@
-"""CRM HTTP routers: auth/staff, contacts, commerce, campaigns, outreach, integrations."""
+"""CRM HTTP routers: auth/staff, contacts, commerce, campaigns, outreach, integrations, portal."""
 from fastapi import APIRouter
 
 from app.crm_routers.auth_staff import router as auth_staff_router
@@ -9,6 +9,7 @@ from app.crm_routers.outreach import router as outreach_router
 from app.crm_routers.integrations import router as integrations_router
 from app.crm_routers.connections_hub import router as connections_hub_router
 from app.crm_routers.ai_config import router as ai_config_router
+from app.crm_routers.portal import router as portal_router
 
 
 def build_router() -> APIRouter:
@@ -21,4 +22,5 @@ def build_router() -> APIRouter:
     router.include_router(integrations_router)
     router.include_router(connections_hub_router)
     router.include_router(ai_config_router)
+    router.include_router(portal_router)
     return router

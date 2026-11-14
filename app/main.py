@@ -1,7 +1,7 @@
 import hashlib, hmac, json, os, re, secrets, time
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +12,7 @@ from app.graph import validate_graph, validate_bindings
 from app.runtime import uid, event, advance, cancel_run, prompt
 from app.media import router as media_router
 from app.db import Asset, Contact, Destination, now
+from app import portals
 from datetime import timedelta
 
 app = FastAPI(title="Воронки", docs_url=None, redoc_url=None)
@@ -25,9 +26,14 @@ async def constraint_conflict(request: Request, exception: IntegrityError):
     return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
 
 @app.middleware("http")
-async def crm_security_headers(request: Request, call_next):
+async def crm_host_and_security(request: Request, call_next):
+    # crm.solo-pr.ru → Workspace at /crm/ (nginx may also rewrite; app-level is host-aware).
+    host = request.headers.get("host")
+    path = request.url.path
+    if portals.is_crm_host(host) and path in {"/", ""}:
+        return RedirectResponse(url="/crm/", status_code=302)
     response = await call_next(request)
-    if request.url.path.startswith("/crm"):
+    if path.startswith("/crm"):
         # Static CRM export: same-origin API only; no third-party scripts.
         response.headers.setdefault(
             "Content-Security-Policy",
@@ -58,9 +64,11 @@ def require(obj):
 class Login(BaseModel):
     init_data: str = Field(max_length=16384)
 
-@app.get("/", response_class=HTMLResponse)
-def index():
-    return Path("app/admin.html").read_text(encoding="utf-8")
+@app.get("/")
+def index(request: Request):
+    if portals.is_crm_host(request.headers.get("host")):
+        return RedirectResponse(url="/crm/", status_code=302)
+    return HTMLResponse(Path("app/admin.html").read_text(encoding="utf-8"))
 
 @app.get("/health")
 def health():

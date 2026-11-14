@@ -9,10 +9,10 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import Field
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
-from app.crm_models import Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product
+from app.crm_models import Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product, Payment
 from app.crm_service import (
     uid, STAGES, project_access, get_profile, get_deal, audit, normalize_email, normalize_phone,
     parse_csv, create_profile, balance, safe_csv_cell, assigned_profile_filter, manager_scope,
@@ -54,16 +54,49 @@ def validate_profile_values(db, values, project_id):
     return values
 
 
+SOURCE_FILTERS = {"telegram", "max", "site", "import", "purchase", "manual", "bot", "solo_pr"}
+
+
 @router.get("/projects/{pid}/contacts")
-def contacts(pid: str, q: str = "", tag: str = "", offset: int = 0, limit: int = 100, admin=Depends(crm_actor)):
+def contacts(
+    pid: str,
+    q: str = "",
+    tag: str = "",
+    source: str = "",
+    offset: int = 0,
+    limit: int = 100,
+    admin=Depends(crm_actor),
+):
     if not 0 <= offset or not 1 <= limit <= 500:
         raise HTTPException(422, "Некорректная страница")
+    source = (source or "").strip().lower()
+    if source and source not in SOURCE_FILTERS:
+        raise HTTPException(422, "Неизвестный фильтр источника")
     with Session() as db:
         project_access(db, admin, pid)
         query = select(Profile).where(Profile.project_id == pid, assigned_profile_filter(admin))
         if q:
             escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = query.where(or_(*[field.ilike(f"%{escaped}%", escape="\\") for field in (Profile.name, Profile.email, Profile.phone, Profile.company)]))
+        if source == "purchase":
+            purchaser_ids = select(Order.profile_id).join(
+                Payment, and_(Payment.order_id == Order.id, Payment.kind == "payment")
+            ).where(Order.project_id == pid).distinct()
+            query = query.where(Profile.id.in_(purchaser_ids))
+        elif source in {"telegram", "max"}:
+            # Match Profile.source or an Identity on a connection of that platform.
+            platform_profiles = (
+                select(Profile.id)
+                .join(Identity, Identity.contact_id == Profile.contact_id)
+                .join(Connection, Connection.id == Identity.connection_id)
+                .where(Profile.project_id == pid, Connection.project_id == pid, Connection.platform == source)
+            )
+            aliases = {source, "bot"} if source == "telegram" else {source}
+            query = query.where(or_(Profile.source.in_(aliases), Profile.id.in_(platform_profiles)))
+        elif source == "site":
+            query = query.where(Profile.source.in_(["site", "solo_pr"]))
+        elif source:
+            query = query.where(Profile.source == source)
         rows = list(db.scalars(query.order_by(Profile.created_at.desc(), Profile.id)))
         if tag:
             rows = [r for r in rows if tag in r.tags]
@@ -77,7 +110,19 @@ def contacts(pid: str, q: str = "", tag: str = "", offset: int = 0, limit: int =
             if event and (not last or event.created_at.replace(tzinfo=timezone.utc) > last.created_at.replace(tzinfo=timezone.utc)):
                 summary = {"created_at": event.created_at, "outcome": {"message.received": "Получено сообщение", "message.sent": "Платформа приняла сообщение", "manager.message_queued": "Ответ менеджера в очереди"}[event.kind]}
             result.append({**encode(row), "last_contact": summary})
-        return {"items": result, "total": len(rows)}
+        page_ids = [r["id"] for r in result]
+        purchasers = set()
+        if page_ids:
+            for pid_row in db.execute(
+                select(Order.profile_id)
+                .join(Payment, and_(Payment.order_id == Order.id, Payment.kind == "payment"))
+                .where(Order.profile_id.in_(page_ids))
+                .distinct()
+            ):
+                purchasers.add(pid_row[0])
+        for item in result:
+            item["is_purchaser"] = item["id"] in purchasers
+        return {"items": result, "total": len(rows), "source_filter": source or None}
 
 
 @router.post("/projects/{pid}/contacts")
@@ -122,12 +167,48 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
     with Session() as db:
         row = get_profile(db, admin, profile_id)
         identities = list(db.scalars(select(Identity).join(Connection).where(Identity.contact_id == row.contact_id, Connection.project_id == row.project_id)))
-        events = list(db.scalars(select(Event).where(Event.contact_id == row.contact_id, Event.connection_id.in_([i.connection_id for i in identities])).order_by(Event.created_at.desc()).limit(100)))
-        return {**encode(row), "activities": [encode(x) for x in db.scalars(select(Activity).where(Activity.profile_id == row.id).order_by(Activity.created_at.desc()))],
-                "deals": [encode(x) for x in db.scalars(select(Deal).where(Deal.profile_id == row.id))],
-                "tasks": [encode(x) for x in db.scalars(select(WorkItem).where(WorkItem.profile_id == row.id))],
-                "orders": [{**encode(o), **balance(db, o)} for o in db.scalars(select(Order).where(Order.profile_id == row.id))],
-                "identities": [encode(i) for i in identities], "events": [encode(e) for e in events]}
+        # Enrich identities with platform for drawer.
+        conn_map = {
+            c.id: c
+            for c in db.scalars(
+                select(Connection).where(Connection.id.in_([i.connection_id for i in identities] or ["__none__"]))
+            )
+        }
+        identity_payload = []
+        for i in identities:
+            c = conn_map.get(i.connection_id)
+            identity_payload.append({
+                **encode(i),
+                "platform": c.platform if c else None,
+                "connection_name": c.name if c else None,
+            })
+        events = list(db.scalars(select(Event).where(Event.contact_id == row.contact_id, Event.connection_id.in_([i.connection_id for i in identities] or ["__none__"])).order_by(Event.created_at.desc()).limit(100)))
+        orders = list(db.scalars(select(Order).where(Order.profile_id == row.id)))
+        is_purchaser = bool(
+            db.scalar(
+                select(Payment.id)
+                .join(Order, Order.id == Payment.order_id)
+                .where(Order.profile_id == row.id, Payment.kind == "payment")
+                .limit(1)
+            )
+        )
+        return {
+            **encode(row),
+            "is_purchaser": is_purchaser,
+            "activities": [encode(x) for x in db.scalars(select(Activity).where(Activity.profile_id == row.id).order_by(Activity.created_at.desc()))],
+            "deals": [encode(x) for x in db.scalars(select(Deal).where(Deal.profile_id == row.id))],
+            "tasks": [encode(x) for x in db.scalars(select(WorkItem).where(WorkItem.profile_id == row.id))],
+            "orders": [{**encode(o), **balance(db, o)} for o in orders],
+            "identities": identity_payload,
+            "events": [encode(e) for e in events],
+            # CRM-7: RO consumer of LMS/BBB attendance — empty until LMS-21/22 emit events.
+            "learning": {
+                "available": False,
+                "attendance": [],
+                "sparks": [],
+                "note": "Посещения вебинаров появятся после LMS events (attendance.recorded / feedback.spark).",
+            },
+        }
 
 
 class ActivityBody(Body):
