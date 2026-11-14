@@ -1,9 +1,9 @@
-# Порталы и host-routing (CRM)
+# Порталы и host-routing (CRM + Voronka ops)
 
 | Хост | Назначение | Upstream |
 |------|------------|----------|
 | `crm.solo-pr.ru` | CRM Workspace (`/crm/`) | voronka `:18080` |
-| `voronka.solo-pr.ru` | Боты / Mini App / ops | voronka `:18080` |
+| `voronka.solo-pr.ru` | Ops `/ops/` + Mini App `/` + hooks | voronka `:18080` |
 | `cms.solo-pr.ru` | CMS (solo_pr) | solo_pr |
 | `lms.solo-pr.ru` | LMS stub / OpenOlat | stub → LMS |
 
@@ -14,7 +14,16 @@
 - Кросс-ссылки CMS · Voronka · LMS в chrome (`GET /api/crm/portals`).
 - ResultURL Robokassa: `{CRM_PUBLIC_URL}/api/crm/robokassa/result`.
 
-## Эндпоинты портала (этап 2)
+## Поведение Voronka-хоста (этап 3)
+
+- `Host: voronka.solo-pr.ru` + `/` → **Mini App** `admin.html` (Telegram WebApp; sslip URL совместимы).
+- Browser staff UI: **`/ops/`** (Next static export, stub login owner/editor).
+- `/health` ok; `/hooks/{cid}` проксируется (меньший body limit в nginx).
+- Язык chrome: Боты · Сценарии · Рассылки · Поддержка · AI (без «продажи и обучение»).
+- Deep-link «Открыть CRM» → `crm.solo-pr.ru`.
+- Cookie та же `crm_session` (zone = UI, не отдельный IdP).
+
+## Эндпоинты CRM portal (этап 2)
 
 | Method | Path | Назначение |
 |--------|------|------------|
@@ -26,4 +35,14 @@
 | GET | `/api/crm/staff/cms-matrix` | Чеклист синхронизации с CMS SPO-23 |
 | POST | `/api/crm/yookassa/webhook` | **501** stub |
 
-Пример nginx: [deploy/nginx-crm.solo-pr.ru.conf](../deploy/nginx-crm.solo-pr.ru.conf).
+## Эндпоинты Ops portal (этап 3)
+
+| Method | Path | Назначение |
+|--------|------|------------|
+| GET | `/api/ops/portals` | Chrome links + IA labels |
+| GET | `/api/ops/projects/{pid}/identities` | Messenger audience (Identity) |
+| POST | `/api/ops/projects/{pid}/wizard/channel-dm` | Канал → wait → DM funnel |
+| POST | `/api/ops/projects/{pid}/wizard/support` | Support menu pipeline |
+| POST | `/api/crm/projects/{pid}/campaigns` | + `identity_ids` для мгновенных blasts |
+
+Nginx: [deploy/nginx-crm.solo-pr.ru.conf](../deploy/nginx-crm.solo-pr.ru.conf) · [deploy/nginx-voronka.solo-pr.ru.conf](../deploy/nginx-voronka.solo-pr.ru.conf).

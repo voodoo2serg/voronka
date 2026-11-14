@@ -68,6 +68,32 @@ def advance(db, run, identity):
             run.due_at = None
             run.status = "delayed"
             break
+        elif kind == "handoff":
+            # Switch run delivery to another bot Identity for the same Contact (channel → DM).
+            target_cid = node["connection_id"]
+            target = db.scalar(
+                select(Identity)
+                .where(Identity.contact_id == contact.id, Identity.connection_id == target_cid)
+                .with_for_update()
+            )
+            if not target:
+                # Private chat_id for Telegram/MAX equals user id until the user opens DM.
+                target = Identity(
+                    id=uid(),
+                    contact_id=contact.id,
+                    connection_id=target_cid,
+                    external_user_id=identity.external_user_id,
+                    chat_id=identity.external_user_id,
+                    name=identity.name or "",
+                )
+                db.add(target)
+                db.flush()
+                event(db, "identity.handoff_created", target_cid, contact.id, run.id, from_connection=identity.connection_id)
+            run.identity_id = target.id
+            identity = target
+            event(db, "run.handoff", target_cid, contact.id, run.id, from_connection=node.get("from") or "")
+            run.current = node["next"]
+            continue
         elif kind == "grant":
             if not all(state.get(x) is True for x in node["requires"]):
                 run.status = "blocked"
@@ -162,9 +188,23 @@ def consume(db, connection, msg):
             mark_started_for_identity(db, identity, connection)
         if run:
             return
-        token = msg.get("payload") or connection.config.get("default_entry")
-        entry = db.get(Entry, token) if token else None
+        entry = None
+        if msg.get("channel_join"):
+            # Prefer Entry tagged for channel membership (wizard sets attribution.trigger).
+            for candidate in db.scalars(select(Entry).where(Entry.connection_id == connection.id, Entry.active == True)):
+                if (candidate.attribution or {}).get("trigger") == "channel_join":
+                    entry = candidate
+                    break
+            if not entry:
+                token = connection.config.get("channel_join_entry") or connection.config.get("default_entry")
+                entry = db.get(Entry, token) if token else None
+        else:
+            token = msg.get("payload") or connection.config.get("default_entry")
+            entry = db.get(Entry, token) if token else None
         if not entry or not entry.active or entry.connection_id != connection.id:
+            if msg.get("channel_join"):
+                event(db, "channel_join.no_entry", connection.id, identity.contact_id)
+                return
             entries = db.scalars(select(Entry).where(Entry.connection_id == connection.id, Entry.active == True)).all()
             choices = [{"text": db.get(Funnel, e.funnel_id).name[:100], "data": "e:" + e.token}
                        for e in entries[:20] if db.get(Funnel, e.funnel_id).published_version_id]
@@ -178,7 +218,15 @@ def consume(db, connection, msg):
         run = Run(id=uid(), identity_id=identity.id, version_id=version.id,
             entry_token=entry.token, current=version.graph["start"], status="active", state={})
         db.add(run); db.flush()
-        event(db, "funnel.started", connection.id, identity.contact_id, run.id, attribution=entry.attribution)
+        event(
+            db,
+            "funnel.started",
+            connection.id,
+            identity.contact_id,
+            run.id,
+            attribution=entry.attribution,
+            channel_join=bool(msg.get("channel_join")),
+        )
         advance(db, run, identity)
         return
     if not run or run.status != "waiting":

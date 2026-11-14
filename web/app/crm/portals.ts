@@ -27,7 +27,7 @@ export function isCrmHost(host = typeof window !== 'undefined' ? window.location
 }
 
 export function voronkaOpsHref(): string {
-  if (typeof window === 'undefined') return PORTAL_URLS.voronka + '/';
-  if (isCrmHost()) return PORTAL_URLS.voronka + '/';
-  return '/';
+  if (typeof window === 'undefined') return PORTAL_URLS.voronka + '/ops/';
+  if (isCrmHost()) return PORTAL_URLS.voronka + '/ops/';
+  return '/ops/';
 }

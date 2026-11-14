@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 
 MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
-TYPES = SEND | {"question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal"}
+TYPES = SEND | {"question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal", "handoff"}
 RESERVED = "_"
 
 def checked_text(value, label, maximum=4000):
@@ -122,6 +122,10 @@ def validate_graph(graph):
                 checked_key(requirement)
         if kind in {"stage", "task", "goal"}:
             checked_text(node.get("text"), "Текст", 160)
+        if kind == "handoff":
+            cid = node.get("connection_id")
+            if not isinstance(cid, str) or not cid.strip() or len(cid) > 36:
+                raise ValueError(f"handoff {key}: нужен connection_id")
     # Validate every path, not only the path chosen by a preview.
     visiting, visited = set(), set()
     def visit(key):
@@ -141,6 +145,7 @@ def validate_graph(graph):
 
 def validate_bindings(db, graph, connection_ids):
     from app.db import Asset, Connection
+    allowed = set(connection_ids)
     for cid in connection_ids:
         connection = db.get(Connection, cid)
         if not connection or not connection.active:
@@ -157,3 +162,11 @@ def validate_bindings(db, graph, connection_ids):
                         raise ValueError("Telegram file_id нельзя использовать в другом боте")
                 elif not secure_url(node.get("media")):
                     raise ValueError("Для MAX/VK задайте резервный HTTPS URL материала")
+    for node in graph["nodes"].values():
+        if node.get("type") == "handoff":
+            target = node.get("connection_id")
+            if target not in allowed:
+                raise ValueError("handoff connection_id должен быть в connection_ids сценария")
+            target_conn = db.get(Connection, target)
+            if not target_conn or not target_conn.active:
+                raise ValueError("handoff: целевое подключение отсутствует или отключено")

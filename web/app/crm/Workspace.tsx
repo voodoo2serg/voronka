@@ -1808,6 +1808,13 @@ export default function Workspace() {
                       <p className="fine">Чеклист матрицы недоступен</p>
                     )}
                     <h3>ИИ (черновики)</h3>
+                    <p className="fine">
+                      Правила и провайдеры (RAGA / OpenRouter / Ollama) — на{' '}
+                      <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
+                        voronka.solo-pr.ru/ops/
+                      </a>
+                      . Автоответ клиенту без approve запрещён.
+                    </p>
                     {aiStatus ? (
                       <div className="direction">
                         <small>

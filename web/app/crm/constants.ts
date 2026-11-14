@@ -31,7 +31,7 @@ export const sectionHints: Record<string, string> = {
   tasks: 'Задачи, встречи и материалы, которые вы обещали.',
   orders: 'Заказы, авансы, рассрочки и подтверждённые поступления.',
   payments: 'Robokassa status и каркас YooKassa. Секреты не показываются.',
-  campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru.',
+  campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
   outreach: 'Прогрев по телефону: dry_run с ссылкой на официальный бот, без Campaign/Outbox.',
   imports: 'Превратите старые базы в рабочие данные.',

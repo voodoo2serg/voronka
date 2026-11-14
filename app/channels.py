@@ -142,8 +142,45 @@ def send(connection, chat_id, payload, message_key):
             return DeliveryReceipt(data["response"])
         raise DeliveryRejected("platform_not_supported")
 
+def _telegram_join_status(old_member, new_member) -> bool:
+    """True when a user newly becomes a channel/group member (not bot)."""
+    new_status = (new_member or {}).get("status")
+    old_status = (old_member or {}).get("status")
+    if new_status not in {"member", "administrator", "restricted"}:
+        return False
+    if new_status == "restricted" and not (new_member or {}).get("is_member", True):
+        return False
+    if old_status in {"member", "administrator"}:
+        return False
+    if old_status == "restricted" and (old_member or {}).get("is_member", True):
+        return False
+    return True
+
+
 def normalize(platform, raw):
     if platform == "telegram":
+        # Channel/supergroup join → start funnel (requires chat_member in allowed_updates).
+        member_upd = raw.get("chat_member")
+        if member_upd:
+            new_member = member_upd.get("new_chat_member") or {}
+            old_member = member_upd.get("old_chat_member") or {}
+            user = new_member.get("user") or {}
+            if user.get("is_bot") or not _telegram_join_status(old_member, new_member):
+                return None
+            chat = member_upd.get("chat") or {}
+            if chat.get("type") not in {"channel", "supergroup"}:
+                return None
+            return {
+                "event_id": f"chat_member:{raw['update_id']}",
+                "user_id": str(user["id"]),
+                "chat_id": str(user["id"]),
+                "channel_chat_id": str(chat.get("id", "")),
+                "text": "",
+                "name": " ".join(filter(None, [user.get("first_name"), user.get("last_name")]))[:200],
+                "start": True,
+                "channel_join": True,
+                "payload": None,
+            }
         query = raw.get("callback_query")
         msg = query.get("message") if query else raw.get("message")
         if not msg or msg.get("chat", {}).get("type") != "private":

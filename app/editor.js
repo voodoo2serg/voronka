@@ -2,7 +2,7 @@
 const $=id=>document.getElementById(id);
 let token="", role="", connections=[], funnels=[], assets=[], templates=[], projects=[], current=null, selected=null, dirty=false, previewURL=null;
 const types={text:"Текст",video:"Видео",video_note:"Кружок",voice:"Голос",photo:"Фото",document:"PDF",
- question:"Голосование",survey:"Опрос",condition:"Условие",wait:"Ожидание",grant:"Выдать доступ",stage:"Этап CRM",task:"Задача",goal:"Цель",finish:"Завершить"};
+ question:"Голосование",survey:"Опрос",condition:"Условие",wait:"Ожидание",handoff:"Handoff DM-бота",grant:"Выдать доступ",stage:"Этап CRM",task:"Задача",goal:"Цель",finish:"Завершить"};
 const roles={bot:"Бот, который отвечает",seller:"Продающий аккаунт",chat:"Чат",channel:"Канал"};
 function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function status(message){$("status").textContent=message;}
@@ -53,6 +53,7 @@ function renderStory(){
   card.append(node("strong",(guard)+". "+(n.title||types[n.type])));
   if(n.text)card.append(node("p",String(n.text).slice(0,180),"muted"));
   if(n.type==="wait")card.append(node("p","Пауза "+(n.seconds||0)+" с, затем "+stepName(n.next),"muted"));
+  if(n.type==="handoff")card.append(node("p","Переключить доставку на бота "+(n.connection_id||"?")+", затем "+stepName(n.next),"muted"));
   if(n.type==="question")for(const opt of n.options||[])card.append(node("p","Кнопка «"+opt+"» → "+stepName((n.routes||{})[opt]||n.next),"muted"));
   for(const b of n.buttons||[])card.append(node("p","Ссылка «"+b.text+"»: "+b.url,"muted"));
   if(n.type==="task")card.append(node("p","Задача редакторам: "+(n.text||n.title||""),"muted"));
@@ -130,6 +131,7 @@ function renderForm(){
   selection("Если совпало",targets,n.yes,v=>n.yes=v);selection("Иначе",targets,n.no,v=>n.no=v);
  }else if(n.type!=="finish"&&n.type!=="question")selection("Следующий шаг",targets,n.next,v=>n.next=v);
  if(n.type==="wait"){const input=field("Ожидание, секунд",n.seconds??120,v=>n.seconds=Number(v));input.type="number";input.min="1";}
+ if(n.type==="handoff")selection("DM-бот (connection_id)",(current.connection_ids||[]).map(id=>{const c=connections.find(x=>x.id===id);return [id,c?c.name:id];}),n.connection_id||(current.connection_ids||[])[0],v=>n.connection_id=v);
  if(n.type==="grant"){
   field("Ключ продукта",n.product,v=>n.product=v);
   field("Флаги, которые должны быть завершены (каждый с новой строки)",n.requires?.join("\n")||"",v=>n.requires=lines(v),"textarea");
@@ -152,6 +154,7 @@ function defaultNode(type,id,next){
  if(type==="question")Object.assign(n,{key:"answer_"+id,text:"Насколько вам зашло?",options:["Если согласны — жми и подпишись"],routes:{"Если согласны — жми и подпишись":next}});
  if(type==="survey")Object.assign(n,{key:"survey_"+id,questions:[{key:"need",text:"Какую задачу хотите решить?"}]});
  if(type==="wait")n.seconds=120;
+ if(type==="handoff")n.connection_id=(current.connection_ids||[])[0]||"";
  if(type==="grant")Object.assign(n,{product:"bonus",requires:["survey_completed"]});
  if(type==="condition"){delete n.next;Object.assign(n,{key:"interested",equals:"Да",yes:next,no:next});}
  return n;
