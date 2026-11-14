@@ -84,7 +84,8 @@ export function AutomationsSection({
         </button>
         {result && (
           <p role="status" className="notice">
-            Funnel {result.id}, wait {result.wait_seconds}s. {result.editor_hint}
+            Funnel {result.id}, entry {result.entry_token}, wait {result.wait_seconds}s · DM via{' '}
+            {result.dm_connection_id}. {result.note}
           </p>
         )}
       </section>

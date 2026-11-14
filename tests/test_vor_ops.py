@@ -58,19 +58,30 @@ def test_ops_manager_forbidden(ops):
 
 
 def test_channel_dm_and_support_wizards(ops):
-    # Ensure connection active for validate_bindings
+    # Ensure connection active for validate_bindings; second bot for DM handoff
     with ops.db.begin() as db:
-        for cid in ("tg",):
-            c = db.get(Connection, cid)
-            c.active = True
-            c.project_id = "p"
+        db.get(Connection, "tg").active = True
+        db.get(Connection, "tg").project_id = "p"
+        db.add(
+            Connection(
+                id="dm",
+                name="DM Bot",
+                platform="telegram",
+                token_env="TG_DM_TOKEN",
+                secret_env="TG_DM_SECRET",
+                config={},
+                active=True,
+                project_id="p",
+                role="bot",
+            )
+        )
 
     channel = ops.client.post(
         "/api/ops/projects/p/wizard/channel-dm",
         json={
             "name": "Канал DM",
             "channel_connection_id": "tg",
-            "dm_connection_id": "tg",
+            "dm_connection_id": "dm",
             "wait_days": 2,
             "dm_text": "Личное после канала",
         },
@@ -78,8 +89,23 @@ def test_channel_dm_and_support_wizards(ops):
     assert channel.status_code == 200, channel.text
     body = channel.json()
     assert body["wait_seconds"] == 2 * 86400
+    assert body["entry_token"]
+    assert body["graph"]["nodes"]["joined"]["type"] == "handoff"
+    assert body["graph"]["nodes"]["joined"]["connection_id"] == "dm"
     assert body["graph"]["nodes"]["wait_dm"]["type"] == "wait"
     assert body["graph"]["nodes"]["personal"]["text"] == "Личное после канала"
+    assert body["dm_connection_id"] == "dm"
+
+    with ops.db() as db:
+        from app.db import Entry
+
+        entry = db.get(Entry, body["entry_token"])
+        assert entry and entry.active
+        assert entry.attribution["trigger"] == "channel_join"
+        assert entry.connection_id == "tg"
+        assert db.get(Connection, "tg").config.get("channel_join_entry") == body["entry_token"]
+        funnel = db.get(Funnel, body["id"])
+        assert funnel.published_version_id
 
     support = ops.client.post(
         "/api/ops/projects/p/wizard/support",
@@ -103,6 +129,76 @@ def test_channel_dm_and_support_wizards(ops):
     with ops.db() as db:
         funnels = list(db.scalars(select(Funnel).where(Funnel.project_id == "p")))
         assert len(funnels) >= 2
+
+
+def test_channel_join_handoff_delivers_via_dm_bot(ops):
+    """chat_member join on channel bot → Entry → handoff → Outbox on dm connection."""
+    from app.db import Entry, Identity, Outbox, Run
+    from app.runtime import consume
+    from app.channels import normalize
+
+    with ops.db.begin() as db:
+        db.get(Connection, "tg").active = True
+        db.get(Connection, "tg").project_id = "p"
+        db.add(
+            Connection(
+                id="dm",
+                name="DM Bot",
+                platform="telegram",
+                token_env="TG_DM_TOKEN",
+                secret_env="TG_DM_SECRET",
+                config={},
+                active=True,
+                project_id="p",
+            )
+        )
+
+    created = ops.client.post(
+        "/api/ops/projects/p/wizard/channel-dm",
+        json={
+            "name": "Join DM",
+            "channel_connection_id": "tg",
+            "dm_connection_id": "dm",
+            "wait_days": 0,
+            "wait_seconds": 1,
+            "dm_text": "Hello after join",
+        },
+    ).json()
+
+    raw = {
+        "update_id": 99,
+        "chat_member": {
+            "chat": {"id": -1001, "type": "channel", "title": "News"},
+            "from": {"id": 1, "is_bot": False, "first_name": "Admin"},
+            "old_chat_member": {"user": {"id": 777, "is_bot": False, "first_name": "Ann"}, "status": "left"},
+            "new_chat_member": {"user": {"id": 777, "is_bot": False, "first_name": "Ann"}, "status": "member"},
+        },
+    }
+
+    msg = normalize("telegram", raw)
+    assert msg and msg["channel_join"] is True and msg["start"] is True
+    assert msg["user_id"] == "777"
+
+    with ops.db.begin() as db:
+        consume(db, db.get(Connection, "tg"), msg)
+
+    with ops.db() as db:
+        run = db.scalar(select(Run))
+        assert run is not None
+        # After handoff, run identity is on DM bot
+        identity = db.get(Identity, run.identity_id)
+        assert identity.connection_id == "dm"
+        assert identity.external_user_id == "777"
+        # Wait node → delayed (wait_seconds=1)
+        assert run.status == "delayed"
+        # No premature personal message until timer fires
+        assert not list(db.scalars(select(Outbox).where(Outbox.connection_id == "dm")))
+
+
+def test_portal_csp_allows_inline_scripts(ops):
+    from app.main import _PORTAL_CSP
+
+    assert "script-src 'self' 'unsafe-inline'" in _PORTAL_CSP
 
 
 def test_identities_and_campaign_by_identity(ops):

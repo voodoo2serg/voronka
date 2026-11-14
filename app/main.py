@@ -25,8 +25,10 @@ async def constraint_conflict(request: Request, exception: IntegrityError):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={"detail": "Данные уже изменены или нарушена уникальность. Обновите страницу."})
 
+# Next.js App Router static export embeds inline bootstrap/Flight scripts for hydration.
+# Nonces are unavailable on StaticFiles; allow same-origin + unsafe-inline for portal shells only.
 _PORTAL_CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
@@ -696,7 +698,9 @@ def activate_connection(cid: str, admin=Depends(actor)):
                     info=result(client.post(f"https://api.telegram.org/bot{token}/getMe"),"telegram")["result"]
                     c.config={**c.config,"username":info["username"]}
                     result(client.post(f"https://api.telegram.org/bot{token}/setWebhook",json={
-                        "url":url,"secret_token":secret,"allowed_updates":["message","callback_query"]}),"telegram")
+                        "url":url,"secret_token":secret,
+                        # chat_member: channel join → delayed DM automations (bot must be channel admin).
+                        "allowed_updates":["message","callback_query","chat_member"]}),"telegram")
                 elif c.platform=="max":
                     response=client.post("https://platform-api2.max.ru/subscriptions",
                         headers={"Authorization":token},json={"url":url,"secret":secret,

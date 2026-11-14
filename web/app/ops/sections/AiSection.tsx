@@ -5,10 +5,12 @@ import type { Row } from '../types';
 
 export function AiSection({
   status,
+  bots,
   busy,
   onSave,
 }: {
   status: Row | null;
+  bots: Row[];
   busy: boolean;
   onSave: (payload: Row) => Promise<void>;
 }) {
@@ -16,6 +18,7 @@ export function AiSection({
   const [provider, setProvider] = useState('inherit');
   const [model, setModel] = useState('');
   const [rules, setRules] = useState('');
+  const [connectionId, setConnectionId] = useState(bots[0]?.id || '');
 
   const providers = [
     ['raga', status?.raga],
@@ -57,6 +60,23 @@ export function AiSection({
             <option value="connection">connection</option>
           </select>
         </label>
+        {scope === 'connection' && (
+          <label>
+            Бот / connection
+            <select
+              value={connectionId}
+              onChange={(e) => setConnectionId(e.target.value)}
+              aria-label="AI connection"
+              required
+            >
+              {bots.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} ({b.platform})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           Provider
           <select value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="AI provider">
@@ -76,7 +96,7 @@ export function AiSection({
         </label>
         <button
           className="primary"
-          disabled={busy}
+          disabled={busy || (scope === 'connection' && !connectionId)}
           onClick={() =>
             void onSave({
               scope,
@@ -84,7 +104,7 @@ export function AiSection({
               model,
               system_rules: rules,
               active: true,
-              project_id: scope === 'project' ? undefined : undefined,
+              connection_id: scope === 'connection' ? connectionId : null,
             })
           }
         >
@@ -99,6 +119,7 @@ export function AiSection({
             <span className="tag">{r.scope}</span>
             <span className="tag">{r.provider}</span>
             {r.model && <span className="tag">{r.model}</span>}
+            {r.connection_id && <span className="tag mono">{r.connection_id.slice(0, 8)}</span>}
             <p>{r.system_rules || '—'}</p>
           </div>
         ))}

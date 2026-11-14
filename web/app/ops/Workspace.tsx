@@ -315,11 +315,20 @@ export default function Workspace() {
           {section === 'ai' && (
             <AiSection
               status={aiStatus}
+              bots={messengerBots}
               busy={busy}
               onSave={async (payload) => {
                 await act(async () => {
                   const body = { ...payload };
                   if (body.scope === 'project') body.project_id = pid;
+                  if (body.scope === 'connection') {
+                    body.connection_id = payload.connection_id;
+                    body.project_id = pid;
+                  }
+                  if (body.scope === 'global') {
+                    delete body.connection_id;
+                    delete body.project_id;
+                  }
                   await api('/api/crm/ai/rules', 'PUT', body);
                   setNotice('Правило сохранено (draft-only)');
                   await load();

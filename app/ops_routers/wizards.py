@@ -1,13 +1,17 @@
 """Ops wizards: channel→wait→DM, support pipelines. Creates Funnel drafts via graph API rules."""
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
+from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app import portals
 from app.crm_deps import Body, Session
 from app.crm_service import project_access, uid, audit
-from app.db import Connection, Funnel, Version
+from app.db import Connection, Funnel, Version, Entry
 from app.graph import validate_graph, validate_bindings
 from app.ops_routers.deps import ops_actor
 from app.runtime import event
@@ -22,7 +26,8 @@ class ChannelDmWizard(Body):
     wait_days: int = Field(ge=0, le=30)
     wait_seconds: int | None = Field(default=None, ge=1, le=2592000)
     dm_text: str = Field(min_length=1, max_length=4000)
-    publish: bool = False
+    # Channel→DM is useless without publish + Entry; always publish.
+    publish: bool = True
 
 
 class SupportWizard(Body):
@@ -44,13 +49,15 @@ def _wait_seconds(days: int, seconds: int | None) -> int:
     return max(1, int(days) * 86400)
 
 
-def _channel_dm_graph(*, wait_sec: int, dm_text: str) -> dict:
+def _channel_dm_graph(*, wait_sec: int, dm_text: str, dm_connection_id: str) -> dict:
+    """Join on channel connection → handoff to DM bot → wait → personal text."""
     return {
         "start": "joined",
+        "meta": {"trigger": "channel_join", "dm_connection_id": dm_connection_id},
         "nodes": {
             "joined": {
-                "type": "text",
-                "text": "Спасибо, что присоединились к каналу. Скоро напишем лично.",
+                "type": "handoff",
+                "connection_id": dm_connection_id,
                 "next": "wait_dm",
             },
             "wait_dm": {"type": "wait", "seconds": wait_sec, "next": "personal"},
@@ -131,7 +138,11 @@ def _create_funnel(db, *, admin, pid, name, connection_ids, graph, publish: bool
 @router.post("/projects/{pid}/wizard/channel-dm")
 def wizard_channel_dm(pid: str, body: ChannelDmWizard, admin=Depends(ops_actor)):
     wait_sec = _wait_seconds(body.wait_days, body.wait_seconds)
-    graph = _channel_dm_graph(wait_sec=wait_sec, dm_text=body.dm_text)
+    graph = _channel_dm_graph(
+        wait_sec=wait_sec,
+        dm_text=body.dm_text,
+        dm_connection_id=body.dm_connection_id,
+    )
     connection_ids = list(dict.fromkeys([body.channel_connection_id, body.dm_connection_id]))
     try:
         validate_graph(graph)
@@ -152,15 +163,53 @@ def wizard_channel_dm(pid: str, body: ChannelDmWizard, admin=Depends(ops_actor))
             name=body.name,
             connection_ids=connection_ids,
             graph=graph,
-            publish=body.publish,
+            publish=True,
             wizard="channel_dm",
+        )
+        # Entry on the channel bot: chat_member join starts this funnel.
+        # Deactivate prior channel_join entries on this connection so one automation wins.
+        for old in db.scalars(
+            select(Entry).where(Entry.connection_id == body.channel_connection_id, Entry.active.is_(True))
+        ):
+            if (old.attribution or {}).get("trigger") == "channel_join":
+                old.active = False
+        token = secrets.token_urlsafe(18)
+        entry = Entry(
+            token=token,
+            funnel_id=funnel.id,
+            connection_id=body.channel_connection_id,
+            attribution={
+                "trigger": "channel_join",
+                "dm_connection_id": body.dm_connection_id,
+                "wizard": "channel_dm",
+            },
+            active=True,
+        )
+        db.add(entry)
+        channel = db.get(Connection, body.channel_connection_id)
+        channel.config = {
+            **(channel.config or {}),
+            "channel_join_entry": token,
+        }
+        flag_modified(channel, "config")
+        event(
+            db,
+            "entry.created",
+            body.channel_connection_id,
+            actor_id=admin.telegram_id,
+            token=token,
+            trigger="channel_join",
         )
         return {
             "id": funnel.id,
             "revision": funnel.revision,
             "wait_seconds": wait_sec,
             "version_id": version_id,
+            "entry_token": token,
             "graph": graph,
+            "dm_connection_id": body.dm_connection_id,
+            "channel_connection_id": body.channel_connection_id,
+            "note": "Бот канала должен быть админом; webhook includes chat_member. DM уходит через handoff → dm_connection_id.",
             "editor_hint": "Правки узлов — в разделе Сценарии или Mini App editor.",
         }
 

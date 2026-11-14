@@ -288,13 +288,17 @@
   {
     "id": "channel_wait_dm",
     "name": "Канал → ожидание → личное",
-    "description": "После вступления: wait N дней, затем DM. Мастер на voronka.solo-pr.ru/ops/",
+    "description": "chat_member join → handoff на DM-бота → wait → личное. Мастер /ops/ Автоматизации.",
     "graph": {
       "start": "joined",
+      "meta": {
+        "trigger": "channel_join",
+        "dm_connection_id": "REPLACE_DM_CONNECTION_ID"
+      },
       "nodes": {
         "joined": {
-          "type": "text",
-          "text": "Спасибо, что присоединились к каналу. Скоро напишем лично.",
+          "type": "handoff",
+          "connection_id": "REPLACE_DM_CONNECTION_ID",
           "next": "wait_dm"
         },
         "wait_dm": {
