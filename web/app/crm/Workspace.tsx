@@ -6,7 +6,10 @@ import { FormModal } from './components/FormModal';
 import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
+import { CONTACT_SOURCE_FILTERS, voronkaOpsHref } from './portals';
+import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
+import { PaymentsSection } from './sections/PaymentsSection';
 import type { FormConfig, Row } from './types';
 import { date, money, names, toMinor } from './utils';
 
@@ -37,6 +40,7 @@ export default function Workspace() {
   const [promos, setPromos] = useState<Row[]>([]);
   const [staff, setStaff] = useState<Row[]>([]);
   const [query, setQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<Row | null>(null);
@@ -49,6 +53,17 @@ export default function Workspace() {
   const [paste, setPaste] = useState('');
   const [preview, setPreview] = useState<Row | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [portalLinks, setPortalLinks] = useState<Row[]>([]);
+  const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
+  const [mailStatus, setMailStatus] = useState<Row | null>(null);
+  const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
+  const [analytics, setAnalytics] = useState<Row | null>(null);
+  const [periodFrom, setPeriodFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [periodTo, setPeriodTo] = useState(() => new Date().toISOString().slice(0, 10));
 
   const api = createCrmApi(
     () => token,
@@ -79,7 +94,7 @@ export default function Workspace() {
     }
   }
 
-  async function load(p = pid, filters = inboxFilters) {
+  async function load(p = pid, filters = inboxFilters, source = sourceFilter) {
     if (!p) return;
     const version = ++loadVersion.current;
     const inboxQs = new URLSearchParams();
@@ -87,9 +102,11 @@ export default function Workspace() {
     if (filters.unread) inboxQs.set('unread', 'true');
     if (filters.delivery_errors) inboxQs.set('delivery_errors', 'true');
     if (filters.mine && me?.id) inboxQs.set('owner_id', String(me.id));
-    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en, hub, assets, ai] = await Promise.all([
+    const contactQs = new URLSearchParams({ q: query, offset: String(offset), limit: '100' });
+    if (source) contactQs.set('source', source);
+    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en, hub, assets, ai, portalsRes, pay, mail, matrix] = await Promise.all([
       api(`/projects/${p}/overview`),
-      api(`/projects/${p}/contacts?q=${encodeURIComponent(query)}&offset=${offset}&limit=100`),
+      api(`/projects/${p}/contacts?${contactQs.toString()}`),
       api(`/projects/${p}/deals`),
       api(`/projects/${p}/products`),
       api(`/projects/${p}/tasks`),
@@ -103,6 +120,10 @@ export default function Workspace() {
       api(`/projects/${p}/connections/hub`).catch(() => ({ items: [] })),
       api(`/projects/${p}/media-assets`).catch(() => ({ items: [] })),
       api('/ai/status').catch(() => null),
+      api('/portals').catch(() => ({ links: [] })),
+      api(`/projects/${p}/payment-providers`).catch(() => null),
+      api(`/projects/${p}/mail-status`).catch(() => null),
+      api('/staff/cms-matrix').catch(() => null),
     ]);
     if (version !== loadVersion.current) return;
     setOverview(o);
@@ -121,6 +142,16 @@ export default function Workspace() {
     setConnectionHub(hub.items || []);
     setMediaAssets(assets.items || []);
     setAiStatus(ai);
+    setPortalLinks(portalsRes?.links || []);
+    setPaymentProviders(pay);
+    setMailStatus(mail);
+    setCmsMatrix(matrix);
+  }
+
+  async function loadAnalytics() {
+    if (!pid) return;
+    const qs = new URLSearchParams({ from_date: periodFrom, to_date: periodTo });
+    setAnalytics(await api(`/projects/${pid}/analytics?${qs.toString()}`));
   }
 
   useEffect(() => {
@@ -151,7 +182,7 @@ export default function Workspace() {
       setInbox([]);
       void act(() => load());
     }
-  }, [pid, me, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pid, me, offset, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function showContact(id: string) {
     setDetail(await api('/contacts/' + id));
@@ -174,7 +205,20 @@ export default function Workspace() {
         { key: 'email', label: 'Email', type: 'email', value: row?.email },
         { key: 'phone', label: 'Телефон', value: row?.phone },
         { key: 'company', label: 'Компания', value: row?.company },
-        { key: 'source', label: 'Источник', value: row?.source || 'manual' },
+        {
+          key: 'source',
+          label: 'Источник',
+          type: 'select',
+          value: row?.source || 'manual',
+          options: [
+            ['manual', 'Вручную'],
+            ['telegram', 'Telegram'],
+            ['max', 'MAX'],
+            ['site', 'Сайт'],
+            ['import', 'Импорт'],
+            ['bot', 'Из ботов'],
+          ],
+        },
         { key: 'tags', label: 'Теги через запятую', value: row?.tags?.join(', ') },
         { key: 'email_allowed', label: 'Разрешена email-рассылка (основание проверено)', type: 'checkbox', value: row?.extra?.email_allowed ? 'true' : '' },
         { key: 'stopped', label: 'Отказ от сообщений', type: 'checkbox', value: row?.stopped ? 'true' : '' },
@@ -491,9 +535,24 @@ export default function Workspace() {
         <div className="wordmark">
           <span className="brandmark small">С</span>
           <div>
-            Соло-PR<small>Рабочее пространство</small>
+            Соло-PR<small>CRM</small>
           </div>
         </div>
+        {portalLinks.length > 0 && (
+          <div className="portal-chrome" aria-label="Порталы">
+            {portalLinks.map((link: Row) => (
+              <a
+                key={link.id}
+                href={link.url}
+                className={link.id === 'crm' ? 'current' : undefined}
+                target={link.id === 'crm' ? undefined : '_blank'}
+                rel="noreferrer"
+              >
+                {link.label}
+              </a>
+            ))}
+          </div>
+        )}
         <label className="project-label">
           ПРОЕКТ
           <select
@@ -532,8 +591,8 @@ export default function Workspace() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <a href="/" target="_blank" rel="noreferrer">
-            Открыть редактор воронок ↗
+          <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
+            Voronka ops / боты ↗
           </a>
           <div className="user">
             <span className="avatar">{me.role === 'owner' ? 'С' : 'М'}</span>
@@ -560,7 +619,7 @@ export default function Workspace() {
       <div className="main-area">
         <header className="topbar">
           <span>
-            Рабочее пространство <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
+            CRM <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
           </span>
           <button disabled={busy} onClick={() => void act(() => load())}>
             {busy ? 'Обновление…' : 'Обновить'}
@@ -569,7 +628,7 @@ export default function Workspace() {
         <main className="content">
           <div className="page-heading">
             <div>
-              <p className="eyebrow">СОЛО-PR</p>
+              <p className="eyebrow">СОЛО-PR · CRM</p>
               <h1>{sections.find((s) => s[0] === section)?.[1]}</h1>
               <p className="muted">{sectionHints[section]}</p>
             </div>
@@ -753,6 +812,21 @@ export default function Workspace() {
                       Экспорт CSV
                     </button>
                   </div>
+                  <div className="source-filters" role="group" aria-label="Фильтр источника">
+                    {CONTACT_SOURCE_FILTERS.map(([id, label]) => (
+                      <button
+                        key={id || 'all'}
+                        type="button"
+                        className={sourceFilter === id ? 'active' : undefined}
+                        onClick={() => {
+                          setOffset(0);
+                          setSourceFilter(id);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   {selected.length > 0 && (
                     <div className="selection">
                       Выбрано: {selected.length}
@@ -798,6 +872,7 @@ export default function Workspace() {
                                 <span>
                                   {c.name}
                                   {c.stopped && <small>Отказ от сообщений</small>}
+                                  {c.is_purchaser && <small>Покупатель</small>}
                                 </span>
                               </button>
                             </td>
@@ -1176,11 +1251,41 @@ export default function Workspace() {
                   </section>
                 </>
               )}
+              {section === 'payments' && <PaymentsSection data={paymentProviders} />}
+              {section === 'analytics' && (
+                <AnalyticsSection
+                  report={analytics}
+                  from={periodFrom}
+                  to={periodTo}
+                  onFrom={setPeriodFrom}
+                  onTo={setPeriodTo}
+                  busy={busy}
+                  onLoad={() => void act(() => loadAnalytics())}
+                />
+              )}
               {section === 'campaigns' && (
                 <section className="panel">
-                  <h2>Приветственные кампании</h2>
+                  <div className="panel-title">
+                    <h2>Рассылки / Email</h2>
+                    <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
+                      Мессенджер-blasts → Voronka ↗
+                    </a>
+                  </div>
+                  {mailStatus && (
+                    <div className="direction" style={{ marginBottom: 12 }}>
+                      <div>
+                        <b>Почта Mailu</b>
+                        <small>
+                          SMTP/домен: {mailStatus.smtp_configured ? 'настроен' : 'не настроен'} · секреты скрыты · {mailStatus.domain_note}
+                        </small>
+                      </div>
+                      <a href={mailStatus.webmail_url || 'https://mail.vodopetov.ru/webmail/'} target="_blank" rel="noreferrer">
+                        Webmail ↗
+                      </a>
+                    </div>
+                  )}
                   <p className="muted">
-                    Текст или кружок из медиабанка (`asset_id`). Импорт контакта не подтверждает возможность отправки. Лимит: BOT_MESSAGES_PER_SECOND на бота.
+                    Канал email — через SMTP Outbox. Текст или кружок из медиабанка для мессенджеров. Импорт контакта не подтверждает отправку.
                   </p>
                   {mediaAssets.length > 0 && (
                     <p className="fine">
@@ -1655,6 +1760,20 @@ export default function Workspace() {
                         )}
                       </div>
                     ))}
+                    <h3>Почта Mailu</h3>
+                    {mailStatus ? (
+                      <div className="direction">
+                        <div>
+                          <b>SMTP</b>
+                          <small>{mailStatus.smtp_configured ? 'хост/from заданы' : 'не настроено'} · секреты скрыты</small>
+                        </div>
+                        <a href={mailStatus.webmail_url} target="_blank" rel="noreferrer">
+                          Webmail ↗
+                        </a>
+                      </div>
+                    ) : (
+                      <p className="fine">Статус почты недоступен</p>
+                    )}
                     <h3>Интеграции</h3>
                     {Object.entries(overview.integrations || {}).map(([key, value]) => (
                       <div className="direction" key={key}>
@@ -1664,6 +1783,30 @@ export default function Workspace() {
                         </small>
                       </div>
                     ))}
+                    <h3>Роли ↔ CMS-матрица</h3>
+                    {cmsMatrix ? (
+                      <>
+                        <p className="fine">
+                          SoR: {cmsMatrix.source_of_truth}. Синхронизация: {cmsMatrix.sync}.{' '}
+                          <a href={cmsMatrix.cms_url} target="_blank" rel="noreferrer">
+                            Открыть CMS ↗
+                          </a>
+                        </p>
+                        <ul className="checklist">
+                          {(cmsMatrix.checklist || []).map((item: Row) => (
+                            <li key={item.id}>
+                              <span className={item.done || item.auto ? 'badge good' : 'badge'}>
+                                {item.done ? '✓' : item.auto ? 'CRM' : 'ручн.'}
+                              </span>{' '}
+                              {item.label}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="fine">Нет второй матрицы ученика в CRM.</p>
+                      </>
+                    ) : (
+                      <p className="fine">Чеклист матрицы недоступен</p>
+                    )}
                     <h3>ИИ (черновики)</h3>
                     {aiStatus ? (
                       <div className="direction">
@@ -1722,10 +1865,39 @@ export default function Workspace() {
               <dt>Телефон</dt>
               <dd>{detail.phone || '—'}</dd>
               <dt>Источник</dt>
-              <dd>{detail.source}</dd>
+              <dd>
+                {detail.source}
+                {detail.is_purchaser ? ' · покупатель' : ''}
+              </dd>
+              <dt>Теги</dt>
+              <dd>
+                {(detail.tags || []).length
+                  ? detail.tags.map((t: string) => (
+                      <span key={t} className="tag">
+                        {t}
+                      </span>
+                    ))
+                  : '—'}
+              </dd>
               <dt>Коммуникации</dt>
               <dd>{detail.stopped ? 'Отказ от сообщений' : 'Проверять доступность выбранного канала'}</dd>
             </dl>
+            <h3>Идентичности</h3>
+            {(detail.identities || []).length === 0 && <p className="fine">Нет привязанных диалогов</p>}
+            {(detail.identities || []).map((i: Row) => (
+              <div className="mini-card" key={i.id}>
+                <b>{i.name || i.external_user_id}</b>
+                <small>
+                  {i.platform || 'channel'} · {i.connection_name || i.connection_id}
+                </small>
+              </div>
+            ))}
+            <h3>Посещения вебинаров (RO)</h3>
+            {detail.learning?.available ? (
+              <p>Есть события LMS</p>
+            ) : (
+              <p className="fine">{detail.learning?.note || 'Пока нет LMS/BBB events.'}</p>
+            )}
             <h3>Последний контакт</h3>
             <p>{detail.activities[0]?.outcome || 'Результат ещё не зафиксирован'}</p>
             <div className="row">

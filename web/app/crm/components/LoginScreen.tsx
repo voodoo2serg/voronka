@@ -32,9 +32,9 @@ export function LoginScreen({
     <main className="login-screen">
       <section className="login-card">
         <div className="brandmark">С</div>
-        <p className="eyebrow">СОЛО-PR / РАБОЧИЙ КАБИНЕТ</p>
-        <h1>{recover ? 'Доступ к аккаунту' : 'Добро пожаловать'}</h1>
-        <p className="muted">Клиенты, экспертиза и результаты — в одном месте.</p>
+        <p className="eyebrow">СОЛО-PR / CRM</p>
+        <h1>{recover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
+        <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();

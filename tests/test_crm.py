@@ -16,8 +16,8 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, observability):
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, observability):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -559,3 +559,83 @@ def test_outreach_does_not_use_available_identity_campaign_path(crm):
     assert crm.client.post('/api/crm/campaigns/'+campaign['id']+'/launch').json()['queued']==0
     with crm.db() as db:
         assert not list(db.scalars(select(Outbox)))
+
+
+def test_crm_host_redirects_root_to_workspace(crm):
+    r = crm.client.get('/', headers={'Host': 'crm.solo-pr.ru'}, follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers['location'] == '/crm/'
+    # Ops host still serves Mini App admin HTML.
+    r2 = crm.client.get('/', headers={'Host': 'voronka.solo-pr.ru'})
+    assert r2.status_code == 200
+    assert 'html' in r2.headers.get('content-type', '').lower() or '<!DOCTYPE' in r2.text[:200].upper() or '<html' in r2.text[:200].lower() or len(r2.text) > 100
+
+
+def test_portal_payment_providers_mail_analytics_and_filters(crm, monkeypatch):
+    monkeypatch.setenv('ROBOKASSA_LOGIN', 'merchant')
+    monkeypatch.setenv('ROBOKASSA_TEST', '1')
+    monkeypatch.setenv('ROBOKASSA_TEST_PASSWORD1', 't1')
+    monkeypatch.setenv('ROBOKASSA_TEST_PASSWORD2', 't2')
+    monkeypatch.setenv('SMTP_HOST', 'mail.example')
+    monkeypatch.setenv('SMTP_FROM', 'crm@example.ru')
+    monkeypatch.setenv('YOOKASSA_ENABLED', '0')
+
+    chrome = crm.client.get('/api/crm/portals').json()
+    assert chrome['crm_host'] == 'crm.solo-pr.ru'
+    assert {x['id'] for x in chrome['links']} >= {'cms', 'crm', 'voronka', 'lms'}
+
+    providers = crm.client.get('/api/crm/projects/p/payment-providers').json()
+    assert providers['robokassa']['login_set'] is True
+    assert providers['robokassa']['mode'] == 'test'
+    assert providers['robokassa']['ready'] is True
+    assert providers['robokassa']['secrets_exposed'] is False
+    assert '/api/crm/robokassa/result' in providers['robokassa']['result_url']
+    assert providers['yookassa']['adapter'] == 'not_implemented'
+    assert providers['stats']['source'] == 'Payment/Order'
+    assert crm.client.post('/api/crm/yookassa/webhook').status_code == 501
+
+    mail = crm.client.get('/api/crm/projects/p/mail-status').json()
+    assert mail['smtp_configured'] is True
+    assert 'mail.vodopetov.ru' in mail['webmail_url']
+    assert mail['secrets_exposed'] is False
+    assert 'voronka' in mail['messenger_blasts_url']
+
+    tg = contact(crm, name='TG User', source='telegram')
+    site = contact(crm, name='Site Lead', source='site')
+    imported = contact(crm, name='CSV', source='import')
+    buyer = contact(crm, name='Buyer', source='manual')
+    item = product(crm)
+    o = order(crm, buyer, item, request_key='portal-pay-1')
+    pay = crm.client.post(f"/api/crm/orders/{o['id']}/payments", json={
+        'external_id': 'portal-pay-ext', 'amount_minor': 100000,
+        'kind': 'payment', 'evidence': 'Выписка банка',
+    })
+    assert pay.status_code == 200, pay.text
+
+    listed = crm.client.get('/api/crm/projects/p/contacts?source=telegram').json()
+    assert listed['total'] >= 1
+    assert any(c['id'] == tg['id'] for c in listed['items'])
+    assert not any(c['id'] == site['id'] for c in listed['items'])
+
+    site_list = crm.client.get('/api/crm/projects/p/contacts?source=site').json()
+    assert any(c['id'] == site['id'] for c in site_list['items'])
+
+    purch = crm.client.get('/api/crm/projects/p/contacts?source=purchase').json()
+    assert any(c['id'] == buyer['id'] and c['is_purchaser'] for c in purch['items'])
+    assert not any(c['id'] == imported['id'] for c in purch['items'])
+
+    detail = crm.client.get(f"/api/crm/contacts/{buyer['id']}").json()
+    assert detail['is_purchaser'] is True
+    assert detail['learning']['available'] is False
+    assert detail['learning']['attendance'] == []
+
+    report = crm.client.get('/api/crm/projects/p/analytics?from_date=1970-01-01&to_date=2099-12-31').json()
+    assert report['money']['received_minor'] >= 100000
+    assert report['contacts']['new'] >= 4
+    assert report['learning']['available'] is False
+    assert report['learning']['attendance'] == []
+    assert 'by_source' in report['contacts']
+
+    matrix = crm.client.get('/api/crm/staff/cms-matrix').json()
+    assert matrix['sync'] == 'manual_v1'
+    assert any(x['id'] == 'no_learner_matrix' and x['done'] for x in matrix['checklist'])
