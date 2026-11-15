@@ -16,9 +16,9 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications
     from app.ops_routers import portal as ops_portal, wizards as ops_wizards
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, observability, ops_portal, ops_wizards):
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications, observability, ops_portal, ops_wizards):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
