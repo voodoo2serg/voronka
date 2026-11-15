@@ -367,6 +367,11 @@ def test_migration_0008_wave_c_matches_models(crm):
             assert 'person_id' in {c['name'] for c in inspector.get_columns('crm_profiles')}
             assert 'person_id' in {c['name'] for c in inspector.get_columns('crm_orders')}
             assert 'agreement_id' in {c['name'] for c in inspector.get_columns('crm_orders')}
+            module.downgrade()
+        assert not wave_c.intersection(inspect(conn).get_table_names())
+        # Payment dependents must be gone so 0004 can drop crm_payments on Postgres CI.
+        assert 'crm_payment_allocations' not in inspect(conn).get_table_names()
+        assert 'crm_refunds' not in inspect(conn).get_table_names()
         Base.metadata.create_all(bind)
 
 

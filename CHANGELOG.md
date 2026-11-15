@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — Wave C customer graph + ledger (2026-11-15)
+## Unreleased — Wave C migration downgrade fix (2026-11-16)
+
+- Implement real `0008.downgrade()` so CI `alembic downgrade base` can drop `crm_payments` (drops `crm_refunds` / `crm_payment_allocations` first).
+
+## Wave C customer graph + ledger (2026-11-15)
 
 Signal v5.1 overnight Wave C in Voronka. Owner constraints A–G: no listmonk; HMAC M2M kept; money SoR Voronka; additive migrations; CRM UI not broken.
 
