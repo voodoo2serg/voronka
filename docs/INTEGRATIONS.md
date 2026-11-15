@@ -53,3 +53,5 @@ Campaign payload может включать `asset_id` (`video_note`/`video`). 
 Интеграция должна выполняться через ограниченные M2M API, без общей БД, без копирования клиентских профилей и без второго отправителя Telegram/MAX/VK. До реального запуска обязательны проверки согласий, совместимости медиа, `preflight`, повторного запуска и доступов.
 
 **SIG-4 (реализовано):** scoped HMAC API `/api/crm/m2m/*` — см. `docs/M2M_COMMUNICATIONS_OPENAPI.yaml`. Env: `SIGNAL_M2M_SECRET`, `SIGNAL_M2M_PROJECT_ALLOWLIST`, `SIGNAL_M2M_SCOPES`. Staff `crm_session` не используется.
+
+**Wave C (2026-11-15):** Person graph + receivables ledger in Voronka — см. [WAVE_C_CUSTOMER_GRAPH.md](./WAVE_C_CUSTOMER_GRAPH.md). M2M HMAC transitional (owner F); additive `person:read` / `timeline:read`. Money SoR remains Voronka (`OrderLine`/`Receivable`/`PaymentAllocation`/`Refund`).

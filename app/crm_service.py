@@ -189,6 +189,9 @@ def create_profile(db, project_id, values):
                   source=values.get("source") or "manual", tags=values.get("tags", []), extra=values.get("extra", {}))
     db.add(row)
     db.flush()
+    # Wave C CRM-001/005: Person + ContactPoints (additive; UI unchanged)
+    from app import person_graph
+    person_graph.sync_profile_contact_points(db, row)
     return row
 
 
@@ -227,6 +230,15 @@ def available_identity(db, profile, connection_id):
         return None, "Подключение недоступно проекту"
     if profile.stopped:
         return None, "Отказ от сообщений"
+    # Wave C CRM-003: channel consent (denied/revoked blocks marketing including queue)
+    if profile.person_id:
+        from app import person_graph
+        channel = connection.platform or "telegram"
+        allowed, reason = person_graph.marketing_allowed(
+            db, profile.person_id, channel, connection_id=connection.id
+        )
+        if not allowed:
+            return None, f"Нет согласия на сообщения ({reason})"
     if connection.platform == "email":
         from types import SimpleNamespace
         if not profile.email or not profile.extra.get("email_allowed"):
@@ -245,4 +257,6 @@ def ensure_profile(db, identity, project_id):
         row = Profile(id=uid(), contact_id=identity.contact_id, project_id=project_id,
                       name=identity.name or identity.external_user_id, source="bot")
         db.add(row); db.flush()
+    from app import person_graph
+    person_graph.sync_profile_contact_points(db, row)
     return row

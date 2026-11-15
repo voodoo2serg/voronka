@@ -20,6 +20,8 @@ from app.crm_service import (
 from app.db import now as db_now
 from app.entitlement import queue_for_payment, redact_robokassa_params
 from app import integrations
+from app import ledger
+from app import person_graph
 
 router = APIRouter()
 
@@ -130,7 +132,8 @@ def add_order(pid: str, body: OrderBody, admin=Depends(crm_actor)):
                 raise HTTPException(409, "Ключ уже использован для другого заказа")
             get_profile(db, admin, prior.profile_id)
             return {**encode(prior), **balance(db, prior)}
-        if get_profile(db, admin, body.profile_id).project_id != pid:
+        profile = get_profile(db, admin, body.profile_id)
+        if profile.project_id != pid:
             raise HTTPException(404, "Клиент недоступен")
         product = must(db.get(Product, body.product_id))
         if product.project_id != pid or not product.active:
@@ -153,11 +156,16 @@ def add_order(pid: str, body: OrderBody, admin=Depends(crm_actor)):
             raise HTTPException(422, "Сумма взносов должна совпадать с итогом заказа")
         if any(x.due_at.tzinfo is None for x in body.installments):
             raise HTTPException(422, "Укажите часовой пояс взноса")
+        person_id = profile.person_id
+        if not person_id:
+            person_id = person_graph.ensure_person_for_profile(db, profile).id
         row = Order(id=uid(), project_id=pid, profile_id=body.profile_id, product_id=product.id, request_key=body.request_key,
+                    person_id=person_id,
                     total_minor=total, installments=[x.model_dump(mode="json") for x in sorted(body.installments, key=lambda x:x.due_at)],
                     snapshot={"name": product.name, "kind": product.kind, "price_minor": base_price, "catalog_price_minor": product.price_minor, "price_reason": body.price_reason, "currency": product.currency,
                               "discount_minor": discount, "promo": body.promo_code.strip().upper(), "config": product.config})
         db.add(row); db.flush()
+        ledger.ensure_order_ledger(db, row)
         audit(db, admin, "order.created", order_id=row.id)
         return {**encode(row), **balance(db, row)}
 
@@ -213,7 +221,10 @@ def record_money(oid: str, body: MoneyBody, admin=Depends(crm_actor)):
             db.add(payment)
             db.flush()
             if body.kind == "payment":
+                ledger.allocate_payment(db, payment, order)
                 queue_for_payment(db, payment)
+            else:
+                ledger.record_refund_ledger(db, payment, order, reason=body.evidence)
             audit(db, admin, "money.recorded", order_id=oid, amount_minor=body.amount_minor, payment_kind=body.kind)
         return balance(db, order)
 
@@ -382,6 +393,9 @@ async def robokassa_result(request: Request):
                 )
                 db.add(payment)
                 db.flush()
+                order_row = db.get(Order, invoice.order_id)
+                if order_row:
+                    ledger.allocate_payment(db, payment, order_row)
                 # Live money stays even if entitlement/outbox later fails.
                 queue_for_payment(db, payment)
             invoice.state = "paid"

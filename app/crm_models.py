@@ -29,6 +29,7 @@ class Profile(Base):
     __table_args__ = (UniqueConstraint("contact_id", "project_id"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id"))
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True, index=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     email: Mapped[str] = mapped_column(String(250), default="")
@@ -63,6 +64,7 @@ class Deal(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     profile_id: Mapped[str] = mapped_column(ForeignKey("crm_profiles.id"), index=True)
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True)
     product_id: Mapped[str | None] = mapped_column(ForeignKey("crm_products.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(250))
     stage: Mapped[str] = mapped_column(String(40), default="new")
@@ -131,6 +133,8 @@ class Order(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     profile_id: Mapped[str] = mapped_column(ForeignKey("crm_profiles.id"))
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True)
+    agreement_id: Mapped[str | None] = mapped_column(ForeignKey("crm_agreements.id"), nullable=True)
     product_id: Mapped[str] = mapped_column(ForeignKey("crm_products.id"))
     request_key: Mapped[str] = mapped_column(String(100))
     total_minor: Mapped[int] = mapped_column(BigInteger)
@@ -337,3 +341,311 @@ class OutreachRecipient(Base):
     prepared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# --- Wave C: Person graph, consent, interactions, journeys, agreements, ledger, OIDC ---
+
+
+class Person(Base):
+    """Canonical natural person across channels (CRM-001). Not owned by Signal."""
+    __tablename__ = "crm_persons"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    lifecycle_stage: Mapped[str] = mapped_column(String(40), default="active")
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    merged_into_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True)
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PersonLink(Base):
+    __tablename__ = "crm_person_links"
+    __table_args__ = (UniqueConstraint("service", "native_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    service: Mapped[str] = mapped_column(String(40))
+    native_id: Mapped[str] = mapped_column(String(160))
+    verified_by: Mapped[str] = mapped_column(String(40), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MergeReview(Base):
+    __tablename__ = "crm_merge_reviews"
+    __table_args__ = (CheckConstraint("state IN ('pending', 'applied', 'rejected', 'undone')"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"))
+    target_person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"))
+    state: Mapped[str] = mapped_column(String(30), default="pending")
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ContactPoint(Base):
+    """Channel endpoint owned by a Person (CRM-005)."""
+    __tablename__ = "crm_contact_points"
+    __table_args__ = (UniqueConstraint("person_id", "channel", "address_hash"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(30))
+    raw_value: Mapped[str] = mapped_column(String(250), default="")
+    normalized_value: Mapped[str] = mapped_column(String(250))
+    address_hash: Mapped[str] = mapped_column(String(64), index=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    reachable: Mapped[bool] = mapped_column(Boolean, default=True)
+    connection_id: Mapped[str | None] = mapped_column(ForeignKey("connections.id"), nullable=True)
+    identity_id: Mapped[str | None] = mapped_column(ForeignKey("identities.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ContactVerification(Base):
+    __tablename__ = "crm_contact_verifications"
+    __table_args__ = (CheckConstraint("outcome IN ('verified', 'rejected', 'expired')"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    contact_point_id: Mapped[str] = mapped_column(ForeignKey("crm_contact_points.id"), index=True)
+    method: Mapped[str] = mapped_column(String(40))
+    outcome: Mapped[str] = mapped_column(String(30))
+    evidence: Mapped[str] = mapped_column(String(500), default="")
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Consent(Base):
+    """Messaging permission by contact point + purpose (CRM-003)."""
+    __tablename__ = "crm_consents"
+    __table_args__ = (
+        UniqueConstraint("contact_point_id", "purpose"),
+        CheckConstraint("status IN ('granted', 'denied', 'revoked', 'unknown')"),
+        CheckConstraint("purpose IN ('marketing', 'transactional', 'service', 'analytics')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    contact_point_id: Mapped[str] = mapped_column(ForeignKey("crm_contact_points.id"), index=True)
+    purpose: Mapped[str] = mapped_column(String(40))
+    lawful_basis: Mapped[str] = mapped_column(String(40), default="consent")
+    status: Mapped[str] = mapped_column(String(20))
+    evidence: Mapped[str] = mapped_column(String(500), default="")
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Interaction(Base):
+    """Normalized touch journal entry (CRM-006)."""
+    __tablename__ = "crm_interactions"
+    __table_args__ = (
+        UniqueConstraint("source_service", "external_event_key"),
+        CheckConstraint("direction IN ('inbound', 'outbound', 'system')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+    contact_point_id: Mapped[str | None] = mapped_column(ForeignKey("crm_contact_points.id"), nullable=True)
+    communication_id: Mapped[str | None] = mapped_column(ForeignKey("crm_communications.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(60))
+    direction: Mapped[str] = mapped_column(String(20), default="inbound")
+    channel: Mapped[str] = mapped_column(String(30), default="")
+    evidence_status: Mapped[str] = mapped_column(String(30), default="recorded")
+    source_service: Mapped[str] = mapped_column(String(40), default="voronka")
+    external_event_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Communication(Base):
+    __tablename__ = "crm_communications"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'accepted', 'delivered', 'failed', 'partial', 'cancelled')"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    contact_point_id: Mapped[str | None] = mapped_column(ForeignKey("crm_contact_points.id"), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    campaign_id: Mapped[str | None] = mapped_column(ForeignKey("crm_campaigns.id"), nullable=True)
+    journey_step_id: Mapped[str | None] = mapped_column(
+        ForeignKey("crm_journey_steps.id", use_alter=True, name="fk_crm_communications_journey_step"),
+        nullable=True,
+    )
+    outbox_id: Mapped[str | None] = mapped_column(ForeignKey("outbox.id"), nullable=True)
+    direction: Mapped[str] = mapped_column(String(20), default="outbound")
+    purpose: Mapped[str] = mapped_column(String(40), default="marketing")
+    channel: Mapped[str] = mapped_column(String(30), default="")
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    provider_message_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    body_preview: Mapped[str] = mapped_column(String(500), default="")
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class DeliveryEvent(Base):
+    __tablename__ = "crm_delivery_events"
+    __table_args__ = (
+        UniqueConstraint("communication_id", "external_event_key"),
+        CheckConstraint(
+            "normalized_status IN ('queued', 'accepted', 'delivered', 'failed', 'read', 'unknown')"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    communication_id: Mapped[str] = mapped_column(ForeignKey("crm_communications.id"), index=True)
+    platform_status: Mapped[str] = mapped_column(String(80), default="")
+    normalized_status: Mapped[str] = mapped_column(String(30))
+    evidence_ref: Mapped[str] = mapped_column(String(200), default="")
+    external_event_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Reply(Base):
+    __tablename__ = "crm_replies"
+    __table_args__ = (UniqueConstraint("communication_id", "provider_message_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    communication_id: Mapped[str] = mapped_column(ForeignKey("crm_communications.id"))
+    provider_message_id: Mapped[str] = mapped_column(String(160), default="")
+    kind: Mapped[str] = mapped_column(String(40), default="message")
+    body_preview: Mapped[str] = mapped_column(String(500), default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Journey(Base):
+    """Warm-up / sequenced touches (CRM-007)."""
+    __tablename__ = "crm_journeys"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'paused', 'completed', 'cancelled', 'opted_out')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    campaign_id: Mapped[str | None] = mapped_column(ForeignKey("crm_campaigns.id"), nullable=True)
+    purpose: Mapped[str] = mapped_column(String(40), default="warmup")
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class JourneyStep(Base):
+    __tablename__ = "crm_journey_steps"
+    __table_args__ = (
+        UniqueConstraint("journey_id", "step_no"),
+        CheckConstraint(
+            "status IN ('pending', 'due', 'sent', 'skipped', 'failed', 'waiting_reply', 'done')"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("crm_journeys.id"), index=True)
+    step_no: Mapped[int] = mapped_column(Integer)
+    condition: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    communication_id: Mapped[str | None] = mapped_column(ForeignKey("crm_communications.id"), nullable=True)
+    notes: Mapped[str] = mapped_column(String(500), default="")
+
+
+class Agreement(Base):
+    """Legal agreement distinct from Deal.won (CRM-008)."""
+    __tablename__ = "crm_agreements"
+    __table_args__ = (
+        CheckConstraint(
+            "legal_status IN ('draft', 'sent', 'accepted', 'signed', 'void', 'expired')"
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    deal_id: Mapped[str | None] = mapped_column(ForeignKey("crm_deals.id"), nullable=True)
+    legal_status: Mapped[str] = mapped_column(String(30), default="draft")
+    title: Mapped[str] = mapped_column(String(250), default="")
+    offer_acceptance: Mapped[bool] = mapped_column(Boolean, default=False)
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evidence: Mapped[str] = mapped_column(String(2000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OrderLine(Base):
+    """Line items for order ledger (PAY-002)."""
+    __tablename__ = "crm_order_lines"
+    __table_args__ = (CheckConstraint("amount_minor >= 0"), CheckConstraint("quantity >= 1"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("crm_orders.id"), index=True)
+    product_id: Mapped[str] = mapped_column(ForeignKey("crm_products.id"))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3), default="RUB")
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Receivable(Base):
+    __tablename__ = "crm_receivables"
+    __table_args__ = (
+        UniqueConstraint("order_id", "sequence"),
+        CheckConstraint("due_minor >= 0"),
+        CheckConstraint("allocated_minor >= 0"),
+        CheckConstraint("state IN ('open', 'partial', 'paid', 'cancelled', 'written_off')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("crm_orders.id"), index=True)
+    order_line_id: Mapped[str | None] = mapped_column(ForeignKey("crm_order_lines.id"), nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=1)
+    due_minor: Mapped[int] = mapped_column(BigInteger)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    state: Mapped[str] = mapped_column(String(30), default="open")
+    allocated_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PaymentAllocation(Base):
+    __tablename__ = "crm_payment_allocations"
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0"),
+        CheckConstraint("state IN ('active', 'reversed')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("crm_payments.id"))
+    order_id: Mapped[str] = mapped_column(ForeignKey("crm_orders.id"), index=True)
+    receivable_id: Mapped[str | None] = mapped_column(ForeignKey("crm_receivables.id"), nullable=True)
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(String(30), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Refund(Base):
+    __tablename__ = "crm_refunds"
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0"),
+        CheckConstraint("status IN ('pending', 'confirmed', 'failed', 'cancelled')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("crm_payments.id"), index=True)
+    refund_payment_id: Mapped[str | None] = mapped_column(ForeignKey("crm_payments.id"), nullable=True)
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(30), default="confirmed")
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OidcLink(Base):
+    """Issuer+sub mapping for staff/clients (AUTH-004). Never elevates ACL by email alone."""
+    __tablename__ = "crm_oidc_links"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject"),
+        CheckConstraint("provisioning_status IN ('linked', 'pending', 'revoked', 'conflict')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    issuer: Mapped[str] = mapped_column(String(250))
+    subject: Mapped[str] = mapped_column(String(250))
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("crm_accounts.id"), nullable=True, index=True)
+    contact_id: Mapped[str | None] = mapped_column(ForeignKey("contacts.id"), nullable=True)
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True, index=True)
+    profile_id: Mapped[str | None] = mapped_column(ForeignKey("crm_profiles.id"), nullable=True)
+    provisioning_status: Mapped[str] = mapped_column(String(30), default="linked")
+    email_hint: Mapped[str] = mapped_column(String(250), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

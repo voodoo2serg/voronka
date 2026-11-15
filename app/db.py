@@ -74,6 +74,7 @@ class Entry(Base):
 class Contact(Base):
     __tablename__ = "contacts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("crm_persons.id"), nullable=True, index=True)
     stage: Mapped[str] = mapped_column(String(80), default="Новый")
     score: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

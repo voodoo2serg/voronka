@@ -253,7 +253,8 @@ def deals(pid: str, admin=Depends(crm_actor)):
 def add_deal(pid: str, body: DealBody, admin=Depends(crm_actor)):
     with Session.begin() as db:
         project_access(db, admin, pid)
-        if get_profile(db, admin, body.profile_id).project_id != pid or body.stage not in STAGES:
+        profile = get_profile(db, admin, body.profile_id)
+        if profile.project_id != pid or body.stage not in STAGES:
             raise HTTPException(422, "Проект клиента или этап неверен")
         if body.product_id and must(db.get(Product, body.product_id)).project_id != pid:
             raise HTTPException(404, "Продукт недоступен")
@@ -265,7 +266,12 @@ def add_deal(pid: str, body: DealBody, admin=Depends(crm_actor)):
             project_access(db, a, pid)
             if not a.active:
                 raise HTTPException(422, "Сотрудник отключён")
-        row = Deal(id=uid(), project_id=pid, profile_id=body.profile_id, title=body.title, product_id=body.product_id,
+        person_id = profile.person_id
+        if not person_id:
+            from app import person_graph
+            person_id = person_graph.ensure_person_for_profile(db, profile).id
+        row = Deal(id=uid(), project_id=pid, profile_id=body.profile_id, person_id=person_id,
+                   title=body.title, product_id=body.product_id,
                    stage=body.stage, amount_minor=body.amount_minor, next_action=body.next_action, due_at=body.due_at, owner_id=owner)
         db.add(row); db.flush()
         audit(db, admin, "deal.created", deal_id=row.id)

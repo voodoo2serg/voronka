@@ -1,0 +1,31 @@
+# Changelog
+
+## Unreleased — Wave C customer graph + ledger (2026-11-15)
+
+Signal v5.1 overnight Wave C in Voronka. Owner constraints A–G: no listmonk; HMAC M2M kept; money SoR Voronka; additive migrations; CRM UI not broken.
+
+### Added
+
+- **CRM-001 / CRM-005:** `Person`, `PersonLink`, `MergeReview`, `ContactPoint`, `ContactVerification`; profiles/contacts gain nullable `person_id`; auto-provision on contact create; merge apply/undo.
+- **CRM-002:** Customer 360 timeline API (staff + M2M).
+- **CRM-003:** `Consent` by channel purpose; marketing deny/revoke blocks `available_identity` and pauses journeys.
+- **CRM-006:** `Interaction`, `Communication`, `DeliveryEvent`, `Reply` with webhook-style dedup keys.
+- **CRM-007:** `Journey` / `JourneyStep` warmup sequencing + manual override.
+- **CRM-008:** `Agreement` distinct from Deal; explicit sign with evidence.
+- **PAY-002:** `OrderLine`, `Receivable`, `PaymentAllocation`, `Refund`; ledger summary endpoint; hooks on order/payment/Robokassa.
+- **AUTH-004 (scaffold):** `OidcLink` issuer+sub mapping; no email-only ACL elevation.
+- Alembic **`0008_wave_c_customer_graph`**.
+- Docs: `docs/WAVE_C_CUSTOMER_GRAPH.md`.
+- Tests: `tests/test_wave_c_customer_graph.py`.
+
+### M2M (stable for Signal Wave D)
+
+- Existing HMAC campaign/asset/hub routes and scopes **unchanged**.
+- Additive scopes: `person:read`, `timeline:read`, `consent:write`.
+- Additive routes: M2M person + timeline under `/api/crm/m2m/projects/{pid}/persons/...`.
+
+### Deferred
+
+- Full Keycloak interactive CRM login (AUTH-002 dependency).
+- CRM UI redesign around Person graph.
+- OAuth2 client-credentials replacement for HMAC (SIG-004 later).
