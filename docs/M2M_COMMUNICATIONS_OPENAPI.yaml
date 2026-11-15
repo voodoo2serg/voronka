@@ -1,0 +1,56 @@
+openapi: 3.1.0
+info:
+  title: Voronka M2M Communications (Signal)
+  version: 0.1.0
+  description: |
+    Scoped server-to-server API for СИГНАЛ (SIG-4).
+    Normative twin: signal repo docs/VORONKA_M2M_OPENAPI.yaml
+    Auth: HMAC wire v1 (SIGNAL_M2M_SECRET). No crm_session. No bot tokens in responses.
+servers:
+  - url: https://voronka.solo-pr.ru
+paths:
+  /api/crm/m2m/projects/{pid}/connections/hub:
+    get:
+      summary: Connections hub (presence flags only)
+      x-required-scopes: [connection:hub:read]
+  /api/crm/m2m/projects/{pid}/media-assets:
+    get:
+      summary: Media assets list (redacted)
+      x-required-scopes: [asset:read]
+  /api/crm/m2m/projects/{pid}/assets/import:
+    post:
+      summary: Import asset with sha256 checksum
+      x-required-scopes: [asset:import]
+  /api/crm/m2m/projects/{pid}/contacts:
+    get:
+      summary: Limited contact/tag projection
+      x-required-scopes: [contact:segment:read]
+  /api/crm/m2m/projects/{pid}/campaigns:
+    post:
+      summary: Create draft campaign (external_idempotency_key)
+      x-required-scopes: [campaign:create]
+  /api/crm/m2m/campaigns/{cid}/preflight:
+    post:
+      summary: Preflight
+      x-required-scopes: [campaign:preflight]
+  /api/crm/m2m/campaigns/{cid}/launch:
+    post:
+      summary: Launch into Outbox (idempotent)
+      x-required-scopes: [campaign:launch]
+  /api/crm/m2m/campaigns/{cid}/cancel:
+    post:
+      summary: Cancel campaign + pending outbox
+      x-required-scopes: [campaign:cancel]
+  /api/crm/m2m/campaigns/{cid}/delivery:
+    get:
+      summary: Delivery aggregate + honest projection
+      x-required-scopes: [campaign:read]
+components:
+  securitySchemes:
+    SignalHmac:
+      type: apiKey
+      in: header
+      name: X-Signal-Signature
+      description: >
+        Also require X-Signal-Timestamp, X-Signal-Jti, X-Signal-Service, X-Signal-Scopes.
+        signature = HMAC-SHA256(secret, "{ts}." + raw_body)

@@ -13,6 +13,10 @@
 
 **Shared Postgres между репо — запрещён.** Связь только через signed HTTPS / M2M Bearer.
 
+## Signal (СИГНАЛ) M2M
+
+Studio/orchestrator at `signal.vodopetov.ru` — **not** a second CRM/Outbox. Scoped HMAC API under `/api/crm/m2m/*` (see `docs/M2M_COMMUNICATIONS_OPENAPI.yaml`). Auth: `SIGNAL_M2M_SECRET` + `X-Signal-*` headers (scopes, jti replay). Staff `crm_session` must not be reused.
+
 Chatwoot и EspoCRM **не** входят в стек.
 
 ## API, которые сайт (solo_pr) может вызывать
