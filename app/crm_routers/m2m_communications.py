@@ -616,3 +616,78 @@ async def m2m_delivery(
             "projection": projection,
             "external_idempotency_key": (campaign.report or {}).get("external_idempotency_key"),
         }
+
+
+# --- Wave C additive M2M (existing campaign/asset/hub contracts unchanged) ---
+
+
+@router.get("/projects/{pid}/persons/{person_id}")
+def m2m_person(
+    pid: str,
+    person_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("person:read")),
+):
+    from app.crm_models import ContactPoint, Person, PersonLink
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    with Session() as db:
+        person = must(db.get(Person, person_id))
+        if person.merged_into_id:
+            person = must(db.get(Person, person.merged_into_id))
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person.id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        points = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == person.id)))
+        links = list(db.scalars(select(PersonLink).where(PersonLink.person_id == person.id)))
+        _m2m_audit(db, principal, "person.read", person_id=person.id, project_id=pid)
+        return {
+            "person": encode(person),
+            "contact_points": [encode(p) for p in points],
+            "links": [encode(l) for l in links],
+            "profile_ids": [p.id for p in profiles],
+        }
+
+
+@router.get("/projects/{pid}/persons/{person_id}/timeline")
+def m2m_timeline(
+    pid: str,
+    person_id: str,
+    request: Request,
+    limit: int = 50,
+    auth_ctx=Depends(make_m2m_dep("timeline:read")),
+):
+    from app.crm_models import Interaction, Order, Payment, Agreement
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    if not 1 <= limit <= 200:
+        raise HTTPException(422, "limit 1..200")
+    with Session() as db:
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person_id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        items = []
+        for ix in db.scalars(
+            select(Interaction)
+            .where(Interaction.person_id == person_id)
+            .order_by(Interaction.occurred_at.desc())
+            .limit(limit)
+        ):
+            items.append({"type": "interaction", **encode(ix)})
+        for profile in profiles:
+            for order in db.scalars(select(Order).where(Order.profile_id == profile.id)):
+                items.append({"type": "order", **encode(order)})
+                for pay in db.scalars(select(Payment).where(Payment.order_id == order.id)):
+                    items.append({"type": "payment", **encode(pay)})
+        for ag in db.scalars(
+            select(Agreement).where(Agreement.person_id == person_id, Agreement.project_id == pid)
+        ):
+            items.append({"type": "agreement", **encode(ag)})
+        _m2m_audit(db, principal, "timeline.read", person_id=person_id, project_id=pid)
+        return {"person_id": person_id, "project_id": pid, "items": items[:limit]}

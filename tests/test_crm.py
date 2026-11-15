@@ -16,9 +16,9 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications, customer_graph
     from app.ops_routers import portal as ops_portal, wizards as ops_wizards
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications, observability, ops_portal, ops_wizards):
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, portal, m2m_communications, customer_graph, observability, ops_portal, ops_wizards):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -234,11 +234,21 @@ def test_migration_0004_matches_models_and_downgrades(crm):
     later={
         'crm_outreach_batches','crm_outreach_recipients',
         'crm_provider_events','crm_entitlement_jobs','crm_integration_outbox','crm_integration_inbox','crm_ai_rules',
+        # Wave C (0008)
+        'crm_persons','crm_person_links','crm_merge_reviews','crm_contact_points','crm_contact_verifications',
+        'crm_consents','crm_interactions','crm_communications','crm_delivery_events','crm_replies',
+        'crm_journeys','crm_journey_steps','crm_agreements','crm_order_lines','crm_receivables',
+        'crm_payment_allocations','crm_refunds','crm_oidc_links',
     }
-    later_columns={'crm_campaigns': {'asset_id'}}
+    later_columns={
+        'crm_campaigns': {'asset_id'},
+        'crm_profiles': {'person_id'},
+        'crm_orders': {'person_id', 'agreement_id'},
+        'crm_deals': {'person_id'},
+    }
     with bind.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
-            if table.name.startswith('crm_'): table.drop(conn)
+            if table.name.startswith('crm_'): table.drop(conn, checkfirst=True)
         spec=importlib.util.spec_from_file_location('crm_migration','migrations/versions/0004_crm_workspace.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         with Operations.context(MigrationContext.configure(conn)):
@@ -306,6 +316,57 @@ def test_migration_0007_integrations_matches_models_and_downgrades(crm):
             module.downgrade()
         assert not tables.intersection(inspect(conn).get_table_names())
         # asset_id may remain on SQLite after downgrade; recreate full metadata for later tests.
+        Base.metadata.create_all(bind)
+
+
+def test_migration_0008_wave_c_matches_models(crm):
+    import importlib.util
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
+    from app.db import Base
+    bind = crm.db.kw['bind']
+    if bind.dialect.name != 'sqlite':
+        pytest.skip('Uses isolated SQLite metadata, PG upgrade tested in CI')
+    wave_c = {
+        'crm_persons', 'crm_person_links', 'crm_merge_reviews', 'crm_contact_points',
+        'crm_contact_verifications', 'crm_consents', 'crm_interactions', 'crm_communications',
+        'crm_delivery_events', 'crm_replies', 'crm_journeys', 'crm_journey_steps',
+        'crm_agreements', 'crm_order_lines', 'crm_receivables', 'crm_payment_allocations',
+        'crm_refunds', 'crm_oidc_links',
+    }
+    with bind.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name in wave_c:
+                table.drop(conn, checkfirst=True)
+        # Drop additive columns if present so upgrade can re-add (SQLite may no-op FK add).
+        for stmt in (
+            "ALTER TABLE contacts DROP COLUMN person_id",
+            "ALTER TABLE crm_profiles DROP COLUMN person_id",
+            "ALTER TABLE crm_orders DROP COLUMN person_id",
+            "ALTER TABLE crm_orders DROP COLUMN agreement_id",
+            "ALTER TABLE crm_deals DROP COLUMN person_id",
+        ):
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                pass
+        spec = importlib.util.spec_from_file_location(
+            'wave_c_migration', 'migrations/versions/0008_wave_c_customer_graph.py'
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with Operations.context(MigrationContext.configure(conn)):
+            module.upgrade()
+            inspector = inspect(conn)
+            for table in Base.metadata.sorted_tables:
+                if table.name in wave_c:
+                    assert set(c.name for c in table.columns) == {
+                        c['name'] for c in inspector.get_columns(table.name)
+                    }, table.name
+            assert 'person_id' in {c['name'] for c in inspector.get_columns('crm_profiles')}
+            assert 'person_id' in {c['name'] for c in inspector.get_columns('crm_orders')}
+            assert 'agreement_id' in {c['name'] for c in inspector.get_columns('crm_orders')}
         Base.metadata.create_all(bind)
 
 

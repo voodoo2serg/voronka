@@ -3,9 +3,10 @@ info:
   title: Voronka M2M Communications (Signal)
   version: 0.1.0
   description: |
-    Scoped server-to-server API for СИГНАЛ (SIG-4).
+    Scoped server-to-server API for СИГНАЛ (SIG-4 + Wave C additive person/timeline).
     Normative twin: signal repo docs/VORONKA_M2M_OPENAPI.yaml
     Auth: HMAC wire v1 (SIGNAL_M2M_SECRET). No crm_session. No bot tokens in responses.
+    Wave C: campaign/asset/hub contracts unchanged; person:read / timeline:read are additive.
 servers:
   - url: https://voronka.solo-pr.ru
 paths:
@@ -45,6 +46,14 @@ paths:
     get:
       summary: Delivery aggregate + honest projection
       x-required-scopes: [campaign:read]
+  /api/crm/m2m/projects/{pid}/persons/{person_id}:
+    get:
+      summary: Person + contact points (Wave C; SoR Voronka)
+      x-required-scopes: [person:read]
+  /api/crm/m2m/projects/{pid}/persons/{person_id}/timeline:
+    get:
+      summary: Customer 360 timeline projection
+      x-required-scopes: [timeline:read]
 components:
   securitySchemes:
     SignalHmac:

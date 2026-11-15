@@ -6,7 +6,7 @@
 
 | Класс | Владелец | Запрещено |
 |---|---|---|
-| Боты, воронки, CRM, media volume, Payment/Order/Invoice/AccessGrant, статистика продаж | **voronka** (home) | Писать ledger в SQLite сайта или learning DB |
+| Боты, воронки, CRM, Person/ContactPoint/Consent/Journey/Agreement, media volume, Payment/Order/OrderLine/Receivable/Allocation/Refund/Invoice/AccessGrant, статистика продаж | **voronka** (home) | Писать ledger или Person graph в Signal/сайте/LMS; shared Postgres |
 | Регистрации, согласия 152‑ФЗ, ЛК, CMS, lead store | **solo_pr** (RU cloud) | Shared Postgres с home; Cloudflare D1 для ПДн |
 | Курсы, группы OpenOlat, enrollment adapter | **lms_end** (home) | Создавать Robokassa-заказы; FK в CRM money tables |
 | AI prompts / draft context | **voronka** | Автоотправка клиенту без действия менеджера |
@@ -16,6 +16,8 @@
 ## Signal (СИГНАЛ) M2M
 
 Studio/orchestrator at `signal.vodopetov.ru` — **not** a second CRM/Outbox. Scoped HMAC API under `/api/crm/m2m/*` (see `docs/M2M_COMMUNICATIONS_OPENAPI.yaml`). Auth: `SIGNAL_M2M_SECRET` + `X-Signal-*` headers (scopes, jti replay). Staff `crm_session` must not be reused.
+
+**Wave C:** Person/ContactPoint/timeline live in Voronka. Signal reads via additive M2M scopes `person:read` / `timeline:read` — must not invent Person tables. Existing campaign/asset/hub M2M paths remain stable for Signal Wave D.
 
 Chatwoot и EspoCRM **не** входят в стек.
 

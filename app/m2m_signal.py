@@ -24,6 +24,10 @@ DEFAULT_SCOPES = (
     "asset:import",
     "contact:segment:read",
     "connection:hub:read",
+    # Wave C additive (Signal Wave D may request these; existing scopes unchanged)
+    "person:read",
+    "timeline:read",
+    "consent:write",
 )
 
 CAMPAIGN_STAR = {
