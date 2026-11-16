@@ -30,3 +30,7 @@ Person/ContactPoint, согласия/suppression, многоканальные 
 3. Не писать чувствительные данные в RAGA/Umami; asset-originals в Media Registry; consent and financial truth только в Voronka.
 4. Сохранить независимое исполнение сервисов при временной недоступности Signal. Перед опасными миграциями backup+restore и rollback.
 5. Обновить канонический status registry в `solo_pr/docs/signal/` вместе с изменением, а не через месяцы после деплоя.
+
+## Производственный backlog после дедупликации (PROD / OPS)
+
+**[Ревизия PROD-001…013 и три новых GitHub Issues](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/PRODUCTION_BACKLOG_RECONCILIATION_v5_2.md)** — **источник приоритизации**. Не создавать дубликаты по PROD-002/003/006…012: это уточнения уже существующих `AUTH-*`, `PAY-101`, `OPS-102`, `JOURNEY-*`, `MEDIA-*`, `ANALYTICS-*`, `CRM-102`, `MAIL-*`, `RAGA-*`. Новый runtime backlog: [OPS-103 — Git/VPS drift](https://github.com/voodoo2serg/solo_pr/issues/16), [OPS-104 — event reconciliation](https://github.com/voodoo2serg/voronka/issues/13), [OPS-105 — diagnostic UI](https://github.com/voodoo2serg/signal/issues/13). **Код этих новых задач пока не реализован.**
