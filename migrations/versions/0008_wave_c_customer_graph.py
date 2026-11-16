@@ -355,5 +355,60 @@ def upgrade():
 
 
 def downgrade():
-    # Additive wave — keep forward-only in production; empty for Alembic completeness.
-    pass
+    """Reverse Wave C so `alembic downgrade base` can drop 0004 money tables (CI gate)."""
+    bind = op.get_bind()
+    dialect = bind.dialect.name
+
+    def _tables():
+        return set(sa.inspect(bind).get_table_names())
+
+    def _drop_index(name: str, table: str):
+        try:
+            op.drop_index(name, table_name=table)
+        except Exception:
+            pass
+
+    def _drop_column(table: str, col: str, index: str | None = None):
+        if dialect == "sqlite":
+            return
+        cols = {c["name"] for c in sa.inspect(bind).get_columns(table)}
+        if col not in cols:
+            return
+        if index:
+            _drop_index(index, table)
+        op.drop_column(table, col)
+
+    # 1) Detach additive FKs from pre-Wave-C tables first.
+    _drop_column("crm_orders", "agreement_id")
+    _drop_column("crm_orders", "person_id")
+    _drop_column("crm_deals", "person_id")
+    _drop_column("crm_profiles", "person_id", "ix_crm_profiles_person_id")
+    _drop_column("contacts", "person_id", "ix_contacts_person_id")
+
+    # 2) Drop Wave C tables (dependents before parents; money FKs before 0004).
+    drop_order = [
+        ("crm_refunds", ["ix_crm_refunds_payment"]),
+        ("crm_payment_allocations", ["ix_crm_payment_allocations_order", "ix_crm_payment_allocations_payment"]),
+        ("crm_receivables", ["ix_crm_receivables_order"]),
+        ("crm_order_lines", ["ix_crm_order_lines_order"]),
+        ("crm_oidc_links", ["ix_crm_oidc_links_account", "ix_crm_oidc_links_person"]),
+        ("crm_journey_steps", ["ix_crm_journey_steps_journey"]),
+        ("crm_journeys", ["ix_crm_journeys_person", "ix_crm_journeys_project"]),
+        ("crm_replies", []),
+        ("crm_delivery_events", ["ix_crm_delivery_events_comm"]),
+        ("crm_communications", ["ix_crm_communications_person"]),
+        ("crm_interactions", ["ix_crm_interactions_person", "ix_crm_interactions_project"]),
+        ("crm_consents", ["ix_crm_consents_cp"]),
+        ("crm_contact_verifications", ["ix_crm_contact_verifications_cp"]),
+        ("crm_contact_points", ["ix_crm_contact_points_address_hash", "ix_crm_contact_points_person_id"]),
+        ("crm_agreements", ["ix_crm_agreements_person", "ix_crm_agreements_project"]),
+        ("crm_merge_reviews", []),
+        ("crm_person_links", ["ix_crm_person_links_person_id"]),
+        ("crm_persons", []),
+    ]
+    for name, indexes in drop_order:
+        if name not in _tables():
+            continue
+        for ix in indexes:
+            _drop_index(ix, name)
+        op.drop_table(name)
