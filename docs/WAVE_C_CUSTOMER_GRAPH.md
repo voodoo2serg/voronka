@@ -1,3 +1,9 @@
+> **Актуальность SIGNAL v5.2 (16.11.2026):** Канонические платформенные владельцы данных, SSO, Umami, suppression, Media Registry, RAGA Brand Voice и исполнимые тикеты — в [единой архитектуре solo_pr](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/PLATFORM_ACTUAL_ARCHITECTURE_v5_2.md). Этот файл сохраняется как описание *локального модуля или исторического этапа*. При расхождениях статусов, доменов, прежних планов listmonk/SSO и ролей источников истины приоритет имеет v5.2; факт DEPLOYED/E2E_PASS должен подтверждаться текущими smoke/CI, а не текстом старого документа.
+
+## Актуальность SIGNAL v5.2
+
+План: [тикеты v5.2](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/CONNECTIVITY_TICKETS_v5_2.md). Не изменять старую историю миграций и релизов ради документации.
+
 # Wave C — Customer graph + money (Voronka)
 
 **Date:** 2026-11-15  
