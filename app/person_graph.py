@@ -237,22 +237,79 @@ def set_consent(
 
 def marketing_allowed(db, person_id: str, channel: str, connection_id: str | None = None) -> tuple[bool, str]:
     """Delivery guard for marketing sends (CRM-003). Denied/revoked blocks; missing consent is soft-allow for messenger dialogs."""
-    q = select(ContactPoint).where(ContactPoint.person_id == person_id, ContactPoint.channel == channel)
-    if connection_id:
-        q = q.where(
-            (ContactPoint.connection_id == connection_id) | (ContactPoint.connection_id.is_(None))
-        )
-    points = list(db.scalars(q))
+    return send_allowed(
+        db,
+        person_id=person_id,
+        channel=channel,
+        purpose="marketing",
+        connection_id=connection_id,
+        missing_policy="soft_allow",
+    )
+
+
+def send_allowed(
+    db,
+    *,
+    person_id: str | None = None,
+    contact_point_id: str | None = None,
+    channel: str,
+    purpose: str = "marketing",
+    connection_id: str | None = None,
+    missing_policy: str = "soft_allow",
+) -> tuple[bool, str]:
+    """CRM-102 send-time / preflight: contact+channel+purpose → allow/deny.
+
+    missing_policy:
+      - soft_allow: no consent row → allow (legacy messenger dialogs)
+      - deny: no consent row → block (strict marketing / email)
+    """
+    if purpose not in {"marketing", "transactional", "service", "analytics"}:
+        raise HTTPException(422, "Неизвестная цель согласия")
+    if missing_policy not in {"soft_allow", "deny"}:
+        raise HTTPException(422, "Неизвестный missing_policy")
+
+    points: list[ContactPoint] = []
+    if contact_point_id:
+        cp = db.get(ContactPoint, contact_point_id)
+        if cp is None:
+            return False, "contact_point_not_found"
+        if channel and cp.channel != channel:
+            return False, "channel_mismatch"
+        if person_id and cp.person_id != person_id:
+            return False, "person_mismatch"
+        points = [cp]
+        person_id = cp.person_id
+    else:
+        if not person_id:
+            raise HTTPException(422, "person_id или contact_point_id обязателен")
+        q = select(ContactPoint).where(ContactPoint.person_id == person_id, ContactPoint.channel == channel)
+        if connection_id:
+            q = q.where(
+                (ContactPoint.connection_id == connection_id) | (ContactPoint.connection_id.is_(None))
+            )
+        points = list(db.scalars(q))
+
     if not points:
+        if purpose == "transactional":
+            return True, "no_contact_point_transactional"
+        if missing_policy == "deny":
+            return False, "no_contact_point"
         return True, "no_contact_point"
+
+    saw_grant = False
     for cp in points:
+        if not cp.reachable:
+            return False, "unreachable"
         consent = db.scalar(
-            select(Consent).where(Consent.contact_point_id == cp.id, Consent.purpose == "marketing")
+            select(Consent).where(Consent.contact_point_id == cp.id, Consent.purpose == purpose)
         )
         if consent and consent.status in {"denied", "revoked"}:
             return False, f"consent_{consent.status}"
-        if not cp.reachable:
-            return False, "unreachable"
+        if consent and consent.status == "granted":
+            saw_grant = True
+
+    if purpose == "marketing" and missing_policy == "deny" and not saw_grant:
+        return False, "consent_missing"
     return True, "ok"
 
 

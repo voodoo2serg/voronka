@@ -691,3 +691,76 @@ def m2m_timeline(
             items.append({"type": "agreement", **encode(ag)})
         _m2m_audit(db, principal, "timeline.read", person_id=person_id, project_id=pid)
         return {"person_id": person_id, "project_id": pid, "items": items[:limit]}
+
+
+class M2MSendPolicyCheck(Body):
+    channel: str = Field(min_length=1, max_length=30)
+    purpose: str = Field(default="marketing", max_length=40)
+    person_id: str | None = None
+    contact_point_id: str | None = None
+    connection_id: str | None = None
+    missing_policy: str = Field(default="deny", max_length=20)
+
+
+@router.post("/projects/{pid}/send-policy/check")
+def m2m_send_policy_check(
+    pid: str,
+    body: M2MSendPolicyCheck,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("person:read")),
+):
+    """CRM-102 send-time preflight for Signal/Mailu/other senders (HMAC M2M)."""
+    from app.crm_models import ContactPoint, Person
+    from app import person_graph as graph
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    if body.purpose not in {"marketing", "transactional", "service", "analytics"}:
+        raise HTTPException(422, "Неизвестная цель согласия")
+    if body.missing_policy not in {"soft_allow", "deny"}:
+        raise HTTPException(422, "Неизвестный missing_policy")
+    with Session() as db:
+        person_id = body.person_id
+        if body.contact_point_id:
+            cp = must(db.get(ContactPoint, body.contact_point_id))
+            person_id = cp.person_id
+        if not person_id:
+            raise HTTPException(422, "person_id или contact_point_id обязателен")
+        person = must(db.get(Person, person_id))
+        if person.merged_into_id:
+            person = must(db.get(Person, person.merged_into_id))
+            person_id = person.id
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person_id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        missing = "soft_allow" if body.purpose == "transactional" else body.missing_policy
+        allowed, reason = graph.send_allowed(
+            db,
+            person_id=person_id,
+            contact_point_id=body.contact_point_id,
+            channel=body.channel,
+            purpose=body.purpose,
+            connection_id=body.connection_id,
+            missing_policy=missing,
+        )
+        _m2m_audit(
+            db,
+            principal,
+            "send_policy.check",
+            person_id=person_id,
+            project_id=pid,
+            allowed=allowed,
+            reason=reason,
+        )
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "channel": body.channel,
+            "purpose": body.purpose,
+            "person_id": person_id,
+            "project_id": pid,
+            "sor": "voronka",
+            "listmonk": False,
+        }
