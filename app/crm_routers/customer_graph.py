@@ -296,6 +296,49 @@ def list_consents(contact_point_id: str, admin=Depends(crm_actor)):
         return [encode(c) for c in db.scalars(select(Consent).where(Consent.contact_point_id == contact_point_id))]
 
 
+class SendPolicyCheckBody(Body):
+    """CRM-102 / MAIL-101 send-time check: contact+channel+purpose → allow/deny."""
+
+    channel: str = Field(min_length=1, max_length=30)
+    purpose: Literal["marketing", "transactional", "service", "analytics"] = "marketing"
+    person_id: str | None = None
+    contact_point_id: str | None = None
+    connection_id: str | None = None
+    missing_policy: Literal["soft_allow", "deny"] = "deny"
+
+
+@router.post("/projects/{pid}/send-policy/check")
+def check_send_policy(pid: str, body: SendPolicyCheckBody, admin=Depends(crm_actor)):
+    with Session() as db:
+        project_access(db, admin, pid)
+        if body.person_id:
+            _person_acl(db, admin, body.person_id, pid)
+        elif body.contact_point_id:
+            cp = must(db.get(ContactPoint, body.contact_point_id))
+            _person_acl(db, admin, cp.person_id, pid)
+        else:
+            raise HTTPException(422, "person_id или contact_point_id обязателен")
+        # transactional mail is never blocked by marketing opt-out alone
+        missing = "soft_allow" if body.purpose == "transactional" else body.missing_policy
+        allowed, reason = graph.send_allowed(
+            db,
+            person_id=body.person_id,
+            contact_point_id=body.contact_point_id,
+            channel=body.channel,
+            purpose=body.purpose,
+            connection_id=body.connection_id,
+            missing_policy=missing,
+        )
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "channel": body.channel,
+            "purpose": body.purpose,
+            "project_id": pid,
+            "sor": "voronka",
+        }
+
+
 # --- CRM-006 interactions / delivery ---
 
 

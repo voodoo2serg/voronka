@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — CRM-102 / MAIL-101 send-policy (v5.2)
+
+- **CRM-102:** `POST /api/crm/projects/{pid}/send-policy/check` (staff) and M2M twin under `/api/crm/m2m/...` — contact+channel+purpose → `{allowed, reason}`; Voronka remains consent SoR; **no listmonk**.
+- `person_graph.send_allowed(...)` with `missing_policy=soft_allow|deny`; `marketing_allowed` delegates to it.
+- Marketing opt-out still does not block `transactional` purpose.
+
 ## Unreleased — Wave C migration downgrade fix (2026-11-16)
 
 - Implement real `0008.downgrade()` so CI `alembic downgrade base` can drop `crm_payments` (drops `crm_refunds` / `crm_payment_allocations` first).

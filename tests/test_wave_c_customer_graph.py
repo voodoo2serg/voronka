@@ -311,6 +311,44 @@ def test_m2m_person_timeline_additive(crm, monkeypatch):
     assert tl.status_code == 200, tl.text
 
 
+def test_send_policy_check_blocks_marketing_after_revoke(crm):
+    """CRM-102: send-time check denies marketing after opt-out; transactional still ok."""
+    person = contact(crm, email="policy@example.ru")
+    with crm.db() as db:
+        cp = db.scalar(
+            select(ContactPoint).where(
+                ContactPoint.person_id == person["person_id"], ContactPoint.channel == "email"
+            )
+        )
+        assert cp is not None
+        cpid = cp.id
+    crm.client.post(
+        f"/api/crm/contact-points/{cpid}/consents",
+        json={"purpose": "marketing", "status": "revoked", "evidence": "unsub-link"},
+    )
+    denied = crm.client.post(
+        "/api/crm/projects/p/send-policy/check",
+        json={
+            "person_id": person["person_id"],
+            "channel": "email",
+            "purpose": "marketing",
+            "missing_policy": "deny",
+        },
+    )
+    assert denied.status_code == 200, denied.text
+    assert denied.json()["allowed"] is False
+    assert "consent" in denied.json()["reason"]
+    tx = crm.client.post(
+        "/api/crm/projects/p/send-policy/check",
+        json={
+            "contact_point_id": cpid,
+            "channel": "email",
+            "purpose": "transactional",
+        },
+    )
+    assert tx.status_code == 200 and tx.json()["allowed"] is True
+
+
 def test_won_deal_does_not_equal_signed_agreement_and_consent_model(crm):
     """CRM-003 + CRM-008 smoke: consent rows and agreement statuses are explicit."""
     person = contact(crm, email="c@example.ru")
