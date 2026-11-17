@@ -6,6 +6,7 @@ import { FormModal } from './components/FormModal';
 import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
+import SignalLauncher from '../components/SignalLauncher';
 import { CONTACT_SOURCE_FILTERS, voronkaOpsHref } from './portals';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
@@ -618,6 +619,7 @@ export default function Workspace() {
       </aside>
       <div className="main-area">
         <header className="topbar">
+          <SignalLauncher/>
           <span>
             CRM <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
           </span>
