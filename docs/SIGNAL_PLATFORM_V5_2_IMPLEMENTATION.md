@@ -34,3 +34,7 @@ Person/ContactPoint, согласия/suppression, многоканальные 
 ## Производственный backlog после дедупликации (PROD / OPS)
 
 **[Ревизия PROD-001…013 и три новых GitHub Issues](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/PRODUCTION_BACKLOG_RECONCILIATION_v5_2.md)** — **источник приоритизации**. Не создавать дубликаты по PROD-002/003/006…012: это уточнения уже существующих `AUTH-*`, `PAY-101`, `OPS-102`, `JOURNEY-*`, `MEDIA-*`, `ANALYTICS-*`, `CRM-102`, `MAIL-*`, `RAGA-*`. Новый runtime backlog: [OPS-103 — Git/VPS drift](https://github.com/voodoo2serg/solo_pr/issues/16), [OPS-104 — event reconciliation](https://github.com/voodoo2serg/voronka/issues/13), [OPS-105 — diagnostic UI](https://github.com/voodoo2serg/signal/issues/13). **Код этих новых задач пока не реализован.**
+
+## Единая регистрация, восстановление и SSO — AUTH-201…210
+
+**[Актуальное к исполнению ТЗ Keycloak v5.3](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/UNIFIED_IDENTITY_AND_ACCESS_V5_3.md)**. Для данного репозитория применяются его AUTH-тикеты из общей матрицы. Единая регистрация и сброс пароля живут в Keycloak, а не копируются в сервисы. Локальные роли и legacy аккаунты связывать через проверенный `issuer + sub`, без выдачи owner по email. Восстановление доступа владельца `serg@vodopetov.ru` — [AUTH-202](https://github.com/voodoo2serg/solo_pr/issues/21), с подтверждением личности и без master-password. **Не считать готовым до E2E AUTH-210.**
