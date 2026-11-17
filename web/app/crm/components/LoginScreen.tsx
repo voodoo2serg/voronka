@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ApiFn } from '../types';
 
 export function LoginScreen({
@@ -27,6 +27,17 @@ export function LoginScreen({
   const [recover, setRecover] = useState(false);
   const [code, setCode] = useState('');
   const [purpose, setPurpose] = useState('reset');
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
+      .then((response) => response.ok ? response.json() : { enabled: false })
+      .then((result: { enabled?: boolean }) => { if (!cancelled) setSsoEnabled(result.enabled === true); })
+      .catch(() => { if (!cancelled) setSsoEnabled(false); });
+    return () => { cancelled = true; };
+  }, []);
+
 
   return (
     <main className="login-screen">
@@ -35,6 +46,14 @@ export function LoginScreen({
         <p className="eyebrow">СОЛО-PR / CRM</p>
         <h1>{recover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
         <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
+        {ssoEnabled && !recover && (
+          <div>
+            <a className="primary full" href="/api/crm/oidc/login">
+              Войти через единый аккаунт SIGNAL
+            </a>
+            <p className="fine">Если учётная запись ещё не привязана, используйте прежний вход.</p>
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
