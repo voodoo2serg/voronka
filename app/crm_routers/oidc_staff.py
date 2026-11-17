@@ -136,7 +136,7 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
             raise HTTPException(503, "Проверка права доступа CRM не настроена")
         ts = str(int(time.time()))
         signature = hmac.new(
-            signing_key.encode(), "\\n".join((ts, "voronka", issuer, sub)).encode(),
+            signing_key.encode(), "\n".join((ts, "voronka", issuer, sub)).encode(),
             hashlib.sha256,
         ).hexdigest()
         try:
