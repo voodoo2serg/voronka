@@ -6,6 +6,8 @@ Existing CRM roles and project memberships remain authoritative.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import time
 import json
 import os
 import secrets
@@ -125,6 +127,31 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
     sub = identity.get("sub")
     if not isinstance(sub, str) or not sub or len(sub) > 250:
         raise HTTPException(401, "Keycloak не предоставил идентификатор")
+    # Optional SIGNAL application grant gate. Never enabled implicitly.
+    # Only the verified Keycloak issuer/sub (not a claimed email) is checked.
+    if os.getenv("CRM_APP_ACCESS_ENFORCE", "0") == "1":
+        access_url = os.getenv("SIGNAL_ACCESS_RESOLVE_URL", "")
+        signing_key = os.getenv("SIGNAL_ACCESS_SIGNING_KEY", "")
+        if not access_url.startswith("https://") or len(signing_key) < 32:
+            raise HTTPException(503, "Проверка права доступа CRM не настроена")
+        ts = str(int(time.time()))
+        signature = hmac.new(
+            signing_key.encode(), "\\n".join((ts, "voronka", issuer, sub)).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        try:
+            with httpx.Client(timeout=5.0, follow_redirects=False) as client:
+                gate = client.post(access_url, json={"issuer": issuer, "subject": sub},
+                    headers={
+                        "X-Signal-Service": "voronka",
+                        "X-Signal-Timestamp": ts,
+                        "X-Signal-Signature": signature,
+                    })
+                gate.raise_for_status()
+                if gate.json().get("allowed") is not True:
+                    raise HTTPException(403, "Доступ к CRM не разрешён в SIGNAL")
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(503, "Не удалось проверить разрешение CRM") from exc
     with Session() as db:
         link = db.scalar(select(OidcLink).where(
             OidcLink.issuer == issuer, OidcLink.subject == sub,
