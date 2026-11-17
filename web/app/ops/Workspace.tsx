@@ -5,6 +5,7 @@ import { createOpsApi } from './api';
 import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints } from './constants';
 import { Icon } from './icons';
+import SignalLauncher from '../components/SignalLauncher';
 import { crmHref, miniAppHref } from './portals';
 import { AiSection } from './sections/AiSection';
 import { AutomationsSection } from './sections/AutomationsSection';
@@ -211,6 +212,7 @@ export default function Workspace() {
       </aside>
       <div className="main-area">
         <div className="topbar">
+          <SignalLauncher/>
           <span>{sectionHints[section]}</span>
           <span>
             <b>·</b> voronka.solo-pr.ru/ops
