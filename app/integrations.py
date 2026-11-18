@@ -230,6 +230,10 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
 
 def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | None = None) -> None:
     """Outbox → Signal Communication Engine `course.access_granted`."""
+    email = (getattr(profile, "email", None) or "").strip()
+    # Same guard as interaction: CE mail needs a usable recipient.
+    if not email or "@" not in email:
+        return
     hints = hints or _product_hints(order)
     event_id = f"course.access_granted:{grant.id}"
     service = str(hints.get("service") or hints.get("course_id") or grant.resource or "курс")
@@ -241,7 +245,7 @@ def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | No
         payload={
             "event_id": event_id,
             "event_type": "course.access_granted",
-            "email": profile.email,
+            "email": email,
             "service": service[:120],
             "grant_id": grant.id,
             "order_id": order.id,
@@ -365,6 +369,14 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
     url = _url(row.destination)
     secret = _secret(row.destination)
     if not url or not secret:
+        # CJ-107: Signal CE may be configured after grants land — keep pending/retryable
+        # instead of permanently failing durable access notifications.
+        if row.destination == DEST_SIGNAL:
+            row.state = "pending"
+            row.last_error = "destination_not_configured"
+            row.updated_at = now()
+            row.next_attempt_at = now() + timedelta(seconds=60)
+            return True
         row.state = "failed"
         row.last_error = "destination_not_configured"
         row.updated_at = now()
