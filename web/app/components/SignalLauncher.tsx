@@ -5,6 +5,9 @@ import {useState} from 'react';
 type Item={id:string;label:string;mark:string;site:string;admin?:string};
 const ITEMS:Item[]=[
  {id:'solo',label:'Соло-Пиар',mark:'СП',site:'https://solo-pr.ru/',admin:'https://cms.solo-pr.ru/admin'},
+ {id:'raga',label:'РАГА',mark:'РА',site:'https://raga.vodopetov.ru/'},
+ {id:'raga7',label:'Кабинет RAGA7',mark:'R7',site:'https://raga7.vodopetov.ru/'},
+ {id:'wited',label:'wi-ted',mark:'WT',site:'https://wi-ted.solo-pr.ru/'},
  {id:'signal',label:'СИГНАЛ',mark:'СИ',site:'https://signal.vodopetov.ru/'},
  {id:'crm',label:'CRM',mark:'CRM',site:'https://crm.solo-pr.ru/crm/',admin:'https://crm.solo-pr.ru/crm/'},
  {id:'ops',label:'Воронка',mark:'ВО',site:'https://voronka.solo-pr.ru/ops/',admin:'https://voronka.solo-pr.ru/ops/'},
