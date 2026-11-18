@@ -10,8 +10,10 @@ from test_operational import system  # noqa: F401 — fixture for crm
 from test_crm import crm, contact, product, order  # noqa: F401
 from app.crm_models import (
     Agreement,
+    Communication,
     Consent,
     ContactPoint,
+    DeliveryEvent,
     Interaction,
     Journey,
     JourneyStep,
@@ -374,3 +376,118 @@ def test_won_deal_does_not_equal_signed_agreement_and_consent_model(crm):
     ).json()
     assert ag["legal_status"] == "accepted"
     assert ag["signed_at"] is None
+
+
+def test_m2m_communications_ingest_idempotent_and_no_html(crm, monkeypatch):
+    """CJ-108: Signal CE ingest upserts Communication/DeliveryEvent/Interaction."""
+    import json
+
+    secret = "signal-m2m-test-secret"
+    monkeypatch.setenv("SIGNAL_M2M_SECRET", secret)
+    monkeypatch.setenv("SIGNAL_M2M_SERVICE_ID", "signal")
+    monkeypatch.setenv("SIGNAL_M2M_PROJECT_ALLOWLIST", "p")
+    monkeypatch.setenv(
+        "SIGNAL_M2M_SCOPES",
+        "campaign:*,person:read,timeline:read,timeline:write,connection:hub:read",
+    )
+    person = contact(crm, email="cj108@example.ru")
+
+    def post(payload: dict, scopes: str = "timeline:write"):
+        raw = json.dumps(payload).encode()
+        ts = str(int(now().timestamp()))
+        headers = {
+            "Content-Type": "application/json",
+            "X-Signal-Timestamp": ts,
+            "X-Signal-Signature": format_signature(sign_payload(secret, raw, ts)),
+            "X-Signal-Jti": secrets.token_urlsafe(12),
+            "X-Signal-Service": "signal",
+            "X-Signal-Scopes": scopes,
+        }
+        return crm.client.request(
+            "POST",
+            "/api/crm/m2m/projects/p/communications/ingest",
+            content=raw,
+            headers=headers,
+        )
+
+    html = post(
+        {
+            "email": "cj108@example.ru",
+            "status": "queued",
+            "external_event_key": "ce:voronka:evt-1:queued",
+            "body_preview": "<p>secret body</p>",
+            "kind": "course.access_granted",
+        }
+    )
+    assert html.status_code == 422, html.text
+
+    first = post(
+        {
+            "email": "cj108@example.ru",
+            "status": "queued",
+            "external_event_key": "ce:voronka:evt-1:queued",
+            "body_preview": "Access granted preview",
+            "kind": "course.access_granted",
+            "purpose": "transactional",
+        }
+    )
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["duplicate"] is False
+    assert body["person_id"] == person["person_id"]
+    cid = body["communication_id"]
+
+    replay = post(
+        {
+            "email": "cj108@example.ru",
+            "status": "queued",
+            "external_event_key": "ce:voronka:evt-1:queued",
+            "body_preview": "Access granted preview",
+            "kind": "course.access_granted",
+        }
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["duplicate"] is True
+    assert replay.json()["communication_id"] == cid
+
+    accepted = post(
+        {
+            "email": "cj108@example.ru",
+            "status": "accepted",
+            "external_event_key": "ce:voronka:evt-1:accepted",
+            "kind": "course.access_granted",
+            "evidence_ref": "smtp-msgid-1",
+        }
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["communication_id"] == cid
+    assert accepted.json()["duplicate"] is False
+
+    with crm.db() as db:
+        comm = db.get(Communication, cid)
+        assert comm is not None and comm.status == "accepted"
+        assert "<" not in (comm.body_preview or "")
+        events = list(
+            db.scalars(select(DeliveryEvent).where(DeliveryEvent.communication_id == cid))
+        )
+        assert {e.normalized_status for e in events} >= {"queued", "accepted"}
+        ixs = list(
+            db.scalars(
+                select(Interaction).where(
+                    Interaction.person_id == person["person_id"],
+                    Interaction.source_service == "signal",
+                )
+            )
+        )
+        assert len(ixs) == 2
+
+    # Cross-project deny via allowlist
+    monkeypatch.setenv("SIGNAL_M2M_PROJECT_ALLOWLIST", "other")
+    denied = post(
+        {
+            "person_id": person["person_id"],
+            "status": "queued",
+            "external_event_key": "ce:voronka:evt-2:queued",
+        }
+    )
+    assert denied.status_code == 403, denied.text

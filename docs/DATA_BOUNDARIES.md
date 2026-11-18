@@ -19,6 +19,8 @@ Studio/orchestrator at `signal.vodopetov.ru` — **not** a second CRM/Outbox. Sc
 
 **Wave C:** Person/ContactPoint/timeline live in Voronka. Signal reads via additive M2M scopes `person:read` / `timeline:read` — must not invent Person tables. Existing campaign/asset/hub M2M paths remain stable for Signal Wave D.
 
+**CJ-108:** Signal CE may write timeline via `timeline:write` → `POST …/communications/ingest` (Communication + DeliveryEvent + Interaction). Payload may carry a short plain `body_preview` only — never full HTML/email bodies or secrets.
+
 Chatwoot и EspoCRM **не** входят в стек.
 
 ## API, которые сайт (solo_pr) может вызывать
