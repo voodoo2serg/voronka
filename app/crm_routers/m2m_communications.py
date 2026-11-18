@@ -734,16 +734,15 @@ def m2m_send_policy_check(
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
             digest = graph.address_hash("email", normalized)
-            # Prefer ContactPoint bound to a Profile in this project.
-            matches = list(
-                db.scalars(
-                    select(ContactPoint).where(
-                        ContactPoint.channel == "email",
-                        ContactPoint.address_hash == digest,
-                    )
+            # Prefer ContactPoints bound to a Profile in this project.
+            # Ambiguous multi-person matches must deny (never pick an arbitrary first).
+            project_matches: list[ContactPoint] = []
+            for cp in db.scalars(
+                select(ContactPoint).where(
+                    ContactPoint.channel == "email",
+                    ContactPoint.address_hash == digest,
                 )
-            )
-            for cp in matches:
+            ):
                 profiles = list(
                     db.scalars(
                         select(Profile).where(
@@ -752,9 +751,32 @@ def m2m_send_policy_check(
                     )
                 )
                 if profiles:
-                    person_id = cp.person_id
-                    contact_point_id = cp.id
-                    break
+                    project_matches.append(cp)
+            unique_persons = {cp.person_id for cp in project_matches}
+            if len(unique_persons) > 1:
+                _m2m_audit(
+                    db,
+                    principal,
+                    "send_policy.check",
+                    person_id=None,
+                    project_id=pid,
+                    allowed=False,
+                    reason="ambiguous_email",
+                )
+                db.commit()
+                return {
+                    "allowed": False,
+                    "reason": "ambiguous_email",
+                    "channel": body.channel,
+                    "purpose": body.purpose,
+                    "person_id": None,
+                    "project_id": pid,
+                    "sor": "voronka",
+                    "listmonk": False,
+                }
+            if len(project_matches) == 1:
+                person_id = project_matches[0].person_id
+                contact_point_id = project_matches[0].id
             if not person_id:
                 # No Person yet: transactional inquiry replies may soft-allow;
                 # marketing stays denied unless soft_allow requested.

@@ -225,7 +225,8 @@ async def inbound_lead(request: Request):
             from app import person_graph
 
             person_graph.sync_profile_contact_points(db, profile)
-            extra = profile.extra if isinstance(profile.extra, dict) else {}
+            # Copy before mutate: plain JSON columns are not mutable-tracked.
+            extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
             extra.update(
                 {
                     "lead_event_id": body.event_id,
