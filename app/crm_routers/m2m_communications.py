@@ -700,6 +700,8 @@ class M2MSendPolicyCheck(Body):
     contact_point_id: str | None = None
     connection_id: str | None = None
     missing_policy: str = Field(default="deny", max_length=20)
+    # Signal transactional path often only has the mailbox address.
+    email: str | None = Field(default=None, max_length=250)
 
 
 @router.post("/projects/{pid}/send-policy/check")
@@ -712,6 +714,7 @@ def m2m_send_policy_check(
     """CRM-102 send-time preflight for Signal/Mailu/other senders (HMAC M2M)."""
     from app.crm_models import ContactPoint, Person
     from app import person_graph as graph
+    from app.crm_service import normalize_email
 
     _body, principal = auth_ctx
     assert_project_allowed(pid)
@@ -721,11 +724,65 @@ def m2m_send_policy_check(
         raise HTTPException(422, "Неизвестный missing_policy")
     with Session() as db:
         person_id = body.person_id
-        if body.contact_point_id:
-            cp = must(db.get(ContactPoint, body.contact_point_id))
+        contact_point_id = body.contact_point_id
+        if contact_point_id:
+            cp = must(db.get(ContactPoint, contact_point_id))
             person_id = cp.person_id
+        elif not person_id and body.email and body.channel == "email":
+            try:
+                normalized = normalize_email(body.email)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            digest = graph.address_hash("email", normalized)
+            # Prefer ContactPoint bound to a Profile in this project.
+            matches = list(
+                db.scalars(
+                    select(ContactPoint).where(
+                        ContactPoint.channel == "email",
+                        ContactPoint.address_hash == digest,
+                    )
+                )
+            )
+            for cp in matches:
+                profiles = list(
+                    db.scalars(
+                        select(Profile).where(
+                            Profile.person_id == cp.person_id, Profile.project_id == pid
+                        )
+                    )
+                )
+                if profiles:
+                    person_id = cp.person_id
+                    contact_point_id = cp.id
+                    break
+            if not person_id:
+                # No Person yet: transactional inquiry replies may soft-allow;
+                # marketing stays denied unless soft_allow requested.
+                missing = "soft_allow" if body.purpose == "transactional" else body.missing_policy
+                allowed = missing == "soft_allow"
+                reason = "no_person_transactional" if allowed else "no_person"
+                _m2m_audit(
+                    db,
+                    principal,
+                    "send_policy.check",
+                    person_id=None,
+                    project_id=pid,
+                    allowed=allowed,
+                    reason=reason,
+                )
+                db.commit()
+                return {
+                    "allowed": allowed,
+                    "reason": reason,
+                    "channel": body.channel,
+                    "purpose": body.purpose,
+                    "person_id": None,
+                    "project_id": pid,
+                    "sor": "voronka",
+                    "listmonk": False,
+                }
         if not person_id:
-            raise HTTPException(422, "person_id или contact_point_id обязателен")
+            raise HTTPException(422, "person_id, contact_point_id или email обязателен")
         person = must(db.get(Person, person_id))
         if person.merged_into_id:
             person = must(db.get(Person, person.merged_into_id))
@@ -739,7 +796,7 @@ def m2m_send_policy_check(
         allowed, reason = graph.send_allowed(
             db,
             person_id=person_id,
-            contact_point_id=body.contact_point_id,
+            contact_point_id=contact_point_id,
             channel=body.channel,
             purpose=body.purpose,
             connection_id=body.connection_id,
@@ -754,6 +811,7 @@ def m2m_send_policy_check(
             allowed=allowed,
             reason=reason,
         )
+        db.commit()
         return {
             "allowed": allowed,
             "reason": reason,
