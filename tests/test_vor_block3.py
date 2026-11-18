@@ -120,6 +120,7 @@ def test_lead_created_idempotent(crm, monkeypatch):
         "service": "Аудит",
         "message": "Нужен разбор",
         "consent": True,
+        "ads_consent": False,
         "source": "solo_pr",
         "project_id": "p",
     }
@@ -131,6 +132,26 @@ def test_lead_created_idempotent(crm, monkeypatch):
     assert r2.status_code == 200 and r2.json()["duplicate"] is True
     with crm.db() as db:
         assert len(list(db.scalars(select(IntegrationInbox)))) == 1
+        from app.crm_models import Consent, ContactPoint, Profile
+        from app import person_graph as graph
+
+        profile = db.scalar(select(Profile).where(Profile.email == "lead@example.ru"))
+        assert profile and profile.person_id
+        cps = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == profile.person_id)))
+        assert any(cp.channel == "email" for cp in cps)
+        email_cp = next(cp for cp in cps if cp.channel == "email")
+        tx = db.scalar(
+            select(Consent).where(Consent.contact_point_id == email_cp.id, Consent.purpose == "transactional")
+        )
+        assert tx and tx.status == "granted"
+        mkt = db.scalar(
+            select(Consent).where(Consent.contact_point_id == email_cp.id, Consent.purpose == "marketing")
+        )
+        assert mkt and mkt.status == "denied"
+        allowed, reason = graph.send_allowed(
+            db, person_id=profile.person_id, channel="email", purpose="transactional", missing_policy="deny"
+        )
+        assert allowed, reason
 
 
 def test_learning_completed_marks_academic(crm, monkeypatch):

@@ -220,6 +220,56 @@ async def inbound_lead(request: Request):
                     },
                 },
             )
+        else:
+            # Existing profile: still refresh Person/ContactPoints (CRM-101).
+            from app import person_graph
+
+            person_graph.sync_profile_contact_points(db, profile)
+            # Copy before mutate: plain JSON columns are not mutable-tracked.
+            extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
+            extra.update(
+                {
+                    "lead_event_id": body.event_id,
+                    "contact_type": body.contact_type,
+                    "service": body.service,
+                    "consent": body.consent,
+                    "ads_consent": body.ads_consent,
+                    "created": body.created,
+                }
+            )
+            profile.extra = extra
+        # CRM-102 / MAIL-101: record form consent onto email ContactPoint.
+        from app import person_graph
+
+        person = person_graph.sync_profile_contact_points(db, profile)
+        email_cp = None
+        if email:
+            email_cp = person_graph.upsert_contact_point(
+                db, person, channel="email", value=email, verified=False
+            )
+        if email_cp and body.consent:
+            evidence = f"solo_pr lead.created:{body.event_id}"
+            person_graph.set_consent(
+                db,
+                email_cp.id,
+                purpose="transactional",
+                status="granted",
+                evidence=evidence,
+            )
+            person_graph.set_consent(
+                db,
+                email_cp.id,
+                purpose="service",
+                status="granted",
+                evidence=evidence,
+            )
+            person_graph.set_consent(
+                db,
+                email_cp.id,
+                purpose="marketing",
+                status="granted" if body.ads_consent else "denied",
+                evidence=evidence,
+            )
         db.add(
             Deal(
                 id=uid(),
