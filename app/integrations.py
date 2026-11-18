@@ -22,9 +22,11 @@ from app.db import now
 
 DEST_SOLO = "solo_pr"
 DEST_LMS = "lms_end"
+DEST_SIGNAL = "signal"
 
 KINDS_SOLO = {"deal.paid", "access.granted", "access.revoked"}
 KINDS_LMS = {"enrollment.desired", "enrollment.revoked"}
+KINDS_SIGNAL = {"course.access_granted"}
 
 LMS_SCHEMA_VERSION = "1"
 
@@ -34,6 +36,8 @@ def _secret(destination: str) -> str:
         return os.getenv("SOLO_PR_WEBHOOK_SECRET", "")
     if destination == DEST_LMS:
         return os.getenv("LMS_END_WEBHOOK_SECRET", "") or os.getenv("LMS_M2M_TOKEN", "")
+    if destination == DEST_SIGNAL:
+        return os.getenv("SIGNAL_EVENTS_SECRET", "") or os.getenv("SIGNAL_EVENT_SOURCE_KEY", "")
     return ""
 
 
@@ -42,6 +46,11 @@ def _url(destination: str) -> str:
         return os.getenv("SOLO_PR_EVENTS_URL", "")
     if destination == DEST_LMS:
         return os.getenv("LMS_END_ENROLLMENT_URL", "")
+    if destination == DEST_SIGNAL:
+        return os.getenv(
+            "SIGNAL_EVENTS_URL",
+            "https://signal.vodopetov.ru/api/v1/communications/events",
+        )
     return ""
 
 
@@ -213,6 +222,63 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
             **hints,
         },
     )
+    # CJ-107: transactional «доступ открыт» via Signal CE (idempotent per grant).
+    if kind == "access.granted":
+        enqueue_signal_access_granted(db, grant=grant, order=order, profile=profile, hints=hints)
+        _record_access_interaction(db, grant=grant, order=order, profile=profile, hints=hints)
+
+
+def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | None = None) -> None:
+    """Outbox → Signal Communication Engine `course.access_granted`."""
+    email = (getattr(profile, "email", None) or "").strip()
+    # Same guard as interaction: CE mail needs a usable recipient.
+    if not email or "@" not in email:
+        return
+    hints = hints or _product_hints(order)
+    event_id = f"course.access_granted:{grant.id}"
+    service = str(hints.get("service") or hints.get("course_id") or grant.resource or "курс")
+    enqueue_event(
+        db,
+        destination=DEST_SIGNAL,
+        kind="course.access_granted",
+        event_id=event_id,
+        payload={
+            "event_id": event_id,
+            "event_type": "course.access_granted",
+            "email": email,
+            "service": service[:120],
+            "grant_id": grant.id,
+            "order_id": order.id,
+            "source": "voronka",
+        },
+    )
+
+
+def _record_access_interaction(db, *, grant, order, profile, hints: dict | None = None) -> None:
+    person_id = getattr(profile, "person_id", None)
+    if not person_id or not profile.email:
+        return
+    from app import person_graph
+
+    hints = hints or {}
+    person_graph.record_interaction(
+        db,
+        person_id=person_id,
+        kind="course.access_granted",
+        direction="system",
+        channel="email",
+        project_id=order.project_id,
+        source_service="voronka",
+        external_event_key=f"course.access_granted:{grant.id}",
+        payload={
+            "grant_id": grant.id,
+            "order_id": order.id,
+            "email": profile.email,
+            "resource": grant.resource,
+            "service": hints.get("service") or hints.get("course_id") or grant.resource,
+        },
+        evidence_status="recorded",
+    )
 
 
 def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool = False) -> None:
@@ -274,6 +340,14 @@ def delivery_headers(destination: str, secret: str, body: bytes, event_id: str) 
     ts = str(int(now().timestamp()))
     digest = sign_payload(secret, body, ts)
     sig = format_signature(digest)
+    if destination == DEST_SIGNAL:
+        # Signal CE: HMAC over `timestamp.body` (same as solo_pr / raga7 emitters).
+        return {
+            "Content-Type": "application/json",
+            "X-Signal-Source": "voronka",
+            "X-Signal-Timestamp": ts,
+            "X-Signal-Signature": digest,
+        }
     headers = {
         "Content-Type": "application/json",
         "X-Voronka-Timestamp": ts,
@@ -295,12 +369,30 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
     url = _url(row.destination)
     secret = _secret(row.destination)
     if not url or not secret:
+        # CJ-107: Signal CE may be configured after grants land — keep pending/retryable
+        # instead of permanently failing durable access notifications.
+        if row.destination == DEST_SIGNAL:
+            row.state = "pending"
+            row.last_error = "destination_not_configured"
+            row.updated_at = now()
+            row.next_attempt_at = now() + timedelta(seconds=60)
+            return True
         row.state = "failed"
         row.last_error = "destination_not_configured"
         row.updated_at = now()
         return True
-    payload = build_wire_payload(row)
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    if row.destination == DEST_SIGNAL:
+        # CE intake expects a slim event body (not dual solo/lms envelope).
+        payload = {
+            "event_id": row.event_id,
+            "event_type": "course.access_granted",
+            "email": (row.payload or {}).get("email") or "",
+            "service": (row.payload or {}).get("service") or "",
+        }
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    else:
+        payload = build_wire_payload(row)
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = delivery_headers(row.destination, secret, body, row.event_id)
     row.attempts += 1
     row.updated_at = now()
