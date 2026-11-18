@@ -704,6 +704,243 @@ class M2MSendPolicyCheck(Body):
     email: str | None = Field(default=None, max_length=250)
 
 
+class M2MCommunicationIngest(Body):
+    """CJ-108: Signal CE writeback — Communication + DeliveryEvent + Interaction.
+
+    Never accept raw HTML / full email bodies. body_preview is capped at 500 chars.
+    """
+
+    channel: str = Field(default="email", min_length=1, max_length=30)
+    purpose: str = Field(default="transactional", max_length=40)
+    status: str = Field(min_length=1, max_length=30)  # queued | accepted | failed
+    external_event_key: str = Field(min_length=8, max_length=160)
+    # Stable key grouping queued→accepted for one CE event (defaults from external_event_key).
+    communication_key: str | None = Field(default=None, max_length=160)
+    person_id: str | None = None
+    email: str | None = Field(default=None, max_length=250)
+    kind: str = Field(default="email.send", max_length=60)
+    body_preview: str = Field(default="", max_length=500)
+    evidence_ref: str = Field(default="", max_length=200)
+    message_id: str | None = Field(default=None, max_length=160)
+
+
+_STATUS_SUFFIXES = (":queued", ":accepted", ":failed", ":delivered")
+
+
+def _default_communication_key(external_event_key: str, explicit: str | None) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip()
+    key = external_event_key.strip()
+    for suffix in _STATUS_SUFFIXES:
+        if key.endswith(suffix):
+            return key[: -len(suffix)]
+    return key
+
+
+def _reject_html_preview(preview: str) -> str:
+    text = (preview or "").strip()
+    if "<" in text and ">" in text:
+        raise HTTPException(422, "body_preview must not contain HTML")
+    return text[:500]
+
+
+def _resolve_person_for_project(
+    db,
+    pid: str,
+    *,
+    person_id: str | None,
+    email: str | None,
+) -> tuple[str, str | None]:
+    """Return (person_id, contact_point_id). Ambiguous email → 422."""
+    from app.crm_models import ContactPoint, Person
+    from app import person_graph as graph
+    from app.crm_service import normalize_email
+
+    contact_point_id: str | None = None
+    if person_id:
+        person = must(db.get(Person, person_id))
+        if person.merged_into_id:
+            person = must(db.get(Person, person.merged_into_id))
+            person_id = person.id
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person_id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        return person_id, None
+
+    if not email:
+        raise HTTPException(422, "person_id или email обязателен")
+    try:
+        normalized = normalize_email(email)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    digest = graph.address_hash("email", normalized)
+    project_matches: list = []
+    for cp in db.scalars(
+        select(ContactPoint).where(
+            ContactPoint.channel == "email",
+            ContactPoint.address_hash == digest,
+        )
+    ):
+        profiles = list(
+            db.scalars(
+                select(Profile).where(Profile.person_id == cp.person_id, Profile.project_id == pid)
+            )
+        )
+        if profiles:
+            project_matches.append(cp)
+    unique_persons = {cp.person_id for cp in project_matches}
+    if len(unique_persons) > 1:
+        raise HTTPException(422, "ambiguous_email")
+    if len(project_matches) != 1:
+        raise HTTPException(404, "Person не найден по email в проекте")
+    cp = project_matches[0]
+    person = must(db.get(Person, cp.person_id))
+    if person.merged_into_id:
+        person = must(db.get(Person, person.merged_into_id))
+    return person.id, cp.id
+
+
+@router.post("/projects/{pid}/communications/ingest")
+async def m2m_communications_ingest(
+    pid: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("timeline:write")),
+):
+    """CJ-108: ingest Signal CE queued/accepted/failed into Person timeline.
+
+    Idempotent on external_event_key (DeliveryEvent + Interaction) and
+    communication_key (Communication row via IntegrationInbox).
+    """
+    from app.crm_models import Communication
+    from app import person_graph as graph
+    from app.db import Project
+
+    body_raw, principal = auth_ctx
+    assert_project_allowed(pid)
+    try:
+        body = M2MCommunicationIngest.model_validate_json(body_raw)
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if body.status not in {"queued", "accepted", "failed"}:
+        raise HTTPException(422, "status must be queued|accepted|failed")
+    if body.purpose not in {"marketing", "transactional", "service", "analytics"}:
+        raise HTTPException(422, "Неизвестная цель")
+    preview = _reject_html_preview(body.body_preview)
+    communication_key = _default_communication_key(body.external_event_key, body.communication_key)
+
+    with Session.begin() as db:
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+        person_id, contact_point_id = _resolve_person_for_project(
+            db, pid, person_id=body.person_id, email=body.email
+        )
+
+        inbox_key = f"communication.ingest:{communication_key}"
+        inbox = db.scalar(
+            select(IntegrationInbox).where(
+                IntegrationInbox.source == "signal",
+                IntegrationInbox.event_key == inbox_key,
+            )
+        )
+        communication: Communication | None = None
+        created_communication = False
+        if inbox:
+            cid = (inbox.payload or {}).get("communication_id")
+            if cid:
+                communication = db.get(Communication, cid)
+                if communication and communication.project_id and communication.project_id != pid:
+                    raise HTTPException(403, "Communication другого проекта")
+
+        if not communication:
+            communication = graph.create_communication(
+                db,
+                person_id=person_id,
+                purpose=body.purpose,
+                channel=body.channel,
+                contact_point_id=contact_point_id,
+                project_id=pid,
+                body_preview=preview,
+                status=body.status if body.status == "queued" else "queued",
+            )
+            if body.message_id:
+                communication.provider_message_id = body.message_id
+            created_communication = True
+            db.add(
+                IntegrationInbox(
+                    id=uid(),
+                    source="signal",
+                    event_key=inbox_key,
+                    kind="communication.ingest",
+                    payload={
+                        "communication_id": communication.id,
+                        "project_id": pid,
+                        "communication_key": communication_key,
+                    },
+                    state="applied",
+                    created_at=now(),
+                )
+            )
+        elif preview and not communication.body_preview:
+            communication.body_preview = preview
+        if body.message_id and not communication.provider_message_id:
+            communication.provider_message_id = body.message_id
+
+        delivery, delivery_dup = graph.record_delivery_event(
+            db,
+            communication.id,
+            normalized_status=body.status,
+            platform_status=body.status,
+            evidence_ref=body.evidence_ref or (body.message_id or ""),
+            external_event_key=body.external_event_key,
+            payload={"communication_key": communication_key, "source": "signal"},
+        )
+        interaction, interaction_dup = graph.record_interaction(
+            db,
+            person_id=person_id,
+            kind=body.kind,
+            direction="outbound",
+            channel=body.channel,
+            project_id=pid,
+            contact_point_id=contact_point_id,
+            communication_id=communication.id,
+            source_service="signal",
+            external_event_key=body.external_event_key,
+            payload={
+                "status": body.status,
+                "communication_key": communication_key,
+                "purpose": body.purpose,
+            },
+            evidence_status=body.status,
+        )
+        duplicate = (not created_communication) and delivery_dup and interaction_dup
+        _m2m_audit(
+            db,
+            principal,
+            "communication.ingested",
+            person_id=person_id,
+            project_id=pid,
+            communication_id=communication.id,
+            delivery_event_id=delivery.id,
+            interaction_id=interaction.id,
+            status=body.status,
+            duplicate=duplicate,
+        )
+        return {
+            "person_id": person_id,
+            "project_id": pid,
+            "communication_id": communication.id,
+            "delivery_event_id": delivery.id,
+            "interaction_id": interaction.id,
+            "status": communication.status,
+            "communication_key": communication_key,
+            "external_event_key": body.external_event_key,
+            "duplicate": duplicate,
+            "sor": "voronka",
+        }
+
+
 @router.post("/projects/{pid}/send-policy/check")
 def m2m_send_policy_check(
     pid: str,

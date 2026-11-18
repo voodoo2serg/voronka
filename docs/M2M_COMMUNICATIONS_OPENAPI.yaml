@@ -7,6 +7,7 @@ info:
     Normative twin: signal repo docs/VORONKA_M2M_OPENAPI.yaml
     Auth: HMAC wire v1 (SIGNAL_M2M_SECRET). No crm_session. No bot tokens in responses.
     Wave C: campaign/asset/hub contracts unchanged; person:read / timeline:read are additive.
+    CJ-108: timeline:write ingest writes Communication/DeliveryEvent/Interaction (no HTML bodies).
 servers:
   - url: https://voronka.solo-pr.ru
 paths:
@@ -54,6 +55,18 @@ paths:
     get:
       summary: Customer 360 timeline projection
       x-required-scopes: [timeline:read]
+  /api/crm/m2m/projects/{pid}/communications/ingest:
+    post:
+      summary: Ingest Signal CE queued/accepted/failed into Person timeline (CJ-108)
+      description: >
+        Upserts Communication (by communication_key), DeliveryEvent + Interaction
+        (by external_event_key). body_preview ≤500 plain text only — no HTML/email bodies.
+        Resolve person via person_id or project-scoped email (ambiguous → 422).
+      x-required-scopes: [timeline:write]
+  /api/crm/m2m/projects/{pid}/send-policy/check:
+    post:
+      summary: Send-policy preflight (CRM-102)
+      x-required-scopes: [person:read]
 components:
   securitySchemes:
     SignalHmac:

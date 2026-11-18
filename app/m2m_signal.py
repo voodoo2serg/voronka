@@ -27,6 +27,7 @@ DEFAULT_SCOPES = (
     # Wave C additive (Signal Wave D may request these; existing scopes unchanged)
     "person:read",
     "timeline:read",
+    "timeline:write",  # CJ-108: Signal CE → Voronka Communication/DeliveryEvent ingest
     "consent:write",
 )
 
