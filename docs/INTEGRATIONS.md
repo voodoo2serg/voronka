@@ -17,10 +17,11 @@ Robokassa ResultURL
 ```
 
 Signal CE `event_id` must match `[a-zA-Z0-9:_-]{8,120}` (no dots). `event_type` stays `course.access_granted`.
+Legacy dotted outbox/Interaction keys `course.access_granted:{grant_id}` are **adopted** to the CE-safe form on enqueue and on OPS-104 `reconcile/apply` requeue (no second row / timeline duplicate).
 
 Сбой job/outbox **не** удаляет Payment.
 
-**OPS-104 reconcile:** dry-run `GET /api/crm/projects/{pid}/reconcile/preview`, mutate `POST …/reconcile/apply` (`acknowledge_mutate`), DLQ `GET …/integration-outbox/dlq`, M2M aggregate `GET /api/crm/m2m/projects/{pid}/integrations/status` (`integrations:status:read`). Enrollment `event_id` стабилен: `enrollment.desired:{grant_id}` (revision только в payload). Подробности: [OPS_104_EVENT_RECONCILIATION.md](./OPS_104_EVENT_RECONCILIATION.md).
+**OPS-104 reconcile:** dry-run `GET /api/crm/projects/{pid}/reconcile/preview`, mutate `POST …/reconcile/apply` (`acknowledge_mutate`), DLQ `GET …/integration-outbox/dlq`, M2M aggregate `GET /api/crm/m2m/projects/{pid}/integrations/status` (`integrations:status:read`). Enrollment `event_id` стабилен: `enrollment.desired:{grant_id}` (revision только в payload). `scope=enrollment` also detects dead Signal `course.access_granted` via modern + legacy keys. Подробности: [OPS_104_EVENT_RECONCILIATION.md](./OPS_104_EVENT_RECONCILIATION.md).
 
 ## Wire contract v1 (dual-read / dual-emit)
 

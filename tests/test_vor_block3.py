@@ -558,6 +558,114 @@ def test_ops104_queue_metrics_include_dead(crm):
     assert "entitlement_jobs_failed" in metrics
 
 
+def test_cj107_signal_legacy_dotted_adopted_and_reconcile_finds(crm, monkeypatch):
+    """Legacy course.access_granted:{grant} → CE-safe adopt; enrollment scope finds it."""
+    import re
+    from app.crm_models import AccessGrant, Interaction
+    from app.integrations import (
+        enqueue_signal_access_granted,
+        legacy_signal_access_granted_event_id,
+        signal_access_granted_event_id,
+    )
+    from app.reconcile import apply_findings, preview
+
+    monkeypatch.setenv("SIGNAL_EVENTS_URL", "https://signal.example/api/v1/communications/events")
+    monkeypatch.setenv("SIGNAL_EVENTS_SECRET", "signal-secret-at-least-32-chars-long!!")
+    person = contact(crm, email="legacy-signal@example.ru")
+    o = order(crm, person=person, request_key="cj107-legacy-signal")
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/grants", json={
+        "resource": "course-legacy-signal", "capability": "course.view", "min_paid_percent": 100,
+    }).status_code == 200
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/payments", json={
+        "amount_minor": 100000, "external_id": "cj107-legacy-pay", "evidence": "sandbox",
+    }).status_code == 200
+
+    with crm.db.begin() as db:
+        process_pending(db)
+        grant = db.scalar(select(AccessGrant).where(AccessGrant.order_id == o["id"]))
+        modern = signal_access_granted_event_id(grant.id)
+        legacy = legacy_signal_access_granted_event_id(grant.id)
+        # Simulate pre-fix dead dotted outbox + interaction.
+        row = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.kind == "course.access_granted"))
+        assert row is not None
+        row.event_id = legacy
+        row.payload = {**(row.payload or {}), "event_id": legacy, "grant_id": grant.id}
+        row.state = "dead"
+        row.attempts = 12
+        row.last_error = "http_422"
+        # Force interaction onto legacy key if present.
+        ix = db.scalar(
+            select(Interaction).where(
+                Interaction.source_service == "voronka",
+                Interaction.external_event_key == modern,
+            )
+        )
+        if ix:
+            ix.external_event_key = legacy
+        else:
+            from app import person_graph
+            from app.crm_models import Profile
+            profile = db.get(Profile, o["profile_id"] if "profile_id" in o else person["id"])
+            # order helper returns order dict with profile via contact id == profile id in tests
+            profile = db.get(Profile, person["id"])
+            if profile and profile.person_id:
+                person_graph.record_interaction(
+                    db,
+                    person_id=profile.person_id,
+                    kind="course.access_granted",
+                    direction="system",
+                    channel="email",
+                    project_id=o["project_id"] if "project_id" in o else "p",
+                    source_service="voronka",
+                    external_event_key=legacy,
+                    payload={"grant_id": grant.id},
+                )
+
+        # Re-enqueue must adopt, not duplicate.
+        profile = db.get(__import__("app.crm_models", fromlist=["Profile"]).Profile, person["id"])
+        enqueue_signal_access_granted(db, grant=grant, order=db.get(__import__("app.crm_models", fromlist=["Order"]).Order, o["id"]), profile=profile)
+        rows = list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.kind == "course.access_granted")))
+        assert len(rows) == 1
+        assert rows[0].event_id == modern
+        assert "." not in rows[0].event_id.split(":", 1)[0]
+        assert re.fullmatch(r"[a-zA-Z0-9:_-]{8,120}", rows[0].event_id)
+        # Put back to dead dotted to exercise reconcile adopt path.
+        rows[0].event_id = legacy
+        rows[0].payload = {**(rows[0].payload or {}), "event_id": legacy}
+        rows[0].state = "dead"
+        rows[0].attempts = 12
+
+        plan = preview(db, scope="enrollment", project_id="p", limit=50)
+        assert any(
+            f["action"] == "requeue_outbox"
+            and (f["refs"].get("grant_id") == grant.id or legacy in f["finding_id"] or modern in f.get("finding_id", ""))
+            for f in plan["findings"]
+        )
+        finding_ids = [
+            f["finding_id"]
+            for f in plan["findings"]
+            if f["action"] == "requeue_outbox" and f["refs"].get("grant_id") == grant.id
+            and "course" in (f["summary"] + f["finding_id"])
+        ]
+        assert finding_ids
+        result = apply_findings(db, scope="enrollment", project_id="p", finding_ids=finding_ids)
+        assert result["applied_count"] >= 1
+        adopted = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.kind == "course.access_granted"))
+        assert adopted.event_id == modern
+        assert adopted.state == "pending"
+        assert adopted.attempts == 0
+        ix2 = list(
+            db.scalars(
+                select(Interaction).where(
+                    Interaction.source_service == "voronka",
+                    Interaction.external_event_key.in_([modern, legacy]),
+                )
+            )
+        )
+        assert len(ix2) == 1
+        assert ix2[0].external_event_key == modern
+
+
 def test_ops104_legacy_enrollment_rN_reused_not_duplicated(crm):
     """Upgraded DB with enrollment.desired:{grant}:r1 must not gain a second stable row."""
     o = order(crm)

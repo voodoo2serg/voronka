@@ -224,22 +224,48 @@ def detect_enrollment(db, project_id: str | None = None, limit: int = 100) -> li
                         refs={"grant_id": grant.id, "order_id": order.id},
                     )
                 )
-            # Dead access.granted / course.access_granted tied to same grant
-            for kind in ("access.granted", "course.access_granted"):
-                event_id = f"{kind}:{grant.id}"
-                row = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.event_id == event_id))
-                if row and row.state == "dead":
-                    findings.append(
-                        _finding(
-                            finding_id=f"outbox_dead:{row.event_id}",
-                            scope="enrollment",
-                            code="outbox_dead",
-                            summary=f"{kind} in DLQ",
-                            correlation_id=row.correlation_id or order.id,
-                            action="requeue_outbox",
-                            refs={"event_id": row.event_id, "outbox_id": row.id, "grant_id": grant.id},
-                        )
+            # Dead access.granted tied to same grant (solo_pr wire key still uses dots).
+            access_event_id = f"access.granted:{grant.id}"
+            access_row = db.scalar(
+                select(IntegrationOutbox).where(IntegrationOutbox.event_id == access_event_id)
+            )
+            if access_row and access_row.state == "dead":
+                findings.append(
+                    _finding(
+                        finding_id=f"outbox_dead:{access_row.event_id}",
+                        scope="enrollment",
+                        code="outbox_dead",
+                        summary="access.granted in DLQ",
+                        correlation_id=access_row.correlation_id or order.id,
+                        action="requeue_outbox",
+                        refs={
+                            "event_id": access_row.event_id,
+                            "outbox_id": access_row.id,
+                            "grant_id": grant.id,
+                        },
                     )
+                )
+            # Signal CE: modern course_access_granted:{grant} + legacy dotted key.
+            signal_rows = integrations.signal_access_outbox_for_grant(db, grant.id)
+            dead_signal = [r for r in signal_rows if r.state == "dead"]
+            if dead_signal:
+                primary = dead_signal[0]
+                findings.append(
+                    _finding(
+                        finding_id=f"outbox_dead:{primary.event_id}",
+                        scope="enrollment",
+                        code="outbox_dead",
+                        summary="course.access_granted in DLQ (Signal CE notify)",
+                        correlation_id=primary.correlation_id or order.id,
+                        action="requeue_outbox",
+                        refs={
+                            "event_id": primary.event_id,
+                            "outbox_id": primary.id,
+                            "grant_id": grant.id,
+                            "legacy_event_ids": [r.event_id for r in dead_signal],
+                        },
+                    )
+                )
     return findings[:limit]
 
 
@@ -387,13 +413,23 @@ def preview(
 
 def requeue_outbox_row(db, row: IntegrationOutbox) -> dict[str, Any]:
     """dead/failed → pending with attempt counter reset for a fresh capped window."""
+    prior_event_id = row.event_id
     prior_state = row.state
+    # Adopt dotted Signal CE keys before retry so delivery is not doomed to http_422.
+    if row.kind == "course.access_granted":
+        row = integrations.adopt_signal_access_outbox(db, row)
+        grant_id = (row.payload or {}).get("grant_id")
+        if grant_id:
+            integrations.adopt_signal_access_interaction(db, grant_id=str(grant_id))
     row.state = "pending"
     row.attempts = 0
     row.next_attempt_at = now()
     row.last_error = ""
     row.updated_at = now()
-    return {"event_id": row.event_id, "from": prior_state, "to": "pending"}
+    result = {"event_id": row.event_id, "from": prior_state, "to": "pending"}
+    if prior_event_id != row.event_id:
+        result["adopted_from"] = prior_event_id
+    return result
 
 
 def apply_findings(
@@ -450,13 +486,18 @@ def apply_findings(
             if not row:
                 skipped.append({**finding, "reason": "outbox_missing"})
                 continue
-            # Also requeue legacy enrollment rN siblings when present.
+            # Also requeue legacy enrollment :rN / Signal dotted CE siblings when present.
             siblings = []
             grant_id = refs.get("grant_id")
             if grant_id and row.kind.startswith("enrollment."):
                 siblings = [r for r in _outbox_for_grant(db, grant_id, row.kind) if r.state == "dead"]
+            elif grant_id and row.kind == "course.access_granted":
+                siblings = [
+                    r for r in integrations.signal_access_outbox_for_grant(db, grant_id) if r.state == "dead"
+                ]
             targets = siblings or [row]
-            # Requeue only existing rows (legacy :rN or stable). Do not insert a second event_id.
+            # Requeue only existing rows (legacy or stable). Do not insert a second event_id.
+            # Signal requeue adopts dotted → CE-safe event_id inside requeue_outbox_row.
             results = [requeue_outbox_row(db, r) for r in targets]
             applied.append({"finding_id": finding["finding_id"], "result": "requeued_outbox", "rows": results})
         elif action == "enqueue_enrollment":
