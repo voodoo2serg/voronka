@@ -3,6 +3,10 @@ from urllib.parse import urlparse
 MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
 TYPES = SEND | {"question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal", "handoff"}
+# PDialog P0 forward-compat descriptors (stored on Version; runtime execution lands in VR-124+)
+FORWARD_COMPAT_TYPES = {"llm_reply", "escalate", "operator_pause", "send_template", "tag_contact"}
+PUBLISHED_TYPES = TYPES | FORWARD_COMPAT_TYPES
+LLM_REPLY_MODES = {"draft_only", "human_approval"}
 RESERVED = "_"
 
 def checked_text(value, label, maximum=4000):
@@ -142,6 +146,102 @@ def validate_graph(graph):
     if len(visited) != len(nodes):
         raise ValueError("Есть недостижимые узлы")
     return graph
+
+def _validate_forward_compat_node(key, node, kind):
+    """Structural checks for nodes accepted on Signal publish before runtime support."""
+    if kind == "llm_reply":
+        mode = node.get("mode", "draft_only")
+        if mode not in LLM_REPLY_MODES:
+            raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
+        rules_version = node.get("rules_version")
+        if not isinstance(rules_version, str) or not rules_version.strip():
+            raise ValueError(f"llm_reply {key}: rules_version pin required")
+        if "auto_send" in node:
+            raise ValueError(f"llm_reply {key}: auto_send forbidden")
+        # next optional until runtime wires it; if present must be string (checked via outgoing)
+    if kind in {"escalate", "operator_pause"}:
+        # Operator escalation ≠ handoff(connection). Optional next only.
+        if "connection_id" in node:
+            raise ValueError(f"{kind} {key}: use handoff for bot switch; escalate has no connection_id")
+    if kind == "send_template":
+        rev = node.get("document_revision_id") or node.get("revision_id")
+        if not isinstance(rev, str) or not rev.strip() or len(rev) > 64:
+            raise ValueError(f"send_template {key}: document_revision_id required")
+    if kind == "tag_contact":
+        tag = node.get("tag")
+        if not isinstance(tag, str) or not tag.strip() or len(tag) > 80:
+            raise ValueError(f"tag_contact {key}: tag required")
+
+
+def validate_published_graph(graph):
+    """Validate Signal-published Personal Dialog graphs (allows forward-compat node types).
+
+    Mini App /ops publish continues to use validate_graph (strict TYPES only).
+    """
+    if not isinstance(graph, dict):
+        raise ValueError("Сценарий должен быть объектом")
+    if graph.get("auto_send") is not None:
+        raise ValueError("auto_send запрещён в published Version")
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, dict) or not 1 <= len(nodes) <= 200:
+        raise ValueError("Нужно от 1 до 200 узлов")
+    if not isinstance(graph.get("start"), str) or graph["start"] not in nodes:
+        raise ValueError("Нет начального узла")
+    refs = {}
+    for key, node in nodes.items():
+        checked_text(key, "ID узла", 80)
+        if not isinstance(node, dict):
+            raise ValueError("Неверный узел")
+        if "auto_send" in node:
+            raise ValueError(f"Узел {key}: auto_send запрещён")
+        kind = node.get("type")
+        if not isinstance(kind, str) or kind not in PUBLISHED_TYPES:
+            raise ValueError(f"Неподдерживаемый тип: {kind}")
+        if kind in FORWARD_COMPAT_TYPES:
+            _validate_forward_compat_node(key, node, kind)
+            if kind in {"escalate", "operator_pause"} and not node.get("next"):
+                outgoing = []
+            else:
+                outgoing = [node.get("next")]
+        else:
+            outgoing = [] if kind == "finish" else [node.get("next")]
+            if kind == "condition":
+                outgoing = [node.get("yes"), node.get("no")]
+                checked_key(node.get("key"))
+            if kind == "wait":
+                seconds = node.get("seconds")
+                if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
+                    raise ValueError("Ожидание: 1–2592000 секунд")
+            if kind in SEND | {"question"}:
+                maximum = 1024 if kind in MEDIA else 4000
+                if kind == "video_note":
+                    maximum = 4000
+                checked_text(node.get("text", ""), f"Текст узла {key}", maximum)
+            if kind == "handoff":
+                cid = node.get("connection_id")
+                if not isinstance(cid, str) or not cid.strip() or len(cid) > 36:
+                    raise ValueError(f"handoff {key}: нужен connection_id")
+        if any(not isinstance(x, str) or x not in nodes for x in outgoing):
+            raise ValueError(f"Неверный переход из {key}")
+        refs[key] = list(outgoing)
+    visiting, visited = set(), set()
+
+    def visit(node_key):
+        if node_key in visiting:
+            raise ValueError("Циклы пока не поддерживаются")
+        if node_key in visited:
+            return
+        visiting.add(node_key)
+        for nxt in refs[node_key]:
+            visit(nxt)
+        visiting.remove(node_key)
+        visited.add(node_key)
+
+    visit(graph["start"])
+    if len(visited) != len(nodes):
+        raise ValueError("Есть недостижимые узлы")
+    return graph
+
 
 def validate_bindings(db, graph, connection_ids):
     from app.db import Asset, Connection

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — PDialog P0 scenario publish (signal#20)
+
+- M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.
+- `POST /api/crm/m2m/projects/{pid}/scenarios/versions` — accept/store immutable Funnel+Version from Signal (idempotent `external_idempotency_key`).
+- `POST .../executions/{execution_id}/pause` and `GET .../scenarios/versions/{id}/status`.
+- `validate_published_graph` allows forward-compat `llm_reply` (draft_only|human_approval + rules_version pin), `escalate`/`operator_pause`, `send_template`, `tag_contact`; rejects `auto_send`.
+- Mini App `/api/funnels/{id}/publish` remains strict `validate_graph` (no second canvas).
+
 ## Unreleased — CJ-108 SIGNAL_M2M_SCOPES (env allowlist)
 
 - `.env.example` `SIGNAL_M2M_SCOPES` now includes `timeline:write` (already in `DEFAULT_SCOPES`; explicit env on VPS was missing it → ingest 403).
