@@ -21,6 +21,8 @@ Studio/orchestrator at `signal.vodopetov.ru` — **not** a second CRM/Outbox. Sc
 
 **CJ-108:** Signal CE may write timeline via `timeline:write` → `POST …/communications/ingest` (Communication + DeliveryEvent + Interaction). Payload may carry a short plain `body_preview` only — never full HTML/email bodies or secrets.
 
+**Media SoR Wave B:** originals stay in Signal Media Registry. Voronka may cache delivery bytes keyed by Registry `asset_id` (`signal_asset_id` in asset metadata) and soft-attach the same id on Person timeline — **no** parallel CRM originals library; **no** `file_id` over M2M.
+
 Chatwoot и EspoCRM **не** входят в стек.
 
 ## API, которые сайт (solo_pr) может вызывать

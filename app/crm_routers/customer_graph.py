@@ -370,6 +370,127 @@ def add_interaction(pid: str, person_id: str, body: InteractionBody, admin=Depen
         return {**encode(row), "duplicate": dup}
 
 
+class SoftMediaAttachBody(Body):
+    """Soft-attach Signal/Registry asset_id — no CRM blob upload / second library."""
+
+    signal_asset_id: str = Field(min_length=8, max_length=80)
+    role: str = Field(default="attachment", max_length=40)
+    communication_id: str | None = None
+    name: str | None = Field(default=None, max_length=160)
+    ensure_delivery: bool = False
+    connection_ids: list[str] = Field(default_factory=list)
+
+
+@router.get("/projects/{pid}/persons/{person_id}/media-refs")
+def list_media_refs(pid: str, person_id: str, admin=Depends(crm_actor)):
+    from app import media_bridge
+
+    with Session() as db:
+        _person_acl(db, admin, person_id, pid)
+        return {
+            "person_id": person_id,
+            "project_id": pid,
+            "items": media_bridge.list_soft_refs(db, person_id, project_id=pid),
+        }
+
+
+@router.post("/projects/{pid}/persons/{person_id}/media-refs")
+def attach_media_ref(pid: str, person_id: str, body: SoftMediaAttachBody, admin=Depends(crm_actor)):
+    from app import media_bridge
+    from app import signal_media
+    from app.db import Connection
+
+    with Session.begin() as db:
+        person = _person_acl(db, admin, person_id, pid)
+        voronka_id = None
+        if body.ensure_delivery:
+            if not body.connection_ids:
+                raise HTTPException(422, "connection_ids required when ensure_delivery=true")
+            for cid in body.connection_ids:
+                connection = db.get(Connection, cid)
+                if not connection or connection.project_id != pid:
+                    raise HTTPException(404, "Подключение недоступно")
+            try:
+                asset, _ = media_bridge.ensure_voronka_asset_from_signal(
+                    db,
+                    signal_asset_id=body.signal_asset_id,
+                    connection_ids=list(body.connection_ids),
+                    name=body.name,
+                    communication_ref=f"voronka:person:{person.id}:{body.signal_asset_id}",
+                )
+                voronka_id = asset.id
+            except media_bridge.MediaBridgeError as exc:
+                raise media_bridge.bridge_http_error(exc) from exc
+        else:
+            signal_media.link_communication_asset(
+                asset_id=body.signal_asset_id,
+                communication_ref=f"voronka:person:{person.id}:{body.signal_asset_id}",
+                role=body.role,
+            )
+        row, dup = graph.record_interaction(
+            db,
+            person_id=person.id,
+            project_id=pid,
+            kind=media_bridge.SOFT_REF_KIND,
+            direction="system",
+            channel="media",
+            communication_id=body.communication_id,
+            source_service="voronka",
+            external_event_key=media_bridge.soft_ref_event_key(person.id, body.signal_asset_id),
+            payload=media_bridge.soft_ref_payload(
+                signal_asset_id=body.signal_asset_id,
+                role=body.role,
+                voronka_asset_id=voronka_id,
+                name=body.name,
+                communication_id=body.communication_id,
+            ),
+            evidence_status="recorded",
+        )
+        audit(
+            db,
+            admin,
+            "media_refs.attach",
+            person_id=person.id,
+            signal_asset_id=body.signal_asset_id,
+            duplicate=dup,
+        )
+        return {
+            "id": row.id,
+            "duplicate": dup,
+            "signal_asset_id": body.signal_asset_id,
+            "voronka_asset_id": voronka_id,
+            "library": False,
+        }
+
+
+@router.get("/projects/{pid}/media/signal/{signal_asset_id}/content")
+def signal_media_content(pid: str, signal_asset_id: str, admin=Depends(crm_actor)):
+    """Staff fetch-by-asset_id proxy (Registry preferred / Signal internal fallback)."""
+    from fastapi.responses import Response
+
+    from app import media_bridge
+    from app import signal_media
+
+    with Session() as db:
+        project_access(db, admin, pid)
+    try:
+        fetched = signal_media.fetch_asset_bytes(signal_asset_id)
+    except signal_media.SignalMediaError as exc:
+        raise media_bridge.bridge_http_error(
+            media_bridge.MediaBridgeError(exc.code, exc.message, details=exc.body)
+        ) from exc
+    return Response(
+        content=fetched.data,
+        media_type=fetched.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Media-Source": fetched.source,
+            "X-Media-Asset-Id": fetched.asset_id,
+        },
+    )
+
+
 class DeliveryBody(Body):
     normalized_status: Literal["queued", "accepted", "delivered", "failed", "read", "unknown"]
     platform_status: str = Field(default="", max_length=80)

@@ -44,6 +44,8 @@ Robokassa ResultURL
 
 Campaign payload может включать `asset_id` (`video_note`/`video`). Preflight блокирует чужой `file_id` без локального файла. MAX/VK: capability matrix — native video_note **unavailable**.
 
+**Media SoR Wave B:** Signal Media Registry = originals SoR. Voronka bank is a **delivery cache** bridged by `signal_asset_id` ↔ Voronka `assets.id`. CRM soft-refs store Registry `asset_id` only (`POST …/persons/{id}/media-refs`). Fetch: Registry presign (`MEDIA_REGISTRY_*`) or Signal internal content (`SIGNAL_INTERNAL_MEDIA_*`). `POST …/assets/ensure-from-signal` + campaign preflight/launch rewrite missing bank ids. **Never** a second CRM media library; Telegram `file_id` stays private inside Voronka. Cutover flag `MEDIA_WRITE_ORIGINALS_TO_SIGNAL` lives on Signal — Voronka must not flip it.
+
 ## Outreach
 
 `GET /api/crm/outreach-batches/{id}/export` — тексты+ссылки для ручной SIM. `OUTREACH_MAX_ENABLED=0` по умолчанию.

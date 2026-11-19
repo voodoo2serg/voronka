@@ -23,7 +23,29 @@ paths:
   /api/crm/m2m/projects/{pid}/assets/import:
     post:
       summary: Import asset with sha256 checksum
+      description: >
+        Optional signal_asset_id links Voronka bank row to Registry/Signal SoR id.
+        Response never includes Telegram file_id. Bank is delivery cache only.
       x-required-scopes: [asset:import]
+  /api/crm/m2m/projects/{pid}/assets/ensure-from-signal:
+    post:
+      summary: Fetch Registry/Signal bytes by asset_id → Voronka bank (Wave B)
+      description: >
+        Idempotent by signal_asset_id / sha256. Preferred SoR fetch = Registry
+        presign; fallback = Signal GET /api/v1/internal/media/{id}/content.
+        No second operator media library.
+      x-required-scopes: [asset:import]
+  /api/crm/m2m/projects/{pid}/persons/{person_id}/media-refs:
+    get:
+      summary: List soft Registry asset_id refs on Person timeline
+      x-required-scopes: [timeline:read]
+    post:
+      summary: Soft-attach Registry asset_id (Interaction only; no CRM blob store)
+      x-required-scopes: [timeline:write]
+  /api/crm/m2m/projects/{pid}/media/signal/{signal_asset_id}/content:
+    get:
+      summary: Fetch-by-asset_id proxy (raw bytes; never file_id)
+      x-required-scopes: [asset:read]
   /api/crm/m2m/projects/{pid}/contacts:
     get:
       summary: Limited contact/tag projection

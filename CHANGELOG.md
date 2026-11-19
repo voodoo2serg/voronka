@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Media SoR Wave B (VR-180)
+
+- Consume Signal/Registry `asset_id` via M2M: `POST …/assets/ensure-from-signal`, import accepts `signal_asset_id`.
+- Campaign CRM + M2M preflight/launch rewrite Signal ids → Voronka bank when fetch configured.
+- CRM soft-attach: staff + M2M `…/persons/{id}/media-refs` + fetch-by-asset_id content proxy.
+- Env (names only): `MEDIA_REGISTRY_*`, `SIGNAL_INTERNAL_MEDIA_*`. No cutover flag flip.
+- Tests: `tests/test_media_sor_wave_b.py`.
+
 ## Unreleased — PDialog P0 scenario publish (signal#20)
 
 - M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.

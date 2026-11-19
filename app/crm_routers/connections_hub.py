@@ -115,6 +115,7 @@ def project_media_assets(pid: str, admin=Depends(crm_actor)):
             blocker = None
             if not asset.local_path and not asset.telegram_refs:
                 blocker = "Нет локального файла и file_id — рассылка невозможна"
+            meta = asset.metadata_json or {}
             items.append({
                 "id": asset.id,
                 "name": asset.name,
@@ -124,9 +125,11 @@ def project_media_assets(pid: str, admin=Depends(crm_actor)):
                 "telegram_ref_connections": list((asset.telegram_refs or {}).keys()) if admin.role != "manager" else [],
                 "connection_ids": overlap if admin.role != "owner" else (asset.connection_ids or []),
                 "blocker": blocker,
+                "sha256": meta.get("sha256"),
+                "signal_asset_id": meta.get("signal_asset_id"),
                 "created_at": asset.created_at,
             })
         return {"items": items, "admin_bot_media_policy": {
             "decision": "user_bot_import_sufficient",
-            "note": "Приём кружков через user-bot forward достаточен; отдельный admin-бот опционален для UX (не вторая медиасистема).",
+            "note": "Приём кружков через user-bot forward достаточен; отдельный admin-бот опционален для UX (не вторая медиасистема). Soft-ref Signal asset_id — Wave B, без второй библиотеки.",
         }}
