@@ -663,7 +663,10 @@ def test_portal_payment_providers_mail_analytics_and_filters(crm, monkeypatch):
     assert providers['robokassa']['mode'] == 'test'
     assert providers['robokassa']['ready'] is True
     assert providers['robokassa']['secrets_exposed'] is False
+    assert providers['robokassa']['receipt_in_adapter'] is True
     assert '/api/crm/robokassa/result' in providers['robokassa']['result_url']
+    assert any(i['id'] == 'receipt_payload' and i['done'] for i in providers['robokassa']['fiscalization_checklist'])
+    assert providers['robokassa']['live_ready'] is False or providers['robokassa']['mode'] == 'test'
     assert providers['yookassa']['adapter'] == 'not_implemented'
     assert providers['stats']['source'] == 'Payment/Order'
     assert crm.client.post('/api/crm/yookassa/webhook').status_code == 501

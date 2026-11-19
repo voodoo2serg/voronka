@@ -41,7 +41,11 @@ export function PaymentsSection({ data }: { data: Row | null }) {
               : 'ещё не было уведомлений'}
           </dd>
           <dt>Receipt в адаптере</dt>
-          <dd>нет — фискализация вне Voronka</dd>
+          <dd>
+            {rk.receipt_in_adapter
+              ? `да — параметр Receipt в запросе (tax=${rk.receipt_tax || 'none'}${rk.receipt_sno ? `, sno=${rk.receipt_sno}` : ''})`
+              : 'нет'}
+          </dd>
         </dl>
         <h3>Чек-лист фискализации</h3>
         <ul className="checklist">
@@ -51,7 +55,10 @@ export function PaymentsSection({ data }: { data: Row | null }) {
             </li>
           ))}
         </ul>
-        <p className="fine">Секреты не показываются. Статистика ниже — только из Payment/Order.</p>
+        <p className="fine">
+          Секреты не показываются. <code>ROBOKASSA_LIVE_READY</code> не включается из UI — только после закрытия
+          чек-листа и решения владельца. Статистика ниже — только из Payment/Order.
+        </p>
       </section>
       <div>
         <section className="panel">

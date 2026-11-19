@@ -70,13 +70,17 @@ def portal_chrome(role: str | None = None) -> list[dict]:
 
 
 def robokassa_status() -> dict:
+    from app import robokassa_receipt
+
     login = bool(os.getenv("ROBOKASSA_LOGIN"))
     test = os.getenv("ROBOKASSA_TEST", "1") == "1"
     test_pw = bool(os.getenv("ROBOKASSA_TEST_PASSWORD1") and os.getenv("ROBOKASSA_TEST_PASSWORD2"))
     live_pw = bool(os.getenv("ROBOKASSA_PASSWORD1") and os.getenv("ROBOKASSA_PASSWORD2"))
     live_ready_flag = os.getenv("ROBOKASSA_LIVE_READY", "0") == "1"
     passwords_set = test_pw if test else live_pw
+    # ready = credentials for current mode; live still requires LIVE_READY (never flipped by this slice).
     ready = bool(login and passwords_set and (test or live_ready_flag))
+    receipt_meta = robokassa_receipt.receipt_env_configured()
     return {
         "provider": "robokassa",
         "login_set": login,
@@ -88,13 +92,55 @@ def robokassa_status() -> dict:
         "live_ready": live_ready_flag,
         "ready": ready,
         "result_url": f"{crm_public_base()}/api/crm/robokassa/result",
-        "receipt_in_adapter": False,
+        "receipt_in_adapter": True,
+        "receipt_tax": receipt_meta["tax"],
+        "receipt_sno": receipt_meta["sno"],
         "fiscalization_checklist": [
-            {"id": "shop_mode", "label": "Магазин Robokassa в нужном режиме (тест/бой), пароли #1/#2 совпадают", "done": ready},
-            {"id": "hash", "label": "Алгоритм хеша магазина совпадает с ROBOKASSA_HASH", "done": bool(os.getenv("ROBOKASSA_HASH", "sha256"))},
-            {"id": "result_url", "label": "ResultURL указывает на /api/crm/robokassa/result и отвечает OK{InvId}", "done": False},
-            {"id": "fiscal", "label": "Фискализация решена в схеме магазина (адаптер не передаёт Receipt)", "done": False},
-            {"id": "live_gate", "label": "ROBOKASSA_LIVE_READY=1 только после фискализации и staging-платежа", "done": live_ready_flag and not test},
+            {
+                "id": "shop_mode",
+                "label": "Магазин Robokassa в нужном режиме (тест/бой), пароли #1/#2 заданы для режима",
+                "done": bool(login and passwords_set),
+            },
+            {
+                "id": "hash",
+                "label": "Алгоритм хеша магазина совпадает с ROBOKASSA_HASH",
+                "done": (os.getenv("ROBOKASSA_HASH", "sha256").lower() in robokassa_receipt.ALLOWED_HASH),
+            },
+            {
+                "id": "result_url",
+                "label": "ResultURL указывает на /api/crm/robokassa/result и отвечает OK{InvId}",
+                "done": False,
+            },
+            {
+                "id": "receipt_payload",
+                "label": "Адаптер передаёт параметр Receipt (номенклатура) в запросе оплаты и в подписи",
+                "done": True,
+            },
+            {
+                "id": "fiscal_shop",
+                "label": "В ЛК Robokassa включена фискализация (облако / робочеки / касса) для этого магазина",
+                "done": False,
+            },
+            {
+                "id": "tax_env",
+                "label": "ROBOKASSA_RECEIPT_TAX (и при необходимости SNO) согласованы с СНО продавца",
+                "done": bool(receipt_meta["tax_valid"] and receipt_meta["sno_valid"] and receipt_meta["tax_env_set"]),
+            },
+            {
+                "id": "staging_pay",
+                "label": "Staging-платёж (ROBOKASSA_TEST=1) с чеком проверен в ЛК Robokassa",
+                "done": False,
+            },
+            {
+                "id": "owner_approval",
+                "label": "Письменное решение владельца на live-деньги (после закрытия чек-листа)",
+                "done": False,
+            },
+            {
+                "id": "live_gate",
+                "label": "ROBOKASSA_LIVE_READY=1 только после фискализации, staging и owner approval — не flip из кода",
+                "done": live_ready_flag and not test,
+            },
         ],
         "secrets_exposed": False,
     }
