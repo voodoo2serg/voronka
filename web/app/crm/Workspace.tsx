@@ -54,6 +54,10 @@ export default function Workspace() {
   const [paste, setPaste] = useState('');
   const [preview, setPreview] = useState<Row | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [importKind, setImportKind] = useState<'clients' | 'audience'>('clients');
+  const [audienceConsentMode, setAudienceConsentMode] = useState<'quarantine' | 'grant_marketing'>('quarantine');
+  const [audienceEvidence, setAudienceEvidence] = useState('');
+  const [audiencePreview, setAudiencePreview] = useState<Row | null>(null);
   const [portalLinks, setPortalLinks] = useState<Row[]>([]);
   const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
@@ -409,6 +413,22 @@ export default function Workspace() {
     const p = await api(`/projects/${pid}/imports/preview`, 'POST', data);
     setPreview(p);
     setMapping(p.mapping);
+  }
+
+  async function previewAudience(fields: Record<string, string> = mapping) {
+    const f = file || (paste ? new File([paste], 'audience.csv', { type: 'text/csv' }) : null);
+    if (!f) throw new Error('Выберите CSV или вставьте строки с заголовками');
+    if (audienceConsentMode === 'grant_marketing' && !audienceEvidence.trim()) {
+      throw new Error('Для grant_marketing укажите evidence (источник согласия)');
+    }
+    const data = new FormData();
+    data.append('file', f);
+    data.append('mapping', JSON.stringify(fields));
+    data.append('consent_mode', audienceConsentMode);
+    data.append('consent_evidence', audienceEvidence);
+    const p = await api(`/projects/${pid}/audience-imports/dry-run`, 'POST', data);
+    setAudiencePreview(p);
+    setMapping(p.mapping || {});
   }
 
   function campaignForm() {
@@ -1563,8 +1583,46 @@ export default function Workspace() {
               {section === 'imports' && (
                 <div className="import-layout">
                   <section className="panel">
+                    <h2>Тип импорта</h2>
+                    <div className="actions" style={{ gap: 8, flexWrap: 'wrap' }}>
+                      <button className={importKind === 'clients' ? 'primary' : ''} onClick={() => { setImportKind('clients'); setAudiencePreview(null); }}>
+                        Клиенты (Profile)
+                      </button>
+                      <button className={importKind === 'audience' ? 'primary' : ''} onClick={() => { setImportKind('audience'); setPreview(null); }}>
+                        Аудитория Person+Consent
+                      </button>
+                    </div>
+                    <p className="fine">
+                      {importKind === 'audience'
+                        ? 'IMPORT-101: email/Telegram → Person + ContactPoint + Consent. Без marketing Consent адрес не sendable (send_allowed deny). Массовая отправка не выполняется.'
+                        : 'Классический импорт клиентов в CRM Profile.'}
+                    </p>
+                  </section>
+                  <section className="panel">
                     <h2>1. Подготовьте данные</h2>
                     <p className="muted">CSV до 5 МБ и 5000 строк. UTF-8 или Windows-1251. Разделитель определяется автоматически.</p>
+                    {importKind === 'audience' && (
+                      <>
+                        <label>
+                          Режим согласия
+                          <select
+                            value={audienceConsentMode}
+                            onChange={(e) => setAudienceConsentMode(e.target.value as 'quarantine' | 'grant_marketing')}
+                          >
+                            <option value="quarantine">Quarantine — без marketing grant (по умолчанию)</option>
+                            <option value="grant_marketing">Grant marketing — только с evidence</option>
+                          </select>
+                        </label>
+                        <label>
+                          Evidence (источник согласия / подтверждения базы)
+                          <input
+                            value={audienceEvidence}
+                            onChange={(e) => setAudienceEvidence(e.target.value)}
+                            placeholder="например: partner export 2026-11-19, confirmed opt-in"
+                          />
+                        </label>
+                      </>
+                    )}
                     <label>
                       Файл CSV
                       <input
@@ -1573,6 +1631,7 @@ export default function Workspace() {
                         onChange={(e) => {
                           setFile(e.target.files?.[0] || null);
                           setPreview(null);
+                          setAudiencePreview(null);
                           setMapping({});
                         }}
                       />
@@ -1581,22 +1640,37 @@ export default function Workspace() {
                       Или вставьте таблицу с заголовками
                       <textarea
                         rows={7}
-                        placeholder={'Имя;Email;Телефон\nАнна;anna@example.ru;+79991234567'}
+                        placeholder={
+                          importKind === 'audience'
+                            ? 'email;telegram_id;telegram_username;name\nanna@example.ru;1234;@anna;Анна'
+                            : 'Имя;Email;Телефон\nАнна;anna@example.ru;+79991234567'
+                        }
                         value={paste}
                         onChange={(e) => {
                           setPaste(e.target.value);
                           setFile(null);
                           setPreview(null);
+                          setAudiencePreview(null);
                           setMapping({});
                         }}
                       />
                     </label>
-                    <button className="primary" disabled={busy || (!file && !paste)} onClick={() => void act(() => previewFile({}))}>
-                      Проверить и сопоставить
+                    <button
+                      className="primary"
+                      disabled={busy || (!file && !paste)}
+                      onClick={() =>
+                        void act(() => (importKind === 'audience' ? previewAudience({}) : previewFile({})))
+                      }
+                    >
+                      {importKind === 'audience' ? 'Dry-run (подсчёт)' : 'Проверить и сопоставить'}
                     </button>
-                    <p className="fine">Имена и username не используются для автоматического слияния. Возможные дубли пропускаются без перезаписи.</p>
+                    <p className="fine">
+                      {importKind === 'audience'
+                        ? 'Идемпотентность по email / telegram_id / username. Повтор того же файла не дублирует Person.'
+                        : 'Имена и username не используются для автоматического слияния. Возможные дубли пропускаются без перезаписи.'}
+                    </p>
                   </section>
-                  {preview && (
+                  {importKind === 'clients' && preview && (
                     <section className="panel">
                       <h2>2. Проверьте соответствия</h2>
                       <div className="mapping">
@@ -1656,6 +1730,77 @@ export default function Workspace() {
                         {preview.state === 'done' ? 'Партия импортирована' : '3. Импортировать в базу'}
                       </button>
                       {preview.report?.errors?.map((e: Row) => (
+                        <p key={e.line} className="fine">
+                          Строка {e.line}: {e.error}
+                        </p>
+                      ))}
+                    </section>
+                  )}
+                  {importKind === 'audience' && audiencePreview && (
+                    <section className="panel">
+                      <h2>2. Dry-run результат</h2>
+                      <div className="mapping">
+                        {[
+                          ['name', 'Имя'],
+                          ['email', 'Email'],
+                          ['telegram_id', 'Telegram ID'],
+                          ['telegram_username', 'Telegram username'],
+                        ].map(([field, label]) => (
+                          <label key={field}>
+                            {label}
+                            <select value={mapping[field] || ''} onChange={(e) => setMapping({ ...mapping, [field]: e.target.value })}>
+                              <option value="">Не импортировать</option>
+                              {(audiencePreview.headers || []).map((h: string) => (
+                                <option key={h}>{h}</option>
+                              ))}
+                            </select>
+                          </label>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() =>
+                          void act(() => previewAudience(Object.fromEntries(Object.entries(mapping).filter(([, v]) => v))))
+                        }
+                      >
+                        Обновить dry-run
+                      </button>
+                      <p>
+                        Всего: {audiencePreview.counts?.total ?? 0} · persons+{' '}
+                        {audiencePreview.counts?.created_persons ?? 0} / upd {audiencePreview.counts?.updated_persons ?? 0} · points+{' '}
+                        {audiencePreview.counts?.created_contact_points ?? 0} · granted{' '}
+                        {audiencePreview.counts?.consent_granted ?? 0} · quarantine {audiencePreview.counts?.quarantined ?? 0} ·
+                        ошибок {audiencePreview.counts?.errors ?? 0}
+                      </p>
+                      <div className="preview-scroll">
+                        {(audiencePreview.samples || []).map((r: Row) => (
+                          <div className="preview-row" key={r.line}>
+                            <b>
+                              #{r.line} {r.email || r.telegram_id || r.telegram_username}
+                            </b>
+                            <small>
+                              marketing send_allowed: {String(r.marketing_send_allowed)} ({r.marketing_reason})
+                            </small>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        className="primary"
+                        disabled={busy || audiencePreview.state === 'done'}
+                        onClick={() =>
+                          void act(async () => {
+                            const r = await api('/audience-imports/' + audiencePreview.id + '/commit', 'POST');
+                            setAudiencePreview({ ...audiencePreview, state: 'done', ...r });
+                            const c = r.counts || {};
+                            setNotice(
+                              `Аудитория: persons+${c.created_persons || 0}, granted=${c.consent_granted || 0}, quarantine=${c.quarantined || 0}. Рассылка не запускалась.`,
+                            );
+                            await load();
+                          })
+                        }
+                      >
+                        {audiencePreview.state === 'done' ? 'Партия аудитории записана' : '3. Записать Person + Consent'}
+                      </button>
+                      {(audiencePreview.errors || []).map((e: Row) => (
                         <p key={e.line} className="fine">
                           Строка {e.line}: {e.error}
                         </p>

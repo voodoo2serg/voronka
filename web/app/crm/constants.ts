@@ -34,6 +34,6 @@ export const sectionHints: Record<string, string> = {
   campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
   outreach: 'Прогрев по телефону: dry_run с ссылкой на официальный бот, без Campaign/Outbox.',
-  imports: 'Превратите старые базы в рабочие данные.',
+  imports: 'Клиенты (Profile) или аудитория IMPORT-101: Person + ContactPoint + Consent.',
   settings: 'Люди, каналы, Mailu/SMTP и согласование ролей с CMS.',
 };
