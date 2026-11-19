@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — CJ-108 Person timeline in CRM contact drawer (VR-186)
+
+- `GET /api/crm/contacts/{id}` includes `person_interactions` + `person_communications` when Profile is linked to a Person.
+- History queries scoped to the contact's `project_id` (no cross-project Person leak).
+- Communications fetched by IDs referenced from the returned interactions (aligned sets).
+- CRM «История» renders Signal CE writeback (kind / status / body_preview) ahead of manual activities.
+- Tests: CJ-108 ingest contact detail + project-scope / aligned-comms coverage.
+
 ## Unreleased — PAY-101 Robokassa Receipt (VR-187)
 
 - Robokassa checkout sends fiscal `Receipt` (54-FZ nomenclature) and includes URL-encoded Receipt in `SignatureValue`.
