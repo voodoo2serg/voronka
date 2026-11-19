@@ -123,17 +123,20 @@ def audience_fingerprint(raw: bytes, mapping: dict, consent_mode: str, evidence:
     return hashlib.sha256(raw + json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def _find_contact_point(db, *, channel: str, normalized: str) -> ContactPoint | None:
+def _find_contact_points(db, *, channel: str, normalized: str) -> list[ContactPoint]:
+    """All ContactPoints for an address (unique only per person — may have multiple owners)."""
     digest = graph.address_hash(channel, normalized)
-    return db.scalar(
-        select(ContactPoint).where(
-            ContactPoint.channel == channel,
-            ContactPoint.address_hash == digest,
+    return list(
+        db.scalars(
+            select(ContactPoint).where(
+                ContactPoint.channel == channel,
+                ContactPoint.address_hash == digest,
+            )
         )
     )
 
 
-def _resolve_person_for_project(db, project_id: str, person: Person) -> Person:
+def _resolve_merged_person(db, person: Person) -> Person:
     if person.merged_into_id:
         person = db.get(Person, person.merged_into_id) or person
     return person
@@ -156,44 +159,61 @@ def _find_existing_person(
     telegram_id: str,
     telegram_username: str,
 ) -> tuple[Person | None, str]:
-    """Return (person, match_key) using natural keys; prefer project-bound Person."""
-    candidates: list[tuple[Person, str]] = []
+    """Return (person, match_key) using natural keys.
 
-    def consider(cp: ContactPoint | None, key: str) -> None:
-        if cp is None:
-            return
+    All matched people (including outside the project) participate in the
+    ambiguity check before any project preference. Multiple owners of the same
+    address → ambiguous. No silent cross-person contact-point merge.
+    """
+    candidates: list[tuple[Person, str]] = []
+    multi_owner = False
+
+    def consider_cp(cp: ContactPoint, key: str) -> None:
         person = db.get(Person, cp.person_id)
         if person is None:
             return
-        person = _resolve_person_for_project(db, project_id, person)
-        candidates.append((person, key))
+        candidates.append((_resolve_merged_person(db, person), key))
+
+    def consider_all(channel: str, normalized: str, key: str) -> None:
+        nonlocal multi_owner
+        points = _find_contact_points(db, channel=channel, normalized=normalized)
+        owners: set[str] = set()
+        for cp in points:
+            owner = db.get(Person, cp.person_id)
+            if owner is None:
+                continue
+            owners.add(_resolve_merged_person(db, owner).id)
+        if len(owners) > 1:
+            # Same address owned by multiple people — reject before merge.
+            multi_owner = True
+            return
+        for cp in points:
+            consider_cp(cp, key)
 
     if email:
-        consider(_find_contact_point(db, channel="email", normalized=email), f"email:{email}")
+        consider_all("email", email, f"email:{email}")
         profile = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.email == email))
         if profile and profile.person_id:
             person = db.get(Person, profile.person_id)
             if person:
-                candidates.append((_resolve_person_for_project(db, project_id, person), f"profile_email:{email}"))
+                candidates.append((_resolve_merged_person(db, person), f"profile_email:{email}"))
     if telegram_id:
-        consider(_find_contact_point(db, channel="telegram", normalized=telegram_id), f"telegram_id:{telegram_id}")
+        consider_all("telegram", telegram_id, f"telegram_id:{telegram_id}")
     if telegram_username:
-        consider(
-            _find_contact_point(db, channel="telegram", normalized=telegram_username),
-            f"telegram_username:{telegram_username}",
-        )
+        consider_all("telegram", telegram_username, f"telegram_username:{telegram_username}")
 
+    if multi_owner:
+        return None, "ambiguous"
     if not candidates:
         return None, ""
 
-    # Prefer a person already linked to this project.
-    project_bound = [(p, k) for p, k in candidates if _person_in_project(db, p.id, project_id)]
-    pool = project_bound or candidates
-    unique = {p.id: (p, k) for p, k in pool}
+    unique = {p.id: (p, k) for p, k in candidates}
     if len(unique) > 1:
-        # Ambiguous natural keys across persons — caller treats as error.
         return None, "ambiguous"
     person, key = next(iter(unique.values()))
+    # Project preference is informational only after uniqueness is proven.
+    if _person_in_project(db, person.id, project_id) and not key.startswith("profile_"):
+        key = f"project:{key}"
     return person, key
 
 
@@ -207,7 +227,8 @@ def _ensure_project_profile(
     source: str,
     batch_id: str,
     line: int,
-) -> Profile:
+) -> Profile | None:
+    """Attach or create project Profile. Returns None on person conflict (ambiguous)."""
     profile = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.person_id == person.id))
     if profile:
         if email and not profile.email:
@@ -218,6 +239,8 @@ def _ensure_project_profile(
     if email:
         by_email = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.email == email))
         if by_email:
+            if by_email.person_id and by_email.person_id != person.id:
+                return None  # would silently reassign Profile → another Person
             by_email.person_id = person.id
             if name and not by_email.name:
                 by_email.name = name
@@ -250,12 +273,16 @@ def _apply_consent(
     *,
     consent_mode: ConsentMode,
     evidence: str,
-) -> tuple[str, bool]:
-    """Return (consent_status, newly_granted)."""
+) -> tuple[str, bool, bool]:
+    """Return (consent_status, newly_granted, newly_quarantined).
+
+    Quarantine never overwrites granted/denied/revoked — only creates unknown
+    when no marketing Consent row exists.
+    """
+    prior = db.scalar(
+        select(Consent).where(Consent.contact_point_id == contact_point_id, Consent.purpose == "marketing")
+    )
     if consent_mode == "grant_marketing":
-        prior = db.scalar(
-            select(Consent).where(Consent.contact_point_id == contact_point_id, Consent.purpose == "marketing")
-        )
         was_granted = bool(prior and prior.status == "granted")
         graph.set_consent(
             db,
@@ -265,8 +292,13 @@ def _apply_consent(
             evidence=evidence,
             lawful_basis="consent",
         )
-        return "granted", not was_granted
-    # Quarantine: never grant marketing; record unknown for audit.
+        return "granted", not was_granted, False
+
+    # Quarantine: preserve definitive prior states.
+    if prior and prior.status in {"granted", "denied", "revoked"}:
+        return prior.status, False, False
+    if prior and prior.status == "unknown":
+        return "unknown", False, False
     graph.set_consent(
         db,
         contact_point_id,
@@ -275,7 +307,30 @@ def _apply_consent(
         evidence=evidence or "audience_import:quarantine",
         lawful_basis="consent",
     )
-    return "unknown", False
+    return "unknown", False, True
+
+
+def _contact_point_for_person(
+    db,
+    person: Person,
+    *,
+    channel: str,
+    normalized: str,
+) -> tuple[ContactPoint | None, str]:
+    """Return (existing CP on this person, error).
+
+    If the address is owned by any other person → ambiguous (no silent merge).
+    """
+    points = _find_contact_points(db, channel=channel, normalized=normalized)
+    foreign = [
+        cp
+        for cp in points
+        if _resolve_merged_person(db, db.get(Person, cp.person_id) or Person(id=cp.person_id)).id != person.id
+    ]
+    if foreign:
+        return None, "ambiguous"
+    own = next((cp for cp in points if cp.person_id == person.id), None)
+    return own, ""
 
 
 def plan_or_apply_audience_rows(
@@ -305,6 +360,7 @@ def plan_or_apply_audience_rows(
         "updated_contact_points": 0,
         "consent_granted": 0,
         "quarantined": 0,
+        "consent_preserved": 0,
         "unchanged": 0,
         "ambiguous": 0,
     }
@@ -337,6 +393,28 @@ def plan_or_apply_audience_rows(
                 error_rows.append({"line": entry["line"], "error": "ambiguous_natural_key"})
                 continue
 
+            channels: list[tuple[str, str]] = []
+            if email:
+                channels.append(("email", email))
+            if telegram_id:
+                channels.append(("telegram", telegram_id))
+            if telegram_username:
+                channels.append(("telegram", telegram_username))
+
+            # Preflight: if any address is owned by another person, refuse (no silent merge).
+            if person is not None:
+                preflight_ok = True
+                for channel, value in channels:
+                    _, cp_err = _contact_point_for_person(db, person, channel=channel, normalized=value)
+                    if cp_err == "ambiguous":
+                        preflight_ok = False
+                        break
+                if not preflight_ok:
+                    counts["ambiguous"] += 1
+                    counts["errors"] += 1
+                    error_rows.append({"line": entry["line"], "error": "ambiguous_natural_key"})
+                    continue
+
             created_person = False
             if person is None:
                 person = Person(
@@ -367,7 +445,7 @@ def plan_or_apply_audience_rows(
                     person.updated_at = now()
                 counts["updated_persons"] += 1
 
-            _ensure_project_profile(
+            profile = _ensure_project_profile(
                 db,
                 project_id,
                 person,
@@ -377,26 +455,30 @@ def plan_or_apply_audience_rows(
                 batch_id=batch_id,
                 line=entry["line"],
             )
-
-            channels: list[tuple[str, str]] = []
-            if email:
-                channels.append(("email", email))
-            if telegram_id:
-                channels.append(("telegram", telegram_id))
-            if telegram_username:
-                channels.append(("telegram", telegram_username))
+            if profile is None:
+                counts["ambiguous"] += 1
+                counts["errors"] += 1
+                error_rows.append({"line": entry["line"], "error": "ambiguous_profile_person"})
+                continue
 
             row_granted = 0
             row_quarantine = 0
+            row_preserved = 0
             row_cp_created = 0
             row_cp_updated = 0
             point_ids: list[str] = []
 
             for channel, value in channels:
-                before = _find_contact_point(db, channel=channel, normalized=value)
-                existed_for_person = bool(
-                    before and before.person_id == person.id
+                before, cp_err = _contact_point_for_person(
+                    db, person, channel=channel, normalized=value
                 )
+                if cp_err == "ambiguous":
+                    # Should have been caught in preflight; refuse rather than merge.
+                    counts["ambiguous"] += 1
+                    counts["errors"] += 1
+                    error_rows.append({"line": entry["line"], "error": "ambiguous_natural_key"})
+                    point_ids = []
+                    break
                 verified = consent_mode == "grant_marketing"
                 cp = graph.upsert_contact_point(
                     db,
@@ -408,31 +490,43 @@ def plan_or_apply_audience_rows(
                 )
                 if cp is None:
                     continue
-                if before is None or not existed_for_person:
+                if before is None:
                     row_cp_created += 1
                 else:
                     row_cp_updated += 1
                     if verified and not before.verified:
                         cp.verified = True
-                status, newly_granted = _apply_consent(
+                status, newly_granted, newly_quarantined = _apply_consent(
                     db,
                     cp.id,
                     consent_mode=consent_mode,
                     evidence=evidence
                     or f"audience_import:{batch_id}:line:{entry['line']}",
                 )
-                if status == "granted":
-                    if newly_granted:
-                        row_granted += 1
-                else:
+                if newly_granted:
+                    row_granted += 1
+                elif newly_quarantined:
                     row_quarantine += 1
+                elif status in {"granted", "denied", "revoked"} and consent_mode == "quarantine":
+                    row_preserved += 1
                 point_ids.append(cp.id)
+
+            if not point_ids and any(True for _ in channels):
+                # Ambiguity abort mid-row: skip interaction/sample.
+                continue
 
             counts["created_contact_points"] += row_cp_created
             counts["updated_contact_points"] += row_cp_updated
             counts["consent_granted"] += row_granted
             counts["quarantined"] += row_quarantine
-            if not created_person and row_cp_created == 0 and row_granted == 0 and row_quarantine == 0:
+            counts["consent_preserved"] += row_preserved
+            if (
+                not created_person
+                and row_cp_created == 0
+                and row_granted == 0
+                and row_quarantine == 0
+                and row_preserved == 0
+            ):
                 counts["unchanged"] += 1
 
             # Audit interaction (idempotent per batch+line)

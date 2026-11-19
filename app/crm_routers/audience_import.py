@@ -174,11 +174,15 @@ async def audience_import_commit(
 @router.post("/audience-imports/{bid}/commit")
 def audience_import_commit_batch(
     bid: str,
-    consent_mode: ConsentMode | None = None,
-    consent_evidence: str | None = None,
+    consent_mode: ConsentMode = Form(...),
+    consent_evidence: str = Form(""),
     admin=Depends(crm_actor),
 ):
-    """Commit a previously dry-run / previewed audience ImportBatch."""
+    """Commit a previously dry-run audience ImportBatch.
+
+    Current UI consent_mode/evidence are required and must match the previewed
+    batch fingerprint fields — otherwise 409 (re-run dry-run).
+    """
     with Session.begin() as db:
         batch = must(db.scalar(select(ImportBatch).where(ImportBatch.id == bid).with_for_update()))
         project_access(db, admin, batch.project_id)
@@ -187,21 +191,22 @@ def audience_import_commit_batch(
             raise HTTPException(422, "Партия не является audience-import")
         if batch.state == "done":
             return {"id": batch.id, "state": batch.state, "replay": True, **(batch.report or {})}
-        db.scalar(select(Project).where(Project.id == batch.project_id).with_for_update())
-        mode = consent_mode or (batch.mapping or {}).get("_consent_mode") or "quarantine"
-        evidence = (
-            consent_evidence
-            if consent_evidence is not None
-            else (batch.mapping or {}).get("_evidence") or ""
-        )
-        if mode == "grant_marketing" and not str(evidence).strip():
+        stored_mode = (batch.mapping or {}).get("_consent_mode") or "quarantine"
+        stored_evidence = (batch.mapping or {}).get("_evidence") or ""
+        if consent_mode != stored_mode or consent_evidence != stored_evidence:
+            raise HTTPException(
+                409,
+                "consent_mode/evidence изменились после dry-run — повторите dry-run",
+            )
+        if consent_mode == "grant_marketing" and not str(consent_evidence).strip():
             raise HTTPException(422, "Для grant_marketing нужна evidence")
+        db.scalar(select(Project).where(Project.id == batch.project_id).with_for_update())
         result = ai.plan_or_apply_audience_rows(
             db,
             project_id=batch.project_id,
             rows=batch.rows or [],
-            consent_mode=mode,
-            evidence=str(evidence),
+            consent_mode=consent_mode,
+            evidence=consent_evidence,
             batch_id=batch.id,
             actor_id=admin.telegram_id,
             dry_run=False,
@@ -217,7 +222,7 @@ def audience_import_commit_batch(
             batch_id=batch.id,
             project_id=batch.project_id,
             counts=result["counts"],
-            consent_mode=mode,
-            evidence=str(evidence)[:200],
+            consent_mode=consent_mode,
+            evidence=consent_evidence[:200],
         )
         return {"id": batch.id, "state": batch.state, "replay": False, **result}

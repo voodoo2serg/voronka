@@ -1607,7 +1607,10 @@ export default function Workspace() {
                           Режим согласия
                           <select
                             value={audienceConsentMode}
-                            onChange={(e) => setAudienceConsentMode(e.target.value as 'quarantine' | 'grant_marketing')}
+                            onChange={(e) => {
+                              setAudienceConsentMode(e.target.value as 'quarantine' | 'grant_marketing');
+                              setAudiencePreview(null);
+                            }}
                           >
                             <option value="quarantine">Quarantine — без marketing grant (по умолчанию)</option>
                             <option value="grant_marketing">Grant marketing — только с evidence</option>
@@ -1617,10 +1620,18 @@ export default function Workspace() {
                           Evidence (источник согласия / подтверждения базы)
                           <input
                             value={audienceEvidence}
-                            onChange={(e) => setAudienceEvidence(e.target.value)}
+                            onChange={(e) => {
+                              setAudienceEvidence(e.target.value);
+                              setAudiencePreview(null);
+                            }}
                             placeholder="например: partner export 2026-11-19, confirmed opt-in"
                           />
                         </label>
+                        {audiencePreview && (
+                          <p className="fine">
+                            Dry-run зафиксировал mode={String(audiencePreview.consent_mode)}. Смена mode/evidence сбрасывает preview — нужен новый dry-run.
+                          </p>
+                        )}
                       </>
                     )}
                     <label>
@@ -1785,10 +1796,20 @@ export default function Workspace() {
                       </div>
                       <button
                         className="primary"
-                        disabled={busy || audiencePreview.state === 'done'}
+                        disabled={
+                          busy ||
+                          audiencePreview.state === 'done' ||
+                          audiencePreview.consent_mode !== audienceConsentMode
+                        }
                         onClick={() =>
                           void act(async () => {
-                            const r = await api('/audience-imports/' + audiencePreview.id + '/commit', 'POST');
+                            if (audiencePreview.consent_mode !== audienceConsentMode) {
+                              throw new Error('Mode изменился — повторите dry-run');
+                            }
+                            const data = new FormData();
+                            data.append('consent_mode', audienceConsentMode);
+                            data.append('consent_evidence', audienceEvidence);
+                            const r = await api('/audience-imports/' + audiencePreview.id + '/commit', 'POST', data);
                             setAudiencePreview({ ...audiencePreview, state: 'done', ...r });
                             const c = r.counts || {};
                             setNotice(

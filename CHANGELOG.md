@@ -10,7 +10,9 @@
 ## Unreleased — IMPORT-101 audience import (Person + Consent)
 
 - Admin/ops CSV import: `POST /api/crm/projects/{pid}/audience-imports/dry-run`, `POST …/audience-imports`, `POST /api/crm/audience-imports/{id}/commit`.
-- Creates/updates `Person` + `ContactPoint` (email / telegram id / username) idempotently; marketing Consent is either `unknown` (quarantine) or `granted` (explicit evidence only).
+- Creates/updates `Person` + `ContactPoint` (email / telegram id / username) idempotently; marketing Consent is either `unknown` (quarantine, only if missing) or `granted` (explicit evidence only). Quarantine preserves granted/denied/revoked.
+- Ambiguity: all matched people + all owners of an address; multi-owner / cross-person → reject (no silent merge).
+- Commit requires current consent_mode/evidence matching dry-run batch (409 otherwise); CRM UI invalidates preview on mode/evidence change.
 - `send_allowed(..., purpose=marketing, missing_policy=deny)` stays closed for quarantine rows — no mass send.
 - CRM UI «Импорт данных» → mode «Аудитория Person+Consent» with dry-run counts.
 - Tests: `tests/test_audience_import.py`.
