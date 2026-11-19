@@ -2,7 +2,14 @@ from urllib.parse import urlparse
 
 MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
-TYPES = SEND | {"question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal", "handoff"}
+# escalate / operator_pause = pause for human (≠ handoff bot switch).
+# llm_reply = draft-first LLM node (PDialog P1 / Signal#20); auto_send is never a publish field.
+TYPES = SEND | {
+    "question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal",
+    "handoff", "llm_reply", "escalate", "operator_pause",
+}
+LLM_MODES = {"draft_only", "human_approval"}
+LLM_PROVIDERS = {"raga", "openrouter", "ollama", "openai_compatible"}
 RESERVED = "_"
 
 def checked_text(value, label, maximum=4000):
@@ -66,6 +73,53 @@ def validate_graph(graph):
                 outgoing = []
                 for option in options:
                     outgoing.append(routes.get(option, node.get("next")))
+        if kind == "wait":
+            seconds = node.get("seconds")
+            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
+                raise ValueError("Ожидание: 1–2592000 секунд")
+            if "cancel_on_reply" in node and not isinstance(node.get("cancel_on_reply"), bool):
+                raise ValueError(f"wait {key}: cancel_on_reply должен быть bool")
+            if node.get("cancel_on_reply") and node.get("on_reply") is not None:
+                outgoing = [node.get("next"), node.get("on_reply")]
+        if kind == "llm_reply":
+            # P0 publish descriptor: id?, provider?, model?, temperature?, max_tokens?,
+            # rules_version (required), mode draft_only|human_approval, fallback?, prompt_ref?
+            # auto_send is intentionally not accepted as a publish field.
+            if "auto_send" in node:
+                raise ValueError(f"llm_reply {key}: auto_send не publish-поле (всегда false)")
+            pin = node.get("rules_version")
+            if not isinstance(pin, str) or not pin.strip() or len(pin) > 120:
+                raise ValueError(f"llm_reply {key}: нужен rules_version (pin 1–120)")
+            mode = node.get("mode", "draft_only")
+            if mode not in LLM_MODES:
+                raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
+            if "provider" in node and node["provider"] is not None:
+                if node["provider"] not in LLM_PROVIDERS:
+                    raise ValueError(f"llm_reply {key}: неизвестный provider")
+            if "model" in node and node["model"] is not None:
+                if not isinstance(node["model"], str) or len(node["model"]) > 120:
+                    raise ValueError(f"llm_reply {key}: model строка до 120")
+            if "temperature" in node and node["temperature"] is not None:
+                temp = node["temperature"]
+                if isinstance(temp, bool) or not isinstance(temp, (int, float)) or not 0 <= float(temp) <= 2:
+                    raise ValueError(f"llm_reply {key}: temperature 0–2")
+            if "max_tokens" in node and node["max_tokens"] is not None:
+                cap = node["max_tokens"]
+                if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 8192:
+                    raise ValueError(f"llm_reply {key}: max_tokens 1–8192")
+            if "fallback" in node and node["fallback"] is not None:
+                if not isinstance(node["fallback"], str) or len(node["fallback"]) > 4000:
+                    raise ValueError(f"llm_reply {key}: fallback текст до 4000")
+            if "prompt_ref" in node and node["prompt_ref"] is not None:
+                if not isinstance(node["prompt_ref"], str) or len(node["prompt_ref"]) > 160:
+                    raise ValueError(f"llm_reply {key}: prompt_ref до 160")
+            if "id" in node and node["id"] is not None:
+                if not isinstance(node["id"], str) or not node["id"].strip() or len(node["id"]) > 80:
+                    raise ValueError(f"llm_reply {key}: id 1–80")
+        if kind in {"escalate", "operator_pause"}:
+            # Operator pause — do not confuse with handoff (bot switch).
+            title = node.get("text") or node.get("title") or "Эскалация оператору"
+            checked_text(title, f"escalate {key}", 160)
         if any(not isinstance(x, str) or x not in nodes for x in outgoing):
             raise ValueError(f"Неверный переход из {key}")
         refs[key] = outgoing
@@ -89,10 +143,6 @@ def validate_graph(graph):
                 checked_text(button.get("text"), "Кнопка", 100)
                 if not secure_url(button.get("url")):
                     raise ValueError("Кнопка требует HTTPS URL")
-        if kind == "wait":
-            seconds = node.get("seconds")
-            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
-                raise ValueError("Ожидание: 1–2592000 секунд")
         if kind in {"question", "survey"}:
             response_key = checked_key(node.get("key"))
             if response_key in response_keys:

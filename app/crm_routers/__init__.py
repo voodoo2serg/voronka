@@ -10,6 +10,7 @@ from app.crm_routers.outreach import router as outreach_router
 from app.crm_routers.integrations import router as integrations_router
 from app.crm_routers.connections_hub import router as connections_hub_router
 from app.crm_routers.ai_config import router as ai_config_router
+from app.crm_routers.llm_drafts import router as llm_drafts_router
 from app.crm_routers.portal import router as portal_router
 from app.crm_routers.m2m_communications import router as m2m_communications_router
 from app.crm_routers.customer_graph import router as customer_graph_router
@@ -26,6 +27,7 @@ def build_router() -> APIRouter:
     router.include_router(integrations_router)
     router.include_router(connections_hub_router)
     router.include_router(ai_config_router)
+    router.include_router(llm_drafts_router)
     router.include_router(portal_router)
     router.include_router(customer_graph_router)
     router.include_router(m2m_communications_router)

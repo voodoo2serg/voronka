@@ -95,6 +95,80 @@ export function InboxSection({
                 Доставка: {item.delivery.slice(0, 3).map((d: Row) => d.status).join(', ')}
               </p>
             )}
+            {!!item.llm_drafts?.length &&
+              item.llm_drafts.map((draft: Row) => (
+                <div key={draft.id} className="mini-card" style={{ marginTop: 8 }}>
+                  <b>Черновик ИИ</b>
+                  <small>
+                    {' '}
+                    · {draft.mode || 'draft_only'} · {draft.response_status} · rules {draft.rules_version}
+                  </small>
+                  <p>{draft.draft_text}</p>
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className="primary"
+                      disabled={busy}
+                      onClick={() =>
+                        setForm({
+                          title: 'Утвердить черновик',
+                          fields: [
+                            {
+                              key: 'text',
+                              label: 'Текст (можно править)',
+                              type: 'textarea',
+                              required: true,
+                              value: draft.draft_text || '',
+                            },
+                          ],
+                          save: async (v) => {
+                            await api('/llm-drafts/' + draft.id + '/approve', 'POST', v);
+                            onNotice('Черновик утверждён и поставлен в очередь. Автоотправки нет.');
+                            await refresh();
+                          },
+                        })
+                      }
+                    >
+                      Утвердить
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        setForm({
+                          title: 'Править и утвердить',
+                          fields: [
+                            {
+                              key: 'text',
+                              label: 'Отредактированный текст',
+                              type: 'textarea',
+                              required: true,
+                              value: draft.draft_text || '',
+                            },
+                          ],
+                          save: async (v) => {
+                            await api('/llm-drafts/' + draft.id + '/approve', 'POST', v);
+                            onNotice('Отредактированный черновик в очереди.');
+                            await refresh();
+                          },
+                        })
+                      }
+                    >
+                      Править
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void (async () => {
+                          await api('/llm-drafts/' + draft.id + '/reject', 'POST', {});
+                          onNotice('Черновик отклонён. Сценарий на паузе для ручного ответа.');
+                          await refresh();
+                        })()
+                      }
+                    >
+                      Отклонить
+                    </button>
+                  </div>
+                </div>
+              ))}
             <div className="row">
               <button
                 className="primary"

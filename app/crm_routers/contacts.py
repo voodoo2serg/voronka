@@ -12,7 +12,7 @@ from pydantic import Field
 from sqlalchemy import select, or_, and_
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
-from app.crm_models import Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product, Payment
+from app.crm_models import Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product, Payment, LlmReplyAudit
 from app.crm_service import (
     uid, STAGES, project_access, get_profile, get_deal, audit, normalize_email, normalize_phone,
     parse_csv, create_profile, balance, safe_csv_cell, assigned_profile_filter, manager_scope,
@@ -192,6 +192,12 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
                 .limit(1)
             )
         )
+        drafts = list(db.scalars(
+            select(LlmReplyAudit).where(
+                LlmReplyAudit.contact_id == row.contact_id,
+                LlmReplyAudit.project_id == row.project_id,
+            ).order_by(LlmReplyAudit.created_at.desc()).limit(20)
+        ))
         return {
             **encode(row),
             "is_purchaser": is_purchaser,
@@ -201,6 +207,7 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
             "orders": [{**encode(o), **balance(db, o)} for o in orders],
             "identities": identity_payload,
             "events": [encode(e) for e in events],
+            "llm_drafts": [encode(d) for d in drafts],
             # CRM-7: RO consumer of LMS/BBB attendance — empty until LMS-21/22 emit events.
             "learning": {
                 "available": False,
@@ -393,6 +400,13 @@ def inbox(
             ))
             runs = list(db.scalars(select(Run).where(Run.identity_id.in_([i.id for i in identities])).order_by(Run.id.desc()).limit(5)))
             timeline = list(db.scalars(select(Activity).where(Activity.profile_id == row.id).order_by(Activity.created_at.desc()).limit(20)))
+            drafts = list(db.scalars(
+                select(LlmReplyAudit).where(
+                    LlmReplyAudit.contact_id == row.contact_id,
+                    LlmReplyAudit.project_id == pid,
+                    LlmReplyAudit.response_status.in_(["pending", "ok", "fallback"]),
+                ).order_by(LlmReplyAudit.created_at.desc()).limit(5)
+            ))
             items.append({
                 **encode(row),
                 "identities": [encode(i) for i in identities],
@@ -402,6 +416,7 @@ def inbox(
                 "delivery": [encode(d) for d in delivery],
                 "runs": [{"id": r.id, "status": r.status, "identity_id": r.identity_id, "current": r.current} for r in runs],
                 "timeline": [encode(t) for t in timeline],
+                "llm_drafts": [encode(d) for d in drafts],
             })
         items.sort(key=lambda x: (x["last_message"]["created_at"] if x["last_message"] else x["created_at"]), reverse=True)
         return {"items": items[offset:offset+limit], "total": len(items)}
@@ -538,7 +553,7 @@ def sync_contacts(pid: str, admin=Depends(crm_actor)):
 class RagBody(Body):
     question: str = Field(min_length=1, max_length=4000)
     connection_id: str | None = None
-    provider: Literal["raga", "openrouter", "ollama"] | None = None
+    provider: Literal["raga", "openrouter", "ollama", "openai_compatible"] | None = None
 
 
 @router.post("/contacts/{profile_id}/assistant")
