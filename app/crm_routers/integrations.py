@@ -221,7 +221,18 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
             )
         )
         if prior:
-            return {"ok": True, "duplicate": True, "profile_id": prior.profile_id, "inbox_id": prior.id, "person_id": None}
+            person_id = None
+            if prior.profile_id:
+                prior_profile = db.get(Profile, prior.profile_id)
+                if prior_profile:
+                    person_id = prior_profile.person_id
+            return {
+                "ok": True,
+                "duplicate": True,
+                "profile_id": prior.profile_id,
+                "inbox_id": prior.id,
+                "person_id": person_id,
+            }
         profile = None
         if email:
             profile = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.email == email))
