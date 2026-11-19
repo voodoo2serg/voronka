@@ -11,7 +11,7 @@ import time
 import json
 import os
 import secrets
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -27,6 +27,12 @@ router = APIRouter(prefix="/oidc", tags=["CRM OIDC"])
 
 _STATE_COOKIE = "crm_oidc_state"
 _STATE_TTL = 600
+_ALLOWED_RETURN_TO = frozenset({"/crm/", "/ops/"})
+
+
+def _safe_return_to(raw: str | None) -> str:
+    path = (raw or "").strip() or "/crm/"
+    return path if path in _ALLOWED_RETURN_TO else "/crm/"
 
 
 def _config() -> tuple[str, str, str, str]:
@@ -72,7 +78,7 @@ def status():
 
 
 @router.get("/login")
-def login():
+def login(return_to: str = "/crm/"):
     issuer, client_id, _, redirect_uri = _config()
     info = _discovery(issuer)
     state = secrets.token_urlsafe(32)
@@ -81,7 +87,11 @@ def login():
         hashlib.sha256(verifier.encode("ascii")).digest()
     ).rstrip(b"=").decode("ascii")
     # One-time server-side PKCE verifier. No OAuth tokens in JS or cookies.
-    auth.cache.setex("crm:oidc:" + state, _STATE_TTL, json.dumps({"verifier": verifier}))
+    auth.cache.setex(
+        "crm:oidc:" + state,
+        _STATE_TTL,
+        json.dumps({"verifier": verifier, "return_to": _safe_return_to(return_to)}),
+    )
     params = {
         "response_type": "code", "client_id": client_id,
         "redirect_uri": redirect_uri, "scope": "openid profile email",
@@ -105,7 +115,9 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
     saved = auth.cache.getdel("crm:oidc:" + state)
     if not saved:
         raise HTTPException(401, "Ссылка входа истекла или уже использована")
-    verifier = json.loads(saved)["verifier"]
+    payload = json.loads(saved)
+    verifier = payload["verifier"]
+    return_to = _safe_return_to(payload.get("return_to"))
     info = _discovery(issuer)
     try:
         with httpx.Client(timeout=8.0, follow_redirects=False) as client:
@@ -163,7 +175,7 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         if not admin or not admin.active or admin.role not in {"owner", "editor", "manager"}:
             raise HTTPException(403, "Доступ к CRM не предоставлен")
         session = auth.issue_session(admin.telegram_id)
-    response = RedirectResponse("/crm/", status_code=303)
+    response = RedirectResponse(return_to, status_code=303)
     set_session_cookie(response, session)
     response.delete_cookie(_STATE_COOKIE, path="/api/crm/oidc")
     return response

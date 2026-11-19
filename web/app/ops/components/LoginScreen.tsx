@@ -1,7 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ApiFn } from '../types';
+import { PORTAL_URLS } from '../portals';
+
+/**
+ * OIDC authorize + state cookie must start on the CRM callback host
+ * (crm.solo-pr.ru), not voronka.solo-pr.ru — host-only cookie otherwise 401s.
+ */
+const CRM_OIDC_LOGIN =
+  PORTAL_URLS.crm + '/api/crm/oidc/login?return_to=' + encodeURIComponent('/ops/');
 
 export function LoginScreen({
   api,
@@ -24,6 +32,23 @@ export function LoginScreen({
 }) {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Same-origin status (shared backend); login navigates to CRM origin.
+    fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
+      .then((response) => (response.ok ? response.json() : { enabled: false }))
+      .then((result: { enabled?: boolean }) => {
+        if (!cancelled) setSsoEnabled(result.enabled === true);
+      })
+      .catch(() => {
+        if (!cancelled) setSsoEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <main className="login-screen">
@@ -32,6 +57,14 @@ export function LoginScreen({
         <p className="eyebrow">СОЛО-PR / VORONKA</p>
         <h1>Вход в ops</h1>
         <p className="muted">Боты · Сценарии · Рассылки · Поддержка · AI. Клиенты и платежи — в CRM.</p>
+        {ssoEnabled && (
+          <div>
+            <a className="primary full" href={CRM_OIDC_LOGIN}>
+              Войти через единый аккаунт SIGNAL
+            </a>
+            <p className="fine">Если учётная запись ещё не привязана, используйте прежний вход.</p>
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();

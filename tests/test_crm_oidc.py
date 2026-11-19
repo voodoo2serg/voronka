@@ -54,6 +54,29 @@ def test_pkce_login_uses_server_side_state(system, monkeypatch):
     assert "HttpOnly" in response.headers["set-cookie"]
 
 
+def test_login_stores_allowed_return_to_for_ops(system, monkeypatch):
+    configure(monkeypatch)
+    monkeypatch.setattr(oidc_staff, "_discovery", lambda issuer: {
+        "authorization_endpoint": issuer + "/protocol/openid-connect/auth",
+    })
+    response = system.client.get(
+        "/api/crm/oidc/login?return_to=/ops/",
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
+    import json
+    payload = json.loads(system.cache.get("crm:oidc:" + state))
+    assert payload["return_to"] == "/ops/"
+
+
+def test_safe_return_to_rejects_open_redirect():
+    assert oidc_staff._safe_return_to("/ops/") == "/ops/"
+    assert oidc_staff._safe_return_to("/crm/") == "/crm/"
+    assert oidc_staff._safe_return_to("https://evil.example/") == "/crm/"
+    assert oidc_staff._safe_return_to("/crm/../ops/") == "/crm/"
+
+
 def test_callback_rejects_missing_state_before_external_calls(system, monkeypatch):
     configure(monkeypatch)
     response = system.client.get("/api/crm/oidc/callback?code=unsafe&state=not-valid")
