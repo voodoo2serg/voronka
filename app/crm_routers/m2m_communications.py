@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import shutil
 from typing import Any
@@ -19,8 +20,9 @@ from app.capabilities import platform_capabilities
 from app.crm_deps import Body, Session, encode, must
 from app.crm_models import Campaign, CampaignRecipient, Profile, IntegrationInbox
 from app.crm_service import uid, available_identity, ensure_profile
-from app.db import Connection, Outbox, Asset, Identity, Event, now
+from app.db import Connection, Outbox, Asset, Identity, Event, Funnel, Version, Run, Project, now
 from app import media as media_mod
+from app.graph import graph_runtime_ready, validate_bindings, validate_published_graph
 from app.m2m_signal import (
     SignalM2MPrincipal,
     assert_project_allowed,
@@ -1235,4 +1237,276 @@ def m2m_send_policy_check(
             "project_id": pid,
             "sor": "voronka",
             "listmonk": False,
+        }
+
+
+# ----- PDialog P0: scenario publish / pause / status -----
+
+
+class M2MScenarioPublish(Body):
+    schema_version: int = 1
+    # JSON key remains "construct"; rename attr to avoid BaseModel.construct shadow warning
+    pdialog_construct: str = Field(default="personal_dialog", alias="construct")
+    brand_id: str
+    scenario_id: str
+    signal_version_id: str
+    rules_version: str = Field(min_length=1, max_length=120)
+    rules_text: str = Field(default="", max_length=8192)
+    connection_ids: list[str] = Field(default_factory=list, max_length=20)
+    external_idempotency_key: str = Field(min_length=8, max_length=120)
+    funnel_name: str = Field(default="Personal Dialog", max_length=160)
+    voronka_funnel_id: str | None = None
+    graph: dict[str, Any]
+
+
+def _find_scenario_publish(db, pid: str, key: str) -> dict[str, Any] | None:
+    inbox = db.scalar(
+        select(IntegrationInbox).where(
+            IntegrationInbox.source == "signal",
+            IntegrationInbox.event_key == f"scenario.publish:{key}",
+        )
+    )
+    if not inbox:
+        return None
+    payload = inbox.payload or {}
+    if payload.get("project_id") and payload.get("project_id") != pid:
+        return None
+    return payload
+
+
+@router.post("/projects/{pid}/scenarios/versions")
+async def m2m_publish_scenario_version(
+    pid: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("scenario:publish")),
+):
+    """Accept immutable Personal Dialog Version from Signal. No auto_send. No second Outbox."""
+    raw, principal = auth_ctx
+    assert_project_allowed(pid)
+    try:
+        data = json.loads(raw.decode() or "{}")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, "Invalid JSON") from exc
+    if "auto_send" in data:
+        raise HTTPException(422, "auto_send is forbidden on scenario publish")
+    try:
+        body = M2MScenarioPublish.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if body.schema_version != 1:
+        raise HTTPException(422, "schema_version must be 1")
+    if body.pdialog_construct != "personal_dialog":
+        raise HTTPException(422, "construct must be personal_dialog")
+
+    with Session() as db:
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+
+        prior = _find_scenario_publish(db, pid, body.external_idempotency_key)
+        if prior and prior.get("voronka_version_id"):
+            _m2m_audit(
+                db,
+                principal,
+                "scenario.publish.replay",
+                project_id=pid,
+                version_id=prior.get("voronka_version_id"),
+                key=body.external_idempotency_key,
+            )
+            db.commit()
+            return {
+                "voronka_version_id": prior["voronka_version_id"],
+                "voronka_funnel_id": prior.get("voronka_funnel_id"),
+                "signal_version_id": prior.get("signal_version_id"),
+                "rules_version": prior.get("rules_version"),
+                "activated": bool(prior.get("activated")),
+                "idempotent_replay": True,
+            }
+
+        try:
+            validate_published_graph(body.graph)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+        connection_ids = list(body.connection_ids or [])
+        for cid in connection_ids:
+            conn = db.get(Connection, cid)
+            if not conn or conn.project_id != pid:
+                raise HTTPException(422, f"connection_id не в проекте: {cid}")
+
+        # Activate when every node is in TYPES (includes VR-124 llm_reply/escalate).
+        # Remaining forward-compat descriptors (send_template/tag_contact) stay stored_inactive.
+        activate = graph_runtime_ready(body.graph)
+        if activate:
+            if not connection_ids:
+                raise HTTPException(422, "connection_ids required to activate a runtime-ready Version")
+            try:
+                validate_bindings(db, body.graph, connection_ids)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+
+        funnel = None
+        if body.voronka_funnel_id:
+            funnel = db.get(Funnel, body.voronka_funnel_id)
+            if not funnel or funnel.project_id != pid:
+                raise HTTPException(404, "Funnel не найден в проекте")
+        else:
+            # Bind existing funnel previously published for this Signal scenario
+            for row in db.scalars(select(Funnel).where(Funnel.project_id == pid)):
+                draft_meta = (row.draft or {}).get("meta") or {}
+                if draft_meta.get("signal_scenario_id") == body.scenario_id:
+                    funnel = row
+                    break
+
+        graph_store = dict(body.graph)
+        meta = dict(graph_store.get("meta") or {})
+        meta.update(
+            {
+                "construct": "personal_dialog",
+                "signal_scenario_id": body.scenario_id,
+                "signal_version_id": body.signal_version_id,
+                "rules_version": body.rules_version,
+                "rules_text": (body.rules_text or "")[:8192],
+                "brand_id": body.brand_id,
+                "source": "signal_pdialog",
+                "activation": "active" if activate else "stored_inactive",
+            }
+        )
+        graph_store["meta"] = meta
+
+        if funnel is None:
+            funnel = Funnel(
+                id=uid(),
+                name=(body.funnel_name or "Personal Dialog")[:160],
+                project_id=pid,
+                connection_ids=connection_ids,
+                draft=graph_store,
+                revision=1,
+            )
+            db.add(funnel)
+        else:
+            funnel.draft = graph_store
+            funnel.revision = int(funnel.revision or 0) + 1
+            if connection_ids:
+                funnel.connection_ids = connection_ids
+
+        version = Version(id=uid(), funnel_id=funnel.id, graph=graph_store)
+        db.add(version)
+        # Never promote descriptor-only graphs to executable head (Entry would run them).
+        if activate:
+            funnel.published_version_id = version.id
+
+        inbox_payload = {
+            "project_id": pid,
+            "voronka_version_id": version.id,
+            "voronka_funnel_id": funnel.id,
+            "signal_version_id": body.signal_version_id,
+            "scenario_id": body.scenario_id,
+            "rules_version": body.rules_version,
+            "brand_id": body.brand_id,
+            "activated": activate,
+        }
+        db.add(
+            IntegrationInbox(
+                id=uid(),
+                source="signal",
+                event_key=f"scenario.publish:{body.external_idempotency_key}",
+                kind="scenario.publish",
+                payload=inbox_payload,
+                state="applied",
+                created_at=now(),
+            )
+        )
+        _m2m_audit(
+            db,
+            principal,
+            "scenario.publish",
+            project_id=pid,
+            version_id=version.id,
+            funnel_id=funnel.id,
+            scenario_id=body.scenario_id,
+            activated=activate,
+        )
+        db.commit()
+        return {
+            "voronka_version_id": version.id,
+            "voronka_funnel_id": funnel.id,
+            "signal_version_id": body.signal_version_id,
+            "rules_version": body.rules_version,
+            "activated": activate,
+            "idempotent_replay": False,
+        }
+
+
+@router.post("/projects/{pid}/executions/{execution_id}/pause")
+async def m2m_pause_execution(
+    pid: str,
+    execution_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("scenario:pause")),
+):
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    with Session() as db:
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+        run = db.get(Run, execution_id)
+        if not run:
+            raise HTTPException(404, "Execution не найден")
+        version = db.get(Version, run.version_id)
+        if not version:
+            raise HTTPException(404, "Version не найден")
+        funnel = db.get(Funnel, version.funnel_id)
+        if not funnel or funnel.project_id != pid:
+            raise HTTPException(403, "Execution вне проекта")
+        if run.status in {"active", "waiting", "delayed"}:
+            run.state = {**(run.state or {}), "_before_pause": run.status}
+            run.status = "paused"
+            for out in db.scalars(
+                select(Outbox).where(
+                    Outbox.run_id == run.id,
+                    Outbox.status == "pending",
+                )
+            ):
+                out.status = "held"
+        elif run.status != "paused":
+            raise HTTPException(409, f"Нельзя поставить на паузу статус {run.status}")
+        _m2m_audit(db, principal, "scenario.pause", project_id=pid, execution_id=execution_id)
+        db.commit()
+        return {"execution_id": execution_id, "status": "paused"}
+
+
+@router.get("/projects/{pid}/scenarios/versions/{version_id}/status")
+async def m2m_scenario_version_status(
+    pid: str,
+    version_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("scenario:status")),
+):
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    with Session() as db:
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+        version = db.get(Version, version_id)
+        if not version:
+            raise HTTPException(404, "Version не найден")
+        funnel = db.get(Funnel, version.funnel_id)
+        if not funnel or funnel.project_id != pid:
+            raise HTTPException(404, "Version вне проекта")
+        meta = (version.graph or {}).get("meta") or {}
+        runs = list(db.scalars(select(Run).where(Run.version_id == version_id)))
+        counts: dict[str, int] = {}
+        for run in runs:
+            counts[run.status] = counts.get(run.status, 0) + 1
+        return {
+            "voronka_version_id": version.id,
+            "voronka_funnel_id": funnel.id,
+            "project_id": pid,
+            "construct": meta.get("construct"),
+            "signal_scenario_id": meta.get("signal_scenario_id"),
+            "signal_version_id": meta.get("signal_version_id"),
+            "rules_version": meta.get("rules_version"),
+            "is_published_head": funnel.published_version_id == version.id,
+            "run_counts": counts,
+            "run_total": len(runs),
         }

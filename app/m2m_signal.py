@@ -29,6 +29,8 @@ DEFAULT_SCOPES = (
     "timeline:read",
     "timeline:write",  # CJ-108: Signal CE → Voronka Communication/DeliveryEvent ingest
     "consent:write",
+    # PDialog P0 — Signal publish façade → Voronka Version SoR
+    "scenario:*",
 )
 
 CAMPAIGN_STAR = {
@@ -37,6 +39,12 @@ CAMPAIGN_STAR = {
     "campaign:launch",
     "campaign:cancel",
     "campaign:read",
+}
+
+SCENARIO_STAR = {
+    "scenario:publish",
+    "scenario:pause",
+    "scenario:status",
 }
 
 JTI_TTL_SECONDS = 600  # ≥ 2× skew (300s)
@@ -67,6 +75,8 @@ def expand_scopes(scopes: set[str]) -> set[str]:
     out = set(scopes)
     if "campaign:*" in out:
         out |= CAMPAIGN_STAR
+    if "scenario:*" in out:
+        out |= SCENARIO_STAR
     return out
 
 
@@ -147,12 +157,14 @@ async def require_signal_m2m(request: Request, *needed_scopes: str) -> tuple[byt
     principal = SignalM2MPrincipal(service_id=service_id, scopes=requested, jti=jti)
     if needed_scopes:
         require_scopes(principal, *needed_scopes)
-    # Rate-limit mutating campaign ops
+    # Rate-limit mutating campaign / scenario ops
     path = request.url.path
     if path.endswith("/campaigns") and request.method == "POST":
         _rate_limit(service_id, "create")
     if path.endswith("/launch") and request.method == "POST":
         _rate_limit(service_id, "launch")
+    if path.endswith("/scenarios/versions") and request.method == "POST":
+        _rate_limit(service_id, "scenario_publish")
     return body, principal
 
 

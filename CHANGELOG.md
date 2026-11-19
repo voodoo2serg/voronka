@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — PDialog P0 scenario publish (signal#20)
+
+- M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.
+- `POST /api/crm/m2m/projects/{pid}/scenarios/versions` — accept/store immutable Funnel+Version from Signal (idempotent `external_idempotency_key`).
+- Runtime-ready graphs (TYPES, including VR-124 `llm_reply`/`escalate`/`operator_pause`) activate after `validate_bindings`. Remaining forward-compat descriptors (`send_template`/`tag_contact`) stay **stored inactive** (`activated=false`; do not set `published_version_id`).
+- `POST .../executions/{execution_id}/pause` and `GET .../scenarios/versions/{id}/status`.
+- `validate_published_graph` reuses classic invariants and extends allowed types for forward-compat descriptors; rejects `auto_send`.
+- Mini App `/api/funnels/{id}/publish` remains strict `validate_graph` (no second canvas).
+
 ## Unreleased — CAMP-101 segment export (M2M)
 
 - **CAMP-101:** `POST /api/crm/m2m/projects/{pid}/segments/export` — paginated sendable

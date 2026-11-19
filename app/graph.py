@@ -3,13 +3,17 @@ from urllib.parse import urlparse
 MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
 # escalate / operator_pause = pause for human (≠ handoff bot switch).
-# llm_reply = draft-first LLM node (PDialog P1 / Signal#20); auto_send is never a publish field.
+# llm_reply = draft-first LLM node (PDialog P1 / Signal#20 / VR-124); auto_send is never a publish field.
 TYPES = SEND | {
     "question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal",
     "handoff", "llm_reply", "escalate", "operator_pause",
 }
 LLM_MODES = {"draft_only", "human_approval"}
 LLM_PROVIDERS = {"raga", "openrouter", "ollama", "openai_compatible"}
+LLM_REPLY_MODES = LLM_MODES
+# Still descriptor-only on Signal publish until dedicated runtime lands.
+FORWARD_COMPAT_TYPES = {"send_template", "tag_contact"}
+PUBLISHED_TYPES = TYPES | FORWARD_COMPAT_TYPES
 RESERVED = "_"
 
 def checked_text(value, label, maximum=4000):
@@ -38,7 +42,150 @@ def secure_url(value):
     url = urlparse(value)
     return url.scheme == "https" and bool(url.hostname) and not url.username and not url.password
 
-def validate_graph(graph):
+def _validate_forward_compat_node(key, node, kind):
+    """Structural checks for descriptors accepted on Signal publish before runtime support."""
+    if kind == "send_template":
+        rev = node.get("document_revision_id") or node.get("revision_id")
+        if not isinstance(rev, str) or not rev.strip() or len(rev) > 64:
+            raise ValueError(f"send_template {key}: document_revision_id required")
+    if kind == "tag_contact":
+        tag = node.get("tag")
+        if not isinstance(tag, str) or not tag.strip() or len(tag) > 80:
+            raise ValueError(f"tag_contact {key}: tag required")
+
+def _validate_llm_reply_node(key, node):
+    # P0/P1 publish descriptor: id?, provider?, model?, temperature?, max_tokens?,
+    # rules_version (required), mode draft_only|human_approval, fallback?, prompt_ref?
+    # auto_send is intentionally not accepted as a publish field.
+    if "auto_send" in node:
+        raise ValueError(f"llm_reply {key}: auto_send не publish-поле (всегда false)")
+    pin = node.get("rules_version")
+    if not isinstance(pin, str) or not pin.strip() or len(pin) > 120:
+        raise ValueError(f"llm_reply {key}: нужен rules_version (pin 1–120)")
+    mode = node.get("mode", "draft_only")
+    if mode not in LLM_MODES:
+        raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
+    if "provider" in node and node["provider"] is not None:
+        if node["provider"] not in LLM_PROVIDERS:
+            raise ValueError(f"llm_reply {key}: неизвестный provider")
+    if "model" in node and node["model"] is not None:
+        if not isinstance(node["model"], str) or len(node["model"]) > 120:
+            raise ValueError(f"llm_reply {key}: model строка до 120")
+    if "temperature" in node and node["temperature"] is not None:
+        temp = node["temperature"]
+        if isinstance(temp, bool) or not isinstance(temp, (int, float)) or not 0 <= float(temp) <= 2:
+            raise ValueError(f"llm_reply {key}: temperature 0–2")
+    if "max_tokens" in node and node["max_tokens"] is not None:
+        cap = node["max_tokens"]
+        if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 8192:
+            raise ValueError(f"llm_reply {key}: max_tokens 1–8192")
+    if "fallback" in node and node["fallback"] is not None:
+        if not isinstance(node["fallback"], str) or len(node["fallback"]) > 4000:
+            raise ValueError(f"llm_reply {key}: fallback текст до 4000")
+    if "prompt_ref" in node and node["prompt_ref"] is not None:
+        if not isinstance(node["prompt_ref"], str) or len(node["prompt_ref"]) > 160:
+            raise ValueError(f"llm_reply {key}: prompt_ref до 160")
+    if "id" in node and node["id"] is not None:
+        if not isinstance(node["id"], str) or not node["id"].strip() or len(node["id"]) > 80:
+            raise ValueError(f"llm_reply {key}: id 1–80")
+
+def _node_outgoing(key, node, kind, nodes):
+    """Return outgoing refs for one node (classic TYPES + remaining forward-compat)."""
+    if kind in FORWARD_COMPAT_TYPES:
+        _validate_forward_compat_node(key, node, kind)
+        return [node.get("next")]
+
+    outgoing = [] if kind == "finish" else [node.get("next")]
+    if kind == "condition":
+        outgoing = [node.get("yes"), node.get("no")]
+        checked_key(node.get("key"))
+        if "equals" not in node:
+            node["equals"] = True
+    if kind == "question":
+        options = checked_options(node.get("options", []))
+        if len(options) > 5:
+            raise ValueError("Голосование: не больше 5 кнопок")
+        routes = node.get("routes") or {}
+        if not isinstance(routes, dict):
+            raise ValueError("Сценарии кнопок заданы неверно")
+        if set(routes) - set(options):
+            raise ValueError("Сценарий указан для неизвестной кнопки")
+        if routes:
+            outgoing = []
+            for option in options:
+                outgoing.append(routes.get(option, node.get("next")))
+    if kind in SEND | {"question"}:
+        maximum = 1024 if kind in MEDIA else 4000
+        if kind == "video_note":
+            maximum = 4000
+        checked_text(node.get("text", ""), f"Текст узла {key}", maximum)
+    if kind in MEDIA:
+        if not node.get("asset_id") and not secure_url(node.get("media")):
+            raise ValueError("Выберите материал из медиабанка или HTTPS URL")
+        if node.get("asset_id") and (not isinstance(node["asset_id"], str) or len(node["asset_id"]) > 36):
+            raise ValueError("Неверный asset_id")
+        if kind == "video_note" and not node.get("asset_id"):
+            raise ValueError("Кружок выбирается из медиабанка")
+    if node.get("buttons"):
+        if not isinstance(node["buttons"], list) or len(node["buttons"]) > 20:
+            raise ValueError("Не больше 20 ссылочных кнопок")
+        for button in node["buttons"]:
+            checked_text(button.get("text"), "Кнопка", 100)
+            if not secure_url(button.get("url")):
+                raise ValueError("Кнопка требует HTTPS URL")
+    if kind == "wait":
+        seconds = node.get("seconds")
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
+            raise ValueError("Ожидание: 1–2592000 секунд")
+        if "cancel_on_reply" in node and not isinstance(node.get("cancel_on_reply"), bool):
+            raise ValueError(f"wait {key}: cancel_on_reply должен быть bool")
+        if node.get("cancel_on_reply") and node.get("on_reply") is not None:
+            outgoing = [node.get("next"), node.get("on_reply")]
+    if kind == "llm_reply":
+        _validate_llm_reply_node(key, node)
+    if kind in {"escalate", "operator_pause"}:
+        # Operator pause — do not confuse with handoff (bot switch).
+        if "connection_id" in node:
+            raise ValueError(f"{kind} {key}: use handoff for bot switch; escalate has no connection_id")
+        title = node.get("text") or node.get("title") or "Эскалация оператору"
+        checked_text(title, f"escalate {key}", 160)
+        if not node.get("next"):
+            outgoing = []
+    if kind in {"question", "survey"}:
+        response_key = checked_key(node.get("key"))
+        # uniqueness checked by caller via response_keys
+        node["_response_key"] = response_key
+    if kind == "question":
+        if node.get("answer_type", "text") not in {"text", "email", "phone"}:
+            raise ValueError("Тип ответа: text/email/phone")
+    if kind == "survey":
+        qs = node.get("questions")
+        if not isinstance(qs, list) or not 1 <= len(qs) <= 30 or any(not isinstance(q, dict) for q in qs):
+            raise ValueError("Опрос: 1–30 вопросов")
+        keys = set()
+        for q in qs:
+            k = checked_key(q.get("key"))
+            checked_text(q.get("text"), "Вопрос")
+            checked_options(q.get("options", []))
+            if k in keys:
+                raise ValueError("Повтор ключа вопроса")
+            keys.add(k)
+    if kind == "grant":
+        checked_text(node.get("product"), "Ключ продукта", 80)
+        requirements = node.get("requires")
+        if not isinstance(requirements, list) or not requirements:
+            raise ValueError("Выдача продукта требует requires")
+        for requirement in requirements:
+            checked_key(requirement)
+    if kind in {"stage", "task", "goal"}:
+        checked_text(node.get("text"), "Текст", 160)
+    if kind == "handoff":
+        cid = node.get("connection_id")
+        if not isinstance(cid, str) or not cid.strip() or len(cid) > 36:
+            raise ValueError(f"handoff {key}: нужен connection_id")
+    return outgoing
+
+def _validate_graph_core(graph, *, allowed_types):
     if not isinstance(graph, dict):
         raise ValueError("Сценарий должен быть объектом")
     nodes = graph.get("nodes")
@@ -52,131 +199,17 @@ def validate_graph(graph):
         if not isinstance(node, dict):
             raise ValueError("Неверный узел")
         kind = node.get("type")
-        if not isinstance(kind, str) or kind not in TYPES:
+        if not isinstance(kind, str) or kind not in allowed_types:
             raise ValueError(f"Неподдерживаемый тип: {kind}")
-        outgoing = [] if kind == "finish" else [node.get("next")]
-        if kind == "condition":
-            outgoing = [node.get("yes"), node.get("no")]
-            checked_key(node.get("key"))
-            if "equals" not in node:
-                node = {**node, "equals": True}
-        if kind == "question":
-            options = checked_options(node.get("options", []))
-            if len(options) > 5:
-                raise ValueError("Голосование: не больше 5 кнопок")
-            routes = node.get("routes") or {}
-            if not isinstance(routes, dict):
-                raise ValueError("Сценарии кнопок заданы неверно")
-            if set(routes) - set(options):
-                raise ValueError("Сценарий указан для неизвестной кнопки")
-            if routes:
-                outgoing = []
-                for option in options:
-                    outgoing.append(routes.get(option, node.get("next")))
-        if kind == "wait":
-            seconds = node.get("seconds")
-            if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
-                raise ValueError("Ожидание: 1–2592000 секунд")
-            if "cancel_on_reply" in node and not isinstance(node.get("cancel_on_reply"), bool):
-                raise ValueError(f"wait {key}: cancel_on_reply должен быть bool")
-            if node.get("cancel_on_reply") and node.get("on_reply") is not None:
-                outgoing = [node.get("next"), node.get("on_reply")]
-        if kind == "llm_reply":
-            # P0 publish descriptor: id?, provider?, model?, temperature?, max_tokens?,
-            # rules_version (required), mode draft_only|human_approval, fallback?, prompt_ref?
-            # auto_send is intentionally not accepted as a publish field.
-            if "auto_send" in node:
-                raise ValueError(f"llm_reply {key}: auto_send не publish-поле (всегда false)")
-            pin = node.get("rules_version")
-            if not isinstance(pin, str) or not pin.strip() or len(pin) > 120:
-                raise ValueError(f"llm_reply {key}: нужен rules_version (pin 1–120)")
-            mode = node.get("mode", "draft_only")
-            if mode not in LLM_MODES:
-                raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
-            if "provider" in node and node["provider"] is not None:
-                if node["provider"] not in LLM_PROVIDERS:
-                    raise ValueError(f"llm_reply {key}: неизвестный provider")
-            if "model" in node and node["model"] is not None:
-                if not isinstance(node["model"], str) or len(node["model"]) > 120:
-                    raise ValueError(f"llm_reply {key}: model строка до 120")
-            if "temperature" in node and node["temperature"] is not None:
-                temp = node["temperature"]
-                if isinstance(temp, bool) or not isinstance(temp, (int, float)) or not 0 <= float(temp) <= 2:
-                    raise ValueError(f"llm_reply {key}: temperature 0–2")
-            if "max_tokens" in node and node["max_tokens"] is not None:
-                cap = node["max_tokens"]
-                if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 8192:
-                    raise ValueError(f"llm_reply {key}: max_tokens 1–8192")
-            if "fallback" in node and node["fallback"] is not None:
-                if not isinstance(node["fallback"], str) or len(node["fallback"]) > 4000:
-                    raise ValueError(f"llm_reply {key}: fallback текст до 4000")
-            if "prompt_ref" in node and node["prompt_ref"] is not None:
-                if not isinstance(node["prompt_ref"], str) or len(node["prompt_ref"]) > 160:
-                    raise ValueError(f"llm_reply {key}: prompt_ref до 160")
-            if "id" in node and node["id"] is not None:
-                if not isinstance(node["id"], str) or not node["id"].strip() or len(node["id"]) > 80:
-                    raise ValueError(f"llm_reply {key}: id 1–80")
-        if kind in {"escalate", "operator_pause"}:
-            # Operator pause — do not confuse with handoff (bot switch).
-            title = node.get("text") or node.get("title") or "Эскалация оператору"
-            checked_text(title, f"escalate {key}", 160)
-        if any(not isinstance(x, str) or x not in nodes for x in outgoing):
-            raise ValueError(f"Неверный переход из {key}")
-        refs[key] = outgoing
-        if kind in SEND | {"question"}:
-            maximum = 1024 if kind in MEDIA else 4000
-            # video_note caption is delivered in a separate text message.
-            if kind == "video_note":
-                maximum = 4000
-            checked_text(node.get("text", ""), f"Текст узла {key}", maximum)
-        if kind in MEDIA:
-            if not node.get("asset_id") and not secure_url(node.get("media")):
-                raise ValueError("Выберите материал из медиабанка или HTTPS URL")
-            if node.get("asset_id") and (not isinstance(node["asset_id"], str) or len(node["asset_id"]) > 36):
-                raise ValueError("Неверный asset_id")
-            if kind == "video_note" and not node.get("asset_id"):
-                raise ValueError("Кружок выбирается из медиабанка")
-        if node.get("buttons"):
-            if not isinstance(node["buttons"], list) or len(node["buttons"]) > 20:
-                raise ValueError("Не больше 20 ссылочных кнопок")
-            for button in node["buttons"]:
-                checked_text(button.get("text"), "Кнопка", 100)
-                if not secure_url(button.get("url")):
-                    raise ValueError("Кнопка требует HTTPS URL")
+        outgoing = _node_outgoing(key, node, kind, nodes)
         if kind in {"question", "survey"}:
-            response_key = checked_key(node.get("key"))
+            response_key = node.pop("_response_key", None) or checked_key(node.get("key"))
             if response_key in response_keys:
                 raise ValueError("У вопросов и опросов должны быть разные ключи")
             response_keys.add(response_key)
-        if kind == "question":
-            if node.get("answer_type", "text") not in {"text", "email", "phone"}:
-                raise ValueError("Тип ответа: text/email/phone")
-        if kind == "survey":
-            qs = node.get("questions")
-            if not isinstance(qs, list) or not 1 <= len(qs) <= 30 or any(not isinstance(q, dict) for q in qs):
-                raise ValueError("Опрос: 1–30 вопросов")
-            keys = set()
-            for q in qs:
-                k = checked_key(q.get("key"))
-                checked_text(q.get("text"), "Вопрос")
-                checked_options(q.get("options", []))
-                if k in keys:
-                    raise ValueError("Повтор ключа вопроса")
-                keys.add(k)
-        if kind == "grant":
-            checked_text(node.get("product"), "Ключ продукта", 80)
-            requirements = node.get("requires")
-            if not isinstance(requirements, list) or not requirements:
-                raise ValueError("Выдача продукта требует requires")
-            for requirement in requirements:
-                checked_key(requirement)
-        if kind in {"stage", "task", "goal"}:
-            checked_text(node.get("text"), "Текст", 160)
-        if kind == "handoff":
-            cid = node.get("connection_id")
-            if not isinstance(cid, str) or not cid.strip() or len(cid) > 36:
-                raise ValueError(f"handoff {key}: нужен connection_id")
-    # Validate every path, not only the path chosen by a preview.
+        if any(not isinstance(x, str) or x not in nodes for x in outgoing):
+            raise ValueError(f"Неверный переход из {key}")
+        refs[key] = outgoing
     visiting, visited = set(), set()
     def visit(key):
         if key in visiting:
@@ -192,6 +225,32 @@ def validate_graph(graph):
     if len(visited) != len(nodes):
         raise ValueError("Есть недостижимые узлы")
     return graph
+
+def validate_graph(graph):
+    """Strict Mini App / ops publish — TYPES (includes VR-124 llm_reply/escalate)."""
+    return _validate_graph_core(graph, allowed_types=TYPES)
+
+def validate_published_graph(graph):
+    """Signal-published Personal Dialog graphs: TYPES + remaining forward-compat descriptors."""
+    if not isinstance(graph, dict):
+        raise ValueError("Сценарий должен быть объектом")
+    if graph.get("auto_send") is not None:
+        raise ValueError("auto_send запрещён в published Version")
+    nodes = graph.get("nodes") or {}
+    if isinstance(nodes, dict):
+        for key, node in nodes.items():
+            if isinstance(node, dict) and "auto_send" in node:
+                raise ValueError(f"Узел {key}: auto_send запрещён")
+    return _validate_graph_core(graph, allowed_types=PUBLISHED_TYPES)
+
+def graph_runtime_ready(graph):
+    """True iff every node type is executable on *this* Voronka build (TYPES).
+
+    Remaining forward-compat descriptors (send_template/tag_contact) keep Versions
+    stored_inactive until their runtime lands.
+    """
+    nodes = (graph or {}).get("nodes") or {}
+    return all(isinstance(n, dict) and n.get("type") in TYPES for n in nodes.values())
 
 def validate_bindings(db, graph, connection_ids):
     from app.db import Asset, Connection

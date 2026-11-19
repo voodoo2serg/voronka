@@ -8,6 +8,7 @@ info:
     Auth: HMAC wire v1 (SIGNAL_M2M_SECRET). No crm_session. No bot tokens in responses.
     Wave C: campaign/asset/hub contracts unchanged; person:read / timeline:read are additive.
     CJ-108: timeline:write ingest writes Communication/DeliveryEvent/Interaction (no HTML bodies).
+    PDialog P0: scenario:publish|pause|status — accept immutable Version; llm_reply descriptors allowed; no auto_send.
 servers:
   - url: https://voronka.solo-pr.ru
 paths:
@@ -76,6 +77,21 @@ paths:
     post:
       summary: Send-policy preflight (CRM-102)
       x-required-scopes: [person:read]
+  /api/crm/m2m/projects/{pid}/scenarios/versions:
+    post:
+      summary: Accept/store immutable Personal Dialog Version (PDialog P0)
+      description: >
+        Idempotent by external_idempotency_key. Graph may include llm_reply /
+        escalate / send_template / tag_contact descriptors. auto_send forbidden.
+      x-required-scopes: [scenario:publish]
+  /api/crm/m2m/projects/{pid}/executions/{execution_id}/pause:
+    post:
+      summary: Pause a Run for Personal Dialog operator façade
+      x-required-scopes: [scenario:pause]
+  /api/crm/m2m/projects/{pid}/scenarios/versions/{version_id}/status:
+    get:
+      summary: Published version meta + run aggregate (no tokens)
+      x-required-scopes: [scenario:status]
 components:
   securitySchemes:
     SignalHmac:
