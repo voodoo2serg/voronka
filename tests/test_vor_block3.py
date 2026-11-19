@@ -366,6 +366,8 @@ def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
     monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-secret")
     monkeypatch.setenv("LMS_END_ENROLLMENT_URL", "https://lms.example/api/integrations/voronka/enrollment")
     monkeypatch.setenv("LMS_END_WEBHOOK_SECRET", "lms-secret")
+    monkeypatch.setenv("SIGNAL_EVENTS_URL", "https://signal.example/api/v1/communications/events")
+    monkeypatch.setenv("SIGNAL_EVENTS_SECRET", "signal-secret-at-least-32-chars-long!!")
     person = contact(crm, email="buyer-wire@example.ru")
     with crm.db.begin() as db:
         profile = db.get(__import__("app.crm_models", fromlist=["Profile"]).Profile, person["id"])
@@ -392,8 +394,13 @@ def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
             assert drain_outbox(db) >= 1
         rows = list(db.scalars(select(IntegrationOutbox)))
         kinds = {r.kind for r in rows}
-        assert {"deal.paid", "access.granted", "enrollment.desired"} <= kinds
+        assert {"deal.paid", "access.granted", "enrollment.desired", "course.access_granted"} <= kinds
         for row in rows:
+            if row.kind == "course.access_granted":
+                # Signal CE slim body — not dual wire envelope
+                assert "." not in row.event_id
+                assert row.event_id.startswith("course_access_granted:")
+                continue
             wire = build_wire_payload(row)
             assert wire["type"] == wire["kind"] == row.kind
             assert wire["event_id"] == wire["idempotency_key"] == row.event_id
@@ -412,7 +419,8 @@ def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
     assert captured
     solo_calls = [c for c in captured if "solo.example" in c["url"]]
     lms_calls = [c for c in captured if "lms.example" in c["url"]]
-    assert solo_calls and lms_calls
+    signal_calls = [c for c in captured if "signal.example" in c["url"]]
+    assert solo_calls and lms_calls and signal_calls
     solo_h = solo_calls[0]["headers"]
     assert solo_h.get("X-Voronka-Signature", "").startswith("sha256=")
     assert solo_h.get("X-Solo-Signature", "").startswith("sha256=")
@@ -421,6 +429,11 @@ def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
     assert lms_h.get("X-Voronka-Signature", "").startswith("sha256=")
     assert lms_h.get("X-Lms-Signature", "").startswith("sha256=")
     assert lms_calls[0]["body"]["action"] == "grant"
+    sig_body = signal_calls[0]["body"]
+    assert sig_body["event_type"] == "course.access_granted"
+    assert sig_body["event_id"].startswith("course_access_granted:")
+    assert "." not in sig_body["event_id"]
+    assert signal_calls[0]["headers"].get("X-Signal-Source") == "voronka"
 
 
 def test_verify_accepts_sha256_prefix_and_alias_headers(monkeypatch):

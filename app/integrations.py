@@ -248,6 +248,16 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
         _record_access_interaction(db, grant=grant, order=order, profile=profile, hints=hints)
 
 
+def signal_access_granted_event_id(grant_id: str) -> str:
+    """CE-safe idempotency key for Signal intake.
+
+    Signal `event_id` allowlist is `[a-zA-Z0-9:_-]{8,120}` — dots are rejected
+    (`invalid_event_fields`). Keep `event_type=course.access_granted` on the wire;
+    only the idempotency key uses underscores.
+    """
+    return f"course_access_granted:{grant_id}"
+
+
 def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | None = None) -> None:
     """Outbox → Signal Communication Engine `course.access_granted`."""
     email = (getattr(profile, "email", None) or "").strip()
@@ -255,7 +265,7 @@ def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | No
     if not email or "@" not in email:
         return
     hints = hints or _product_hints(order)
-    event_id = f"course.access_granted:{grant.id}"
+    event_id = signal_access_granted_event_id(grant.id)
     service = str(hints.get("service") or hints.get("course_id") or grant.resource or "курс")
     enqueue_event(
         db,
@@ -292,7 +302,7 @@ def _record_access_interaction(db, *, grant, order, profile, hints: dict | None 
         channel="email",
         project_id=order.project_id,
         source_service="voronka",
-        external_event_key=f"course.access_granted:{grant.id}",
+        external_event_key=signal_access_granted_event_id(grant.id),
         payload={
             "grant_id": grant.id,
             "order_id": order.id,

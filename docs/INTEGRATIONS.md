@@ -13,7 +13,10 @@ Robokassa ResultURL
   → если есть AccessGrant и порог оплаты:
        access.granted → solo_pr
        enrollment.desired → lms_end (capability course.view|course.enter)
+       course.access_granted → Signal CE (event_type; event_id=`course_access_granted:{grant_id}`)
 ```
+
+Signal CE `event_id` must match `[a-zA-Z0-9:_-]{8,120}` (no dots). `event_type` stays `course.access_granted`.
 
 Сбой job/outbox **не** удаляет Payment.
 
