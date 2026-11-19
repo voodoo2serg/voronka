@@ -324,3 +324,60 @@ def test_oidc_link_revoke_revokes_sessions(crm, monkeypatch):
     assert response.status_code == 200
     assert response.json()["provisioning_status"] == "revoked"
     assert crm.cache.get(auth.session_key(token)) is None
+
+
+def test_link_script_rollback_revokes_sessions(crm, monkeypatch):
+    """CLI --rollback must match HTTP revoke and drop active CRM sessions."""
+    from argparse import Namespace
+    from scripts import link_crm_oidc as link_script
+
+    configure(monkeypatch)
+    monkeypatch.setattr(link_script, "Session", crm.db)
+    monkeypatch.setattr(link_script.auth, "cache", crm.cache)
+    with crm.db.begin() as db:
+        db.add(
+            OidcLink(
+                id="link-cli-1",
+                issuer="https://auth.solo-pr.ru/realms/solo-pr",
+                subject="sub-cli-rollback",
+                account_id="owner-account",
+                provisioning_status="linked",
+            )
+        )
+    token = auth.issue_session(123)
+    assert crm.cache.get(auth.session_key(token))
+    link_script.apply_link(Namespace(
+        issuer="https://auth.solo-pr.ru/realms/solo-pr",
+        subject="sub-cli-rollback",
+        account_id="owner-account",
+        person_id="",
+        email_hint="",
+        apply=False,
+        rollback=True,
+    ))
+    assert crm.cache.get(auth.session_key(token)) is None
+    with crm.db() as db:
+        row = db.get(OidcLink, "link-cli-1")
+        assert row.provisioning_status == "revoked"
+
+
+def test_staff_password_preserves_whitespace(crm, monkeypatch):
+    configure(monkeypatch, cutover=True)
+    raw = "  padded-password-12  "
+    created = crm.client.post(
+        "/api/crm/staff",
+        json={
+            "login": "space-mgr",
+            "password": raw,
+            "project_ids": ["p"],
+            "break_glass": True,
+        },
+    )
+    assert created.status_code == 200
+    login = crm.client.post("/api/crm/login", json={"login": "space-mgr", "password": raw})
+    assert login.status_code == 200
+    stripped = crm.client.post(
+        "/api/crm/login",
+        json={"login": "space-mgr", "password": raw.strip()},
+    )
+    assert stripped.status_code == 401

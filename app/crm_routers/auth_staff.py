@@ -89,7 +89,8 @@ def add_staff(body: StaffBody, admin=Depends(crm_actor)):
     if body.role == "owner":
         raise HTTPException(422, "Владельца создаёт только create_crm_owner / OWNER_TELEGRAM_ID")
     cutover = cutover_enabled()
-    password = (body.password or "").strip()
+    # Keep raw password (incl. intentional whitespace) — /login verifies the raw value.
+    password = body.password or ""
     if cutover:
         if password and not body.break_glass:
             raise HTTPException(

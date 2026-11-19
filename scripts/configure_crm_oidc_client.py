@@ -155,13 +155,14 @@ def client_body() -> dict:
 def write_secret_file(secret: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = Path("/root") / f"voronka-crm-oidc-secret-{stamp}.env"
+    # Cutover stays off until operator links owner and proves SSO (AUTH-202 Gate 0).
     content = (
         f"KEYCLOAK_ISSUER={AUTH_PUBLIC_ORIGIN}/realms/{REALM}\n"
         f"CRM_PUBLIC_URL={CRM_ORIGIN}\n"
         f"CRM_OIDC_CLIENT_ID={CLIENT_ID}\n"
         f"CRM_OIDC_CLIENT_SECRET={secret}\n"
         f"CRM_OIDC_REDIRECT_URI={REDIRECT}\n"
-        f"CRM_OIDC_CUTOVER=1\n"
+        f"CRM_OIDC_CUTOVER=0\n"
     )
     fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as out:

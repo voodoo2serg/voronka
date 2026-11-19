@@ -11,6 +11,7 @@ import os
 
 from sqlalchemy import select
 
+from app import auth
 from app.crm_models import Account, OidcLink
 from app.crm_service import uid
 from app.db import Admin, Session, now
@@ -85,7 +86,11 @@ def apply_link(args: argparse.Namespace) -> None:
                 return
             prior.provisioning_status = "revoked"
             prior.updated_at = now()
-            print(f"rollback_ok link_id={prior.id}")
+            # Same as HTTP /oidc-links/{id}/revoke: drop active CRM sessions.
+            target = db.get(Account, prior.account_id) if prior.account_id else account
+            if target:
+                auth.revoke_sessions(target.admin_id)
+            print(f"rollback_ok link_id={prior.id} sessions_revoked=1")
             return
         if prior:
             if prior.account_id not in (None, args.account_id):

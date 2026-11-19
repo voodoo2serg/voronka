@@ -8,7 +8,8 @@ Verified `issuer` + `sub` maps only through `crm_oidc_links` to an **existing** 
 1. Dry-run / apply Keycloak confidential client `voronka-crm`:
    `python3 /opt/voronka/scripts/configure_crm_oidc_client.py`
    `python3 /opt/voronka/scripts/configure_crm_oidc_client.py --apply`
-   Merge the generated `/root/voronka-crm-oidc-secret-*.env` into `/opt/voronka/.env` (never commit). Leave `CRM_OIDC_CUTOVER=0` until SSO proof.
+   Merge the generated `/root/voronka-crm-oidc-secret-*.env` into `/opt/voronka/.env` (never commit).
+   Bootstrap file emits `CRM_OIDC_CUTOVER=0`; flip to `1` only after link + SSO proof.
 2. Rebuild/restart API: `docker compose up -d --build api worker`
 3. Smoke: `GET https://crm.solo-pr.ru/api/crm/oidc/status` → `enabled: true`
 4. Link existing owner (inventory IDs; dry-run first):
