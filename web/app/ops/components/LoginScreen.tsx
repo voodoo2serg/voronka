@@ -114,7 +114,7 @@ export function LoginScreen({
         )}
         {cutover && ssoEnabled && !showLocal && (
           <button className="link" type="button" onClick={() => setShowLocal(true)}>
-            Аварийный вход по локальному паролю
+            Аварийный вход
           </button>
         )}
         {showLocal && (
