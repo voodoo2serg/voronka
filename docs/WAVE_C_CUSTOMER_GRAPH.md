@@ -33,12 +33,13 @@
 
 **Unchanged:** `/api/crm/m2m/*` campaign/asset/segment/hub paths, HMAC headers, jti replay, existing scopes.
 
-**Additive scopes (optional):** `person:read`, `timeline:read`, `consent:write`.
+**Additive scopes (optional):** `person:read`, `timeline:read`, `timeline:write`, `consent:write`.
 
 **New routes:**
 
 - `GET /api/crm/m2m/projects/{pid}/persons/{person_id}`
 - `GET /api/crm/m2m/projects/{pid}/persons/{person_id}/timeline`
+- `POST /api/crm/m2m/projects/{pid}/communications/ingest` (CJ-108; requires `timeline:write`)
 
 Signal must **not** invent Person tables; read Voronka.
 
