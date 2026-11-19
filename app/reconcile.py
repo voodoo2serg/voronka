@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 
 from app import entitlement, integrations
 from app.crm_models import (
@@ -361,9 +361,12 @@ def preview(
         findings.extend(detect_enrollment(db, project_id=project_id, limit=limit))
     if scope in {"publish", "all"}:
         findings.extend(detect_publish(db, project_id=project_id, limit=limit))
-    # Always attach unmatched DLQ rows for visibility (dedupe by finding_id).
+    # Attach unmatched DLQ rows, filtered to the requested scope (payment-only
+    # apply must not requeue enrollment/publish dead rows).
     seen = {f["finding_id"] for f in findings}
     for f in detect_dlq(db, project_id=project_id, limit=limit):
+        if scope != "all" and f["scope"] != scope:
+            continue
         if f["finding_id"] not in seen:
             findings.append(f)
             seen.add(f["finding_id"])
@@ -453,16 +456,8 @@ def apply_findings(
             if grant_id and row.kind.startswith("enrollment."):
                 siblings = [r for r in _outbox_for_grant(db, grant_id, row.kind) if r.state == "dead"]
             targets = siblings or [row]
+            # Requeue only existing rows (legacy :rN or stable). Do not insert a second event_id.
             results = [requeue_outbox_row(db, r) for r in targets]
-            # Ensure stable event_id row exists for future idempotent peer replay.
-            if grant_id and row.kind == "enrollment.desired":
-                order = db.get(Order, refs.get("order_id") or (row.payload or {}).get("order_id"))
-                grant = db.get(AccessGrant, grant_id)
-                profile = db.get(Profile, order.profile_id) if order else None
-                if order and grant and profile:
-                    integrations.enqueue_enrollment(
-                        db, grant=grant, order=order, profile=profile, revision=1, revoke=False
-                    )
             applied.append({"finding_id": finding["finding_id"], "result": "requeued_outbox", "rows": results})
         elif action == "enqueue_enrollment":
             grant = db.get(AccessGrant, refs["grant_id"])
@@ -492,17 +487,45 @@ def apply_findings(
     }
 
 
+def _outbox_matches_project(db, row: IntegrationOutbox, project_id: str | None) -> bool:
+    if not project_id:
+        return True
+    payload = row.payload or {}
+    pid = payload.get("project_id")
+    if pid is not None:
+        return pid == project_id
+    order_id = payload.get("order_id") or row.correlation_id
+    if order_id:
+        order = db.get(Order, order_id)
+        return bool(order and order.project_id == project_id)
+    # No project hint — exclude from project-scoped counts (avoid leaking other projects).
+    return False
+
+
+def _count_outbox_for_project(db, state: str, project_id: str | None) -> int:
+    rows = list(
+        db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.state == state).limit(2000))
+    )
+    return sum(1 for r in rows if _outbox_matches_project(db, r, project_id))
+
+
+def _count_entitlement_for_project(db, states: list[str], project_id: str | None) -> int:
+    q = select(EntitlementJob).where(EntitlementJob.state.in_(states))
+    if project_id:
+        order_ids = [o.id for o in _project_orders(db, project_id)]
+        if not order_ids:
+            return 0
+        q = q.where(EntitlementJob.order_id.in_(order_ids))
+    return len(list(db.scalars(q.limit(2000))))
+
+
 def aggregate_status(db, project_id: str | None = None) -> dict[str, Any]:
     """Scoped M2M feed for OPS-105 — counts only, no secrets/payloads."""
-    dead = db.scalar(select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "dead")) or 0
-    pending = db.scalar(select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "pending")) or 0
-    failed = db.scalar(select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "failed")) or 0
-    entitlement_stuck = db.scalar(
-        select(func.count()).select_from(EntitlementJob).where(EntitlementJob.state.in_(["failed", "waiting_grant"]))
-    ) or 0
-    entitlement_pending = db.scalar(
-        select(func.count()).select_from(EntitlementJob).where(EntitlementJob.state == "pending")
-    ) or 0
+    dead = _count_outbox_for_project(db, "dead", project_id)
+    pending = _count_outbox_for_project(db, "pending", project_id)
+    failed = _count_outbox_for_project(db, "failed", project_id)
+    entitlement_stuck = _count_entitlement_for_project(db, ["failed", "waiting_grant"], project_id)
+    entitlement_pending = _count_entitlement_for_project(db, ["pending"], project_id)
     preview_all = preview(db, scope="all", project_id=project_id, limit=50)
     by_code: dict[str, int] = {}
     for f in preview_all["findings"]:

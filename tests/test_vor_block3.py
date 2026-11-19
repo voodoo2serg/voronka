@@ -543,3 +543,90 @@ def test_ops104_queue_metrics_include_dead(crm):
         metrics = queue_metrics(db)
     assert metrics["integration_outbox_dead"] >= 1
     assert "entitlement_jobs_failed" in metrics
+
+
+def test_ops104_legacy_enrollment_rN_reused_not_duplicated(crm):
+    """Upgraded DB with enrollment.desired:{grant}:r1 must not gain a second stable row."""
+    o = order(crm)
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/grants", json={
+        "resource": "course-legacy", "capability": "course.view", "min_paid_percent": 100,
+    }).status_code == 200
+    with crm.db.begin() as db:
+        from app.crm_models import AccessGrant, Order as OrderModel, Profile
+        from app import integrations as integ
+        from app.db import now as db_now
+        grant = db.scalar(select(AccessGrant).where(AccessGrant.order_id == o["id"]))
+        order_row = db.get(OrderModel, o["id"])
+        profile = db.get(Profile, order_row.profile_id)
+        legacy_id = f"enrollment.desired:{grant.id}:r1"
+        db.add(IntegrationOutbox(
+            id="legacy-enroll-1",
+            event_id=legacy_id,
+            destination="lms_end",
+            kind="enrollment.desired",
+            payload={"grant_id": grant.id, "order_id": o["id"], "project_id": "p", "revision": 1},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_503",
+            correlation_id=o["id"],
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+        db.flush()
+        row = integ.enqueue_enrollment(db, grant=grant, order=order_row, profile=profile, revision=2, revoke=False)
+        assert row.event_id == legacy_id
+        assert row.payload.get("revision") == 2
+        assert len(list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired")))) == 1
+    apply = crm.client.post(
+        "/api/crm/projects/p/reconcile/apply",
+        json={"scope": "enrollment", "acknowledge_mutate": True},
+    )
+    assert apply.status_code == 200, apply.text
+    with crm.db() as db:
+        from app.crm_models import AccessGrant
+        grant = db.scalar(select(AccessGrant).where(AccessGrant.order_id == o["id"]))
+        legacy_id = f"enrollment.desired:{grant.id}:r1"
+        all_enroll = list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired")))
+        assert len(all_enroll) == 1
+        assert all_enroll[0].event_id == legacy_id
+        assert all_enroll[0].state == "pending"
+
+
+def test_ops104_preview_scope_excludes_other_dlq(crm):
+    with crm.db.begin() as db:
+        from app.db import now as db_now
+        db.add(IntegrationOutbox(
+            id="dead-pay-scope",
+            event_id="deal.paid:scope-pay",
+            destination="solo_pr",
+            kind="deal.paid",
+            payload={"project_id": "p", "order_id": "ord-a"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_500",
+            correlation_id="ord-a",
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+        db.add(IntegrationOutbox(
+            id="dead-enroll-scope",
+            event_id="enrollment.desired:scope-grant",
+            destination="lms_end",
+            kind="enrollment.desired",
+            payload={"project_id": "p", "order_id": "ord-b", "grant_id": "scope-grant"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_503",
+            correlation_id="ord-b",
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+    payment_preview = crm.client.get("/api/crm/projects/p/reconcile/preview?scope=payment").json()
+    scopes = {f["scope"] for f in payment_preview["findings"]}
+    assert "enrollment" not in scopes
+    assert all(f["scope"] == "payment" for f in payment_preview["findings"])
+    enroll_preview = crm.client.get("/api/crm/projects/p/reconcile/preview?scope=enrollment").json()
+    assert all(f["scope"] == "enrollment" for f in enroll_preview["findings"])
