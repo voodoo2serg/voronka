@@ -16,6 +16,7 @@ from app.crm_routers.m2m_communications import router as m2m_communications_rout
 from app.crm_routers.customer_graph import router as customer_graph_router
 from app.crm_routers.audience_import import router as audience_import_router
 from app.crm_routers.company_setup import router as company_setup_router
+from app.crm_routers.reconcile import router as reconcile_router
 
 
 def build_router() -> APIRouter:
@@ -27,6 +28,7 @@ def build_router() -> APIRouter:
     router.include_router(campaigns_router)
     router.include_router(outreach_router)
     router.include_router(integrations_router)
+    router.include_router(reconcile_router)
     router.include_router(connections_hub_router)
     router.include_router(ai_config_router)
     router.include_router(llm_drafts_router)

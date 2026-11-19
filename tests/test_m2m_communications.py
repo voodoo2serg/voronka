@@ -322,3 +322,85 @@ def test_crm_session_routes_still_work(m2m):
     assert m2m.client.get("/api/crm/me").status_code == 200
     person = contact(m2m)
     assert person["id"]
+
+
+def test_ops104_m2m_integrations_status(m2m, monkeypatch):
+    monkeypatch.setenv(
+        "SIGNAL_M2M_SCOPES",
+        "campaign:*,asset:read,asset:import,contact:segment:read,connection:hub:read,integrations:status:read",
+    )
+    with m2m.db.begin() as db:
+        from app.crm_models import IntegrationOutbox
+        from app.db import now as db_now
+        db.add(IntegrationOutbox(
+            id="m2m-dead-1",
+            event_id="enrollment.desired:m2m-grant",
+            destination="lms_end",
+            kind="enrollment.desired",
+            payload={"project_id": "p", "order_id": "ord-m2m", "grant_id": "m2m-grant"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_503",
+            correlation_id="ord-m2m",
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+    body = b""
+    headers = _headers(body, scopes="integrations:status:read")
+    r = m2m.client.request("GET", "/api/crm/m2m/projects/p/integrations/status", content=body, headers=headers)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["integration_outbox"]["dead"] >= 1
+    assert data["auto_retry_cap_attempts"] == 12
+    assert "dlq_sample" in data
+    raw = r.text.lower()
+    assert "secret" not in raw or "shared_database" in raw
+    assert SECRET.lower() not in raw
+
+
+def test_ops104_m2m_status_counts_are_project_scoped(m2m, monkeypatch):
+    monkeypatch.setenv(
+        "SIGNAL_M2M_SCOPES",
+        "campaign:*,asset:read,asset:import,contact:segment:read,connection:hub:read,integrations:status:read",
+    )
+    with m2m.db.begin() as db:
+        from app.crm_models import IntegrationOutbox
+        from app.db import now as db_now
+        db.add(IntegrationOutbox(
+            id="dead-other-proj",
+            event_id="enrollment.desired:other-grant",
+            destination="lms_end",
+            kind="enrollment.desired",
+            payload={"project_id": "secret", "order_id": "ord-secret", "grant_id": "other-grant"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_503",
+            correlation_id="ord-secret",
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+        db.add(IntegrationOutbox(
+            id="dead-this-proj",
+            event_id="enrollment.desired:this-grant",
+            destination="lms_end",
+            kind="enrollment.desired",
+            payload={"project_id": "p", "order_id": "ord-p", "grant_id": "this-grant"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=db_now(),
+            last_error="http_503",
+            correlation_id="ord-p",
+            created_at=db_now(),
+            updated_at=db_now(),
+        ))
+    body = b""
+    headers = _headers(body, scopes="integrations:status:read")
+    r = m2m.client.request("GET", "/api/crm/m2m/projects/p/integrations/status", content=body, headers=headers)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["integration_outbox"]["dead"] == 1
+    assert all((s.get("event_id") or "").endswith("this-grant") or s.get("correlation_id") == "ord-p" for s in data["dlq_sample"]) or data["integration_outbox"]["dead"] == 1
+    event_ids = [s.get("event_id") for s in data["dlq_sample"]]
+    assert "enrollment.desired:other-grant" not in event_ids

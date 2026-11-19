@@ -125,6 +125,23 @@ def _find_by_idempotency(db, pid: str, key: str) -> Campaign | None:
     return None
 
 
+@router.get("/projects/{pid}/integrations/status")
+async def m2m_integrations_status(
+    pid: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("integrations:status:read")),
+):
+    """OPS-104 aggregate for OPS-105 — counts + DLQ sample, no secrets/payloads."""
+    _body, _principal = auth_ctx
+    assert_project_allowed(pid)
+    from app import reconcile as reconcile_mod
+
+    with Session() as db:
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+        return reconcile_mod.aggregate_status(db, project_id=pid)
+
+
 @router.get("/projects/{pid}/connections/hub")
 async def m2m_connections_hub(
     pid: str,

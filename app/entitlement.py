@@ -12,6 +12,8 @@ from app import integrations
 def queue_for_payment(db, payment: Payment) -> EntitlementJob:
     prior = db.scalar(select(EntitlementJob).where(EntitlementJob.payment_id == payment.id))
     if prior:
+        if not prior.correlation_id:
+            prior.correlation_id = payment.order_id
         return prior
     job = EntitlementJob(
         id=uid(),
@@ -21,6 +23,7 @@ def queue_for_payment(db, payment: Payment) -> EntitlementJob:
         attempts=0,
         last_error="",
         result={},
+        correlation_id=payment.order_id,
         created_at=now(),
         updated_at=now(),
     )

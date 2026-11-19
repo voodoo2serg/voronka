@@ -17,6 +17,8 @@ Robokassa ResultURL
 
 Сбой job/outbox **не** удаляет Payment.
 
+**OPS-104 reconcile:** dry-run `GET /api/crm/projects/{pid}/reconcile/preview`, mutate `POST …/reconcile/apply` (`acknowledge_mutate`), DLQ `GET …/integration-outbox/dlq`, M2M aggregate `GET /api/crm/m2m/projects/{pid}/integrations/status` (`integrations:status:read`). Enrollment `event_id` стабилен: `enrollment.desired:{grant_id}` (revision только в payload). Подробности: [OPS_104_EVENT_RECONCILIATION.md](./OPS_104_EVENT_RECONCILIATION.md).
+
 ## Wire contract v1 (dual-read / dual-emit)
 
 Межрепо HTTP без shared DB. Приём **и** старых, **и** новых имён; исходящие шлют оба варианта.

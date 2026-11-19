@@ -16,9 +16,9 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, reconcile  # noqa: F401
     from app.ops_routers import portal as ops_portal, wizards as ops_wizards
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards):
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, reconcile, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -300,6 +300,12 @@ def test_migration_0007_integrations_matches_models_and_downgrades(crm):
         'crm_provider_events', 'crm_entitlement_jobs', 'crm_integration_outbox',
         'crm_integration_inbox', 'crm_ai_rules',
     }
+    # Columns added by later migrations (0010 OPS-104) — exclude from 0007-only assert.
+    later_columns = {
+        'crm_entitlement_jobs': {'correlation_id'},
+        'crm_integration_outbox': {'correlation_id'},
+        'crm_integration_inbox': {'correlation_id'},
+    }
     with bind.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             if table.name in tables:
@@ -311,7 +317,8 @@ def test_migration_0007_integrations_matches_models_and_downgrades(crm):
             inspector = inspect(conn)
             for table in Base.metadata.sorted_tables:
                 if table.name in tables:
-                    assert set(c.name for c in table.columns) == {c['name'] for c in inspector.get_columns(table.name)}
+                    model_cols = set(c.name for c in table.columns) - later_columns.get(table.name, set())
+                    assert model_cols == {c['name'] for c in inspector.get_columns(table.name)}
             assert 'asset_id' in {c['name'] for c in inspector.get_columns('crm_campaigns')}
             module.downgrade()
         assert not tables.intersection(inspect(conn).get_table_names())

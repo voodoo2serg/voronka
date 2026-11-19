@@ -33,7 +33,7 @@ Person/ContactPoint, согласия/suppression, многоканальные 
 
 ## Производственный backlog после дедупликации (PROD / OPS)
 
-**[Ревизия PROD-001…013 и три новых GitHub Issues](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/PRODUCTION_BACKLOG_RECONCILIATION_v5_2.md)** — **источник приоритизации**. Не создавать дубликаты по PROD-002/003/006…012: это уточнения уже существующих `AUTH-*`, `PAY-101`, `OPS-102`, `JOURNEY-*`, `MEDIA-*`, `ANALYTICS-*`, `CRM-102`, `MAIL-*`, `RAGA-*`. Новый runtime backlog: [OPS-103 — Git/VPS drift](https://github.com/voodoo2serg/solo_pr/issues/16), [OPS-104 — event reconciliation](https://github.com/voodoo2serg/voronka/issues/13), [OPS-105 — diagnostic UI](https://github.com/voodoo2serg/signal/issues/13). **Код этих новых задач пока не реализован.**
+**[Ревизия PROD-001…013 и три новых GitHub Issues](https://github.com/voodoo2serg/solo_pr/blob/main/docs/signal/PRODUCTION_BACKLOG_RECONCILIATION_v5_2.md)** — **источник приоритизации**. Не создавать дубликаты по PROD-002/003/006…012: это уточнения уже существующих `AUTH-*`, `PAY-101`, `OPS-102`, `JOURNEY-*`, `MEDIA-*`, `ANALYTICS-*`, `CRM-102`, `MAIL-*`, `RAGA-*`. Новый runtime backlog: [OPS-103 — Git/VPS drift](https://github.com/voodoo2serg/solo_pr/issues/16), [OPS-104 — event reconciliation](https://github.com/voodoo2serg/voronka/issues/13) (**CODE_READY** — см. [OPS_104_EVENT_RECONCILIATION.md](./OPS_104_EVENT_RECONCILIATION.md); Issue закрывать только после MERGED→DEPLOYED→smoke), [OPS-105 — diagnostic UI](https://github.com/voodoo2serg/signal/issues/13).
 
 ## Единая регистрация, восстановление и SSO — AUTH-201…210
 
