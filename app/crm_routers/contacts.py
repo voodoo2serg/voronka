@@ -12,7 +12,10 @@ from pydantic import Field
 from sqlalchemy import select, or_, and_
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
-from app.crm_models import Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product, Payment, LlmReplyAudit
+from app.crm_models import (
+    Profile, Deal, Activity, WorkItem, ImportBatch, Order, Product, Payment, LlmReplyAudit,
+    Interaction, Communication,
+)
 from app.crm_service import (
     uid, STAGES, project_access, get_profile, get_deal, audit, normalize_email, normalize_phone,
     parse_csv, create_profile, balance, safe_csv_cell, assigned_profile_filter, manager_scope,
@@ -198,6 +201,28 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
                 LlmReplyAudit.project_id == row.project_id,
             ).order_by(LlmReplyAudit.created_at.desc()).limit(20)
         ))
+        # CJ-108: Person timeline writeback (Signal CE → interactions/communications).
+        person_interactions: list[dict] = []
+        person_communications: list[dict] = []
+        if row.person_id:
+            person_interactions = [
+                encode(x)
+                for x in db.scalars(
+                    select(Interaction)
+                    .where(Interaction.person_id == row.person_id)
+                    .order_by(Interaction.occurred_at.desc())
+                    .limit(50)
+                )
+            ]
+            person_communications = [
+                encode(x)
+                for x in db.scalars(
+                    select(Communication)
+                    .where(Communication.person_id == row.person_id)
+                    .order_by(Communication.created_at.desc())
+                    .limit(20)
+                )
+            ]
         return {
             **encode(row),
             "is_purchaser": is_purchaser,
@@ -208,6 +233,8 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
             "identities": identity_payload,
             "events": [encode(e) for e in events],
             "llm_drafts": [encode(d) for d in drafts],
+            "person_interactions": person_interactions,
+            "person_communications": person_communications,
             # CRM-7: RO consumer of LMS/BBB attendance — empty until LMS-21/22 emit events.
             "learning": {
                 "available": False,

@@ -2294,6 +2294,24 @@ export default function Workspace() {
               </>
             )}
             <h3>История</h3>
+            {(detail.person_interactions || []).map((ix: Row) => (
+              <article className="timeline" key={'ix-' + ix.id}>
+                <small>
+                  {date(ix.occurred_at || ix.created_at)} · {ix.source_service || 'signal'} ·{' '}
+                  {ix.channel || 'email'} · {ix.direction || 'outbound'}
+                </small>
+                <b>
+                  {ix.kind}
+                  {ix.payload?.status ? ` · ${ix.payload.status}` : ''}
+                </b>
+                <p>
+                  {(detail.person_communications || []).find((c: Row) => c.id === ix.communication_id)
+                    ?.body_preview ||
+                    ix.external_event_key ||
+                    ''}
+                </p>
+              </article>
+            ))}
             {detail.activities.map((a: Row) => (
               <article className="timeline" key={a.id}>
                 <small>

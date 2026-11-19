@@ -481,6 +481,16 @@ def test_m2m_communications_ingest_idempotent_and_no_html(crm, monkeypatch):
         )
         assert len(ixs) == 2
 
+    # Contact drawer (crm.solo-pr.ru) must surface Person writeback without a full graph rewrite.
+    detail = crm.client.get(f"/api/crm/contacts/{person['id']}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body.get("person_id") == person["person_id"]
+    keys = {ix["external_event_key"] for ix in body.get("person_interactions") or []}
+    assert "ce:voronka:evt-1:queued" in keys
+    assert "ce:voronka:evt-1:accepted" in keys
+    assert any(c["id"] == cid for c in body.get("person_communications") or [])
+
     # Cross-project deny via allowlist
     monkeypatch.setenv("SIGNAL_M2M_PROJECT_ALLOWLIST", "other")
     denied = post(

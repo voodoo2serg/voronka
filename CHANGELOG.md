@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — CJ-108 Person timeline in CRM contact drawer (VR-186)
+
+- `GET /api/crm/contacts/{id}` includes `person_interactions` + `person_communications` when Profile is linked to a Person.
+- CRM «История» renders Signal CE writeback (kind / status / body_preview) ahead of manual activities.
+- Tests: contact detail assertion on CJ-108 M2M ingest path.
+
 ## Unreleased — Media SoR Wave B (VR-180)
 
 - Consume Signal/Registry `asset_id` via M2M: `POST …/assets/ensure-from-signal`, import accepts `signal_asset_id`.
