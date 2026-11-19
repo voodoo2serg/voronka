@@ -28,6 +28,15 @@ paths:
     get:
       summary: Limited contact/tag projection
       x-required-scopes: [contact:segment:read]
+  /api/crm/m2m/projects/{pid}/segments/export:
+    post:
+      summary: CAMP-101 sendable segment export (Person + ContactPoint + send_allowed)
+      description: >
+        Paginated export of project Persons with a ContactPoint for the requested
+        channel. When only_sendable=true (default), each row must pass
+        send_allowed(purpose, missing_policy=deny). Returns person_id,
+        contact_point_id, address — unlike GET /contacts (profile/tag only).
+      x-required-scopes: [contact:segment:read]
   /api/crm/m2m/projects/{pid}/campaigns:
     post:
       summary: Create draft campaign (external_idempotency_key)

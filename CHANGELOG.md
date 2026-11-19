@@ -4,10 +4,17 @@
 
 - M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.
 - `POST /api/crm/m2m/projects/{pid}/scenarios/versions` — accept/store immutable Funnel+Version from Signal (idempotent `external_idempotency_key`).
-- Descriptor-only graphs (`llm_reply`/`escalate`/…) are **stored inactive** (`activated=false`); do **not** set `published_version_id` until runtime TYPES support them (VR-124/#21 not assumed on main). Classic-only graphs activate after `validate_bindings`.
+- Runtime-ready graphs (TYPES, including VR-124 `llm_reply`/`escalate`/`operator_pause`) activate after `validate_bindings`. Remaining forward-compat descriptors (`send_template`/`tag_contact`) stay **stored inactive** (`activated=false`; do not set `published_version_id`).
 - `POST .../executions/{execution_id}/pause` and `GET .../scenarios/versions/{id}/status`.
-- `validate_published_graph` reuses classic `validate_graph` invariants and extends allowed types for forward-compat descriptors; rejects `auto_send`.
+- `validate_published_graph` reuses classic invariants and extends allowed types for forward-compat descriptors; rejects `auto_send`.
 - Mini App `/api/funnels/{id}/publish` remains strict `validate_graph` (no second canvas).
+
+## Unreleased — CAMP-101 segment export (M2M)
+
+- **CAMP-101:** `POST /api/crm/m2m/projects/{pid}/segments/export` — paginated sendable
+  Person + ContactPoint export for Signal mass campaigns (`contact:segment:read`).
+  Default `only_sendable=true` filters via `send_allowed` (`purpose=marketing`,
+  `missing_policy=deny`). Profile-only `GET …/contacts` remains unchanged.
 
 ## Unreleased — CJ-108 SIGNAL_M2M_SCOPES (env allowlist)
 

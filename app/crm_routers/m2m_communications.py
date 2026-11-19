@@ -54,6 +54,24 @@ class AssetImportBody(Body):
     content_type: str | None = None
 
 
+class M2MSegmentExport(Body):
+    """CAMP-101: paginated sendable Person/ContactPoint export for Signal mass campaigns.
+
+    When only_sendable=true (default), each candidate must pass send_allowed with
+    missing_policy=deny for the requested purpose (marketing for mass email).
+
+    Defined above the route that uses it — FastAPI resolves annotations at import.
+    """
+
+    channel: str = Field(default="email", min_length=1, max_length=30)
+    purpose: str = Field(default="marketing", max_length=40)
+    tag: str | None = Field(default=None, max_length=80)
+    missing_policy: str = Field(default="deny", max_length=20)
+    only_sendable: bool = True
+    limit: int = Field(default=100, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+
+
 def _m2m_audit(db, principal: SignalM2MPrincipal, kind: str, **payload: Any) -> None:
     db.add(
         Event(
@@ -364,6 +382,143 @@ async def m2m_contacts(
             if len(items) >= limit:
                 break
         return {"items": items, "limit": limit, "offset": offset}
+
+
+@router.post("/projects/{pid}/segments/export")
+def m2m_segment_export(
+    pid: str,
+    body: M2MSegmentExport,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("contact:segment:read")),
+):
+    """CAMP-101: export sendable segment (Person + ContactPoint) for Signal dry-run/plan.
+
+    Unlike GET /contacts (profile/tag projection only), this returns person_id,
+    contact_point_id and channel address for candidates that pass send_allowed.
+    """
+    from app.crm_models import ContactPoint, Person
+    from app import person_graph as graph
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    if body.purpose not in {"marketing", "transactional", "service", "analytics"}:
+        raise HTTPException(422, "Неизвестная цель согласия")
+    if body.missing_policy not in {"soft_allow", "deny"}:
+        raise HTTPException(422, "Неизвестный missing_policy")
+    if body.channel not in {"email", "telegram", "phone", "whatsapp", "max"}:
+        raise HTTPException(422, "Неизвестный канал")
+
+    excluded = 0
+    sendable_index = 0
+    items: list[dict[str, Any]] = []
+    with Session() as db:
+        from app.db import Project
+
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+
+        # Walk Profiles with a linked Person; optional tag filter.
+        profiles = list(
+            db.scalars(
+                select(Profile)
+                .where(Profile.project_id == pid, Profile.person_id.is_not(None))
+                .order_by(Profile.created_at.desc())
+            )
+        )
+        seen_cp: set[str] = set()
+        for profile in profiles:
+            tags = profile.tags or []
+            if body.tag and body.tag not in tags:
+                continue
+            if profile.stopped and body.purpose == "marketing" and body.only_sendable:
+                excluded += 1
+                continue
+            person = db.get(Person, profile.person_id)
+            if person is None or person.lifecycle_stage == "merged":
+                excluded += 1
+                continue
+            points = list(
+                db.scalars(
+                    select(ContactPoint).where(
+                        ContactPoint.person_id == person.id,
+                        ContactPoint.channel == body.channel,
+                    )
+                )
+            )
+            if not points:
+                excluded += 1
+                continue
+            for cp in points:
+                if cp.id in seen_cp:
+                    continue
+                seen_cp.add(cp.id)
+                reason = "ok"
+                if body.only_sendable:
+                    allowed, reason = graph.send_allowed(
+                        db,
+                        person_id=person.id,
+                        contact_point_id=cp.id,
+                        channel=body.channel,
+                        purpose=body.purpose,
+                        missing_policy=body.missing_policy,
+                    )
+                    if not allowed:
+                        excluded += 1
+                        continue
+                # Paginate over sendable (or unfiltered) candidates only.
+                if sendable_index < body.offset:
+                    sendable_index += 1
+                    continue
+                sendable_index += 1
+                items.append(
+                    {
+                        "person_id": person.id,
+                        "contact_point_id": cp.id,
+                        "channel": cp.channel,
+                        "address": cp.normalized_value,
+                        "verified": bool(cp.verified),
+                        "reachable": bool(cp.reachable),
+                        "display_name": person.display_name or profile.name,
+                        "profile_id": profile.id,
+                        "tags": tags,
+                        "send_allowed": True if body.only_sendable else None,
+                        "send_reason": reason if body.only_sendable else None,
+                    }
+                )
+                if len(items) >= body.limit:
+                    break
+            if len(items) >= body.limit:
+                break
+
+        _m2m_audit(
+            db,
+            principal,
+            "segment.export",
+            project_id=pid,
+            channel=body.channel,
+            purpose=body.purpose,
+            tag=body.tag,
+            returned=len(items),
+            excluded=excluded,
+            offset=body.offset,
+            limit=body.limit,
+        )
+        db.commit()
+        return {
+            "project_id": pid,
+            "channel": body.channel,
+            "purpose": body.purpose,
+            "tag": body.tag,
+            "only_sendable": body.only_sendable,
+            "missing_policy": body.missing_policy,
+            "items": items,
+            "count": len(items),
+            "excluded": excluded,
+            "limit": body.limit,
+            "offset": body.offset,
+            "has_more": len(items) >= body.limit,
+            "sor": "voronka",
+        }
 
 
 @router.post("/projects/{pid}/campaigns")
@@ -1178,8 +1333,8 @@ async def m2m_publish_scenario_version(
             if not conn or conn.project_id != pid:
                 raise HTTPException(422, f"connection_id не в проекте: {cid}")
 
-        # Activate only when every node is runtime-ready on this build (classic TYPES).
-        # PDialog-only types (llm_reply/escalate/…) stay stored/inactive until VR-124/#21 lands.
+        # Activate when every node is in TYPES (includes VR-124 llm_reply/escalate).
+        # Remaining forward-compat descriptors (send_template/tag_contact) stay stored_inactive.
         activate = graph_runtime_ready(body.graph)
         if activate:
             if not connection_ids:

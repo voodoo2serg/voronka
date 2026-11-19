@@ -35,10 +35,173 @@ def prompt(db, run, identity, question, state):
                               for index, option in enumerate(options)]
     queue(db, identity, payload, run)
 
+def pause_for_operator(db, run, identity, contact, *, reason: str, task_title: str | None = None):
+    """Pause automation for human takeover (same path as POST /api/messages). Not bot handoff."""
+    if run.status != "paused":
+        run.state = {**dict(run.state), "_before_pause": run.status, "_pause_reason": reason}
+        run.status = "paused"
+    for out in db.scalars(select(Outbox).where(
+        Outbox.run_id == run.id, Outbox.status == "pending"
+    ).with_for_update()):
+        out.status = "held"
+    if task_title:
+        db.add(Task(
+            id=uid(),
+            contact_id=contact.id,
+            connection_id=identity.connection_id,
+            title=task_title[:500],
+        ))
+    event(db, "run.operator_pause", identity.connection_id, contact.id, run.id, reason=reason)
+
+def _published_rules_text(version, rules_version: str) -> str | None:
+    """Optional pin map on Version.graph until Signal publish lands: graph._rules[rules_version]."""
+    blob = (version.graph or {}).get("_rules")
+    if isinstance(blob, dict):
+        text = blob.get(rules_version)
+        if isinstance(text, str) and text.strip():
+            return text
+    return None
+
+def _execute_llm_reply(db, run, identity, contact, node, key, state, connection):
+    from app import ai_providers
+    from app.crm_models import LlmReplyAudit
+
+    version = db.get(Version, run.version_id)
+    node_id = node.get("id") or key
+    mode = node.get("mode") or "draft_only"
+    rules_version = node["rules_version"]
+    project_id = connection.project_id if connection else None
+    published = _published_rules_text(version, rules_version)
+    resolved = ai_providers.resolve_rules_pin(
+        db,
+        rules_version=rules_version,
+        project_id=project_id,
+        connection_id=identity.connection_id,
+        published_rules_text=published,
+    )
+    provider = node.get("provider") or resolved.get("provider") or "raga"
+    model = node.get("model") or resolved.get("model") or ""
+    temperature = node.get("temperature")
+    max_tokens = node.get("max_tokens")
+    question = (
+        state.get("_last_inbound")
+        or state.get("last_message")
+        or node.get("prompt_ref")
+        or "Подготовь черновик ответа клиенту по сценарию."
+    )
+    context = {
+        "run_id": run.id,
+        "node_id": node_id,
+        "contact_stage": contact.stage,
+        "state_keys": sorted(k for k in state.keys() if not str(k).startswith("_")),
+    }
+    draft_text = ""
+    latency_ms = None
+    error_class = None
+    response_status = "ok"
+    try:
+        draft_text, latency_ms = ai_providers.complete_draft_timed(
+            provider=provider,
+            model=model,
+            system_rules=resolved.get("system_rules") or "",
+            question=str(question)[:4000],
+            context=context,
+            project_id=project_id or "",
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        error_class = ai_providers.classify_error(exc)
+        response_status = "timeout" if error_class == "timeout" else "error"
+        fallback = node.get("fallback")
+        if isinstance(fallback, str) and fallback.strip():
+            draft_text = fallback.strip()
+            response_status = "fallback"
+        else:
+            # Safe default template, then escalate to operator.
+            draft_text = (
+                "Спасибо за сообщение. Менеджер скоро ответит лично — "
+                "автоматический черновик сейчас недоступен."
+            )
+            response_status = "fallback"
+            audit = LlmReplyAudit(
+                id=uid(),
+                execution_id=run.id,
+                node_id=node_id,
+                run_id=run.id,
+                identity_id=identity.id,
+                contact_id=contact.id,
+                connection_id=identity.connection_id,
+                project_id=project_id,
+                provider=provider,
+                model=model or "",
+                rules_version=rules_version,
+                mode=mode,
+                response_status=response_status,
+                latency_ms=latency_ms,
+                error_class=error_class,
+                draft_text=draft_text[:20000],
+                created_at=now(),
+                updated_at=now(),
+            )
+            db.add(audit)
+            db.flush()
+            state["_llm_draft_id"] = audit.id
+            state["_await"] = "llm_approval"
+            pause_for_operator(
+                db, run, identity, contact,
+                reason="llm_error",
+                task_title=f"LLM ошибка ({error_class}): нужен ответ клиенту",
+            )
+            event(
+                db, "llm_reply.fallback_escalate", identity.connection_id, contact.id, run.id,
+                node=node_id, error_class=error_class, audit_id=audit.id,
+            )
+            run.state = state
+            return True  # stop advance
+
+    # Draft-first modes park as pending for inbox; preserve fallback/error labels when used.
+    stored_status = response_status if response_status in {"fallback", "error", "timeout"} else "pending"
+    audit = LlmReplyAudit(
+        id=uid(),
+        execution_id=run.id,
+        node_id=node_id,
+        run_id=run.id,
+        identity_id=identity.id,
+        contact_id=contact.id,
+        connection_id=identity.connection_id,
+        project_id=project_id,
+        provider=provider,
+        model=model or "",
+        rules_version=rules_version,
+        mode=mode,
+        response_status=stored_status,
+        latency_ms=latency_ms,
+        error_class=error_class,
+        draft_text=draft_text[:20000],
+        created_at=now(),
+        updated_at=now(),
+    )
+    db.add(audit)
+    db.flush()
+    state["_llm_draft_id"] = audit.id
+    state["_await"] = "llm_approval"
+    # Draft-first: never auto-send. Park run until inbox approve/edit/reject.
+    run.status = "waiting"
+    event(
+        db, "llm_reply.draft", identity.connection_id, contact.id, run.id,
+        node=node_id, audit_id=audit.id, mode=mode, rules_version=rules_version,
+        response_status=audit.response_status, auto_send=False,
+    )
+    run.state = state
+    return True
+
 def advance(db, run, identity):
     graph = db.get(Version, run.version_id).graph
     state = dict(run.state)
     contact = db.get(Contact, identity.contact_id)
+    from app.db import Connection
+    connection = db.get(Connection, identity.connection_id)
     for _ in range(201):
         if run.status != "active":
             break
@@ -94,6 +257,21 @@ def advance(db, run, identity):
             event(db, "run.handoff", target_cid, contact.id, run.id, from_connection=node.get("from") or "")
             run.current = node["next"]
             continue
+        elif kind in {"escalate", "operator_pause"}:
+            title = node.get("text") or node.get("title") or "Эскалация оператору"
+            pause_for_operator(
+                db, run, identity, contact,
+                reason="escalate",
+                task_title=title,
+            )
+            # Remember next so resume can continue after human reply if desired.
+            # Merge onto run.state: pause_for_operator already wrote _before_pause / _pause_reason.
+            state = {**dict(run.state), **state, "_escalate_next": node["next"]}
+            run.state = state
+            break
+        elif kind == "llm_reply":
+            if _execute_llm_reply(db, run, identity, contact, node, key, state, connection):
+                break
         elif kind == "grant":
             if not all(state.get(x) is True for x in node["requires"]):
                 run.status = "blocked"
@@ -124,6 +302,33 @@ def cancel_run(db, run):
     for out in db.scalars(select(Outbox).where(Outbox.run_id == run.id,
         Outbox.status.in_(["pending", "held"])).with_for_update()):
         out.status = "cancelled"
+
+def cancel_delayed_on_reply(db, run, identity, contact, text: str) -> bool:
+    """If current wait has cancel_on_reply, cancel timer/pending delayed outbox and branch."""
+    if not run or run.status != "delayed":
+        return False
+    version = db.get(Version, run.version_id)
+    node = version.graph["nodes"].get(run.current) or {}
+    if node.get("type") != "wait" or not node.get("cancel_on_reply"):
+        return False
+    # Cancel undelivered automation tied to this delayed wait.
+    wait_node = run.current
+    for out in db.scalars(select(Outbox).where(
+        Outbox.run_id == run.id, Outbox.status.in_(["pending", "held"])
+    ).with_for_update()):
+        out.status = "cancelled"
+    run.due_at = None
+    nxt = node.get("on_reply") or node.get("next")
+    state = dict(run.state)
+    state["_last_inbound"] = text
+    state.pop("_await", None)
+    run.state, run.current, run.status = state, nxt, "active"
+    event(
+        db, "wait.cancel_on_reply", identity.connection_id, contact.id, run.id,
+        node=wait_node, text=text[:500], next=nxt,
+    )
+    advance(db, run, identity)
+    return True
 
 def media_import(db, connection, msg):
     admin = db.get(Admin, int(msg["user_id"]))
@@ -229,6 +434,17 @@ def consume(db, connection, msg):
         )
         advance(db, run, identity)
         return
+    contact = db.get(Contact, identity.contact_id)
+    if run and run.status == "delayed" and text.strip() and not callback:
+        if cancel_delayed_on_reply(db, run, identity, contact, text):
+            return
+    if run and run.status == "waiting" and (run.state or {}).get("_await") == "llm_approval":
+        # Customer wrote while draft awaits operator — log only; do not treat as question answer.
+        state = dict(run.state)
+        state["_last_inbound"] = text
+        run.state = state
+        event(db, "message.received", connection.id, identity.contact_id, run.id, text=text)
+        return
     if not run or run.status != "waiting":
         event(db, "message.received", connection.id, identity.contact_id, run.id if run else None, text=text)
         return
@@ -281,6 +497,7 @@ def consume(db, connection, msg):
         state[node["key"]], state[node["key"] + "_answers"] = True, answers
         event(db, "survey.completed", connection.id, identity.contact_id, run.id, answers=answers)
     state.pop("_prompt", None)
+    state["_last_inbound"] = text
     nxt = node["next"]
     if node["type"] == "question":
         nxt = (node.get("routes") or {}).get(text) or nxt

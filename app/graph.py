@@ -2,11 +2,18 @@ from urllib.parse import urlparse
 
 MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
-TYPES = SEND | {"question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal", "handoff"}
-# PDialog descriptors accepted on Signal publish; runtime support lands via VR-124 (#21) — not assumed on main.
-FORWARD_COMPAT_TYPES = {"llm_reply", "escalate", "operator_pause", "send_template", "tag_contact"}
+# escalate / operator_pause = pause for human (≠ handoff bot switch).
+# llm_reply = draft-first LLM node (PDialog P1 / Signal#20 / VR-124); auto_send is never a publish field.
+TYPES = SEND | {
+    "question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal",
+    "handoff", "llm_reply", "escalate", "operator_pause",
+}
+LLM_MODES = {"draft_only", "human_approval"}
+LLM_PROVIDERS = {"raga", "openrouter", "ollama", "openai_compatible"}
+LLM_REPLY_MODES = LLM_MODES
+# Still descriptor-only on Signal publish until dedicated runtime lands.
+FORWARD_COMPAT_TYPES = {"send_template", "tag_contact"}
 PUBLISHED_TYPES = TYPES | FORWARD_COMPAT_TYPES
-LLM_REPLY_MODES = {"draft_only", "human_approval"}
 RESERVED = "_"
 
 def checked_text(value, label, maximum=4000):
@@ -36,19 +43,7 @@ def secure_url(value):
     return url.scheme == "https" and bool(url.hostname) and not url.username and not url.password
 
 def _validate_forward_compat_node(key, node, kind):
-    """Structural checks for PDialog-only descriptors (stored before / until runtime support)."""
-    if kind == "llm_reply":
-        mode = node.get("mode", "draft_only")
-        if mode not in LLM_REPLY_MODES:
-            raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
-        rules_version = node.get("rules_version")
-        if not isinstance(rules_version, str) or not rules_version.strip():
-            raise ValueError(f"llm_reply {key}: rules_version pin required")
-        if "auto_send" in node:
-            raise ValueError(f"llm_reply {key}: auto_send forbidden")
-    if kind in {"escalate", "operator_pause"}:
-        if "connection_id" in node:
-            raise ValueError(f"{kind} {key}: use handoff for bot switch; escalate has no connection_id")
+    """Structural checks for descriptors accepted on Signal publish before runtime support."""
     if kind == "send_template":
         rev = node.get("document_revision_id") or node.get("revision_id")
         if not isinstance(rev, str) or not rev.strip() or len(rev) > 64:
@@ -58,12 +53,46 @@ def _validate_forward_compat_node(key, node, kind):
         if not isinstance(tag, str) or not tag.strip() or len(tag) > 80:
             raise ValueError(f"tag_contact {key}: tag required")
 
+def _validate_llm_reply_node(key, node):
+    # P0/P1 publish descriptor: id?, provider?, model?, temperature?, max_tokens?,
+    # rules_version (required), mode draft_only|human_approval, fallback?, prompt_ref?
+    # auto_send is intentionally not accepted as a publish field.
+    if "auto_send" in node:
+        raise ValueError(f"llm_reply {key}: auto_send не publish-поле (всегда false)")
+    pin = node.get("rules_version")
+    if not isinstance(pin, str) or not pin.strip() or len(pin) > 120:
+        raise ValueError(f"llm_reply {key}: нужен rules_version (pin 1–120)")
+    mode = node.get("mode", "draft_only")
+    if mode not in LLM_MODES:
+        raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
+    if "provider" in node and node["provider"] is not None:
+        if node["provider"] not in LLM_PROVIDERS:
+            raise ValueError(f"llm_reply {key}: неизвестный provider")
+    if "model" in node and node["model"] is not None:
+        if not isinstance(node["model"], str) or len(node["model"]) > 120:
+            raise ValueError(f"llm_reply {key}: model строка до 120")
+    if "temperature" in node and node["temperature"] is not None:
+        temp = node["temperature"]
+        if isinstance(temp, bool) or not isinstance(temp, (int, float)) or not 0 <= float(temp) <= 2:
+            raise ValueError(f"llm_reply {key}: temperature 0–2")
+    if "max_tokens" in node and node["max_tokens"] is not None:
+        cap = node["max_tokens"]
+        if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 8192:
+            raise ValueError(f"llm_reply {key}: max_tokens 1–8192")
+    if "fallback" in node and node["fallback"] is not None:
+        if not isinstance(node["fallback"], str) or len(node["fallback"]) > 4000:
+            raise ValueError(f"llm_reply {key}: fallback текст до 4000")
+    if "prompt_ref" in node and node["prompt_ref"] is not None:
+        if not isinstance(node["prompt_ref"], str) or len(node["prompt_ref"]) > 160:
+            raise ValueError(f"llm_reply {key}: prompt_ref до 160")
+    if "id" in node and node["id"] is not None:
+        if not isinstance(node["id"], str) or not node["id"].strip() or len(node["id"]) > 80:
+            raise ValueError(f"llm_reply {key}: id 1–80")
+
 def _node_outgoing(key, node, kind, nodes):
-    """Return outgoing refs for one node (classic + forward-compat)."""
+    """Return outgoing refs for one node (classic TYPES + remaining forward-compat)."""
     if kind in FORWARD_COMPAT_TYPES:
         _validate_forward_compat_node(key, node, kind)
-        if kind in {"escalate", "operator_pause"} and not node.get("next"):
-            return []
         return [node.get("next")]
 
     outgoing = [] if kind == "finish" else [node.get("next")]
@@ -108,6 +137,20 @@ def _node_outgoing(key, node, kind, nodes):
         seconds = node.get("seconds")
         if not isinstance(seconds, int) or isinstance(seconds, bool) or not 1 <= seconds <= 2592000:
             raise ValueError("Ожидание: 1–2592000 секунд")
+        if "cancel_on_reply" in node and not isinstance(node.get("cancel_on_reply"), bool):
+            raise ValueError(f"wait {key}: cancel_on_reply должен быть bool")
+        if node.get("cancel_on_reply") and node.get("on_reply") is not None:
+            outgoing = [node.get("next"), node.get("on_reply")]
+    if kind == "llm_reply":
+        _validate_llm_reply_node(key, node)
+    if kind in {"escalate", "operator_pause"}:
+        # Operator pause — do not confuse with handoff (bot switch).
+        if "connection_id" in node:
+            raise ValueError(f"{kind} {key}: use handoff for bot switch; escalate has no connection_id")
+        title = node.get("text") or node.get("title") or "Эскалация оператору"
+        checked_text(title, f"escalate {key}", 160)
+        if not node.get("next"):
+            outgoing = []
     if kind in {"question", "survey"}:
         response_key = checked_key(node.get("key"))
         # uniqueness checked by caller via response_keys
@@ -184,11 +227,11 @@ def _validate_graph_core(graph, *, allowed_types):
     return graph
 
 def validate_graph(graph):
-    """Strict Mini App / ops publish — classic TYPES only."""
+    """Strict Mini App / ops publish — TYPES (includes VR-124 llm_reply/escalate)."""
     return _validate_graph_core(graph, allowed_types=TYPES)
 
 def validate_published_graph(graph):
-    """Signal-published Personal Dialog graphs: classic invariants + forward-compat descriptors."""
+    """Signal-published Personal Dialog graphs: TYPES + remaining forward-compat descriptors."""
     if not isinstance(graph, dict):
         raise ValueError("Сценарий должен быть объектом")
     if graph.get("auto_send") is not None:
@@ -201,10 +244,10 @@ def validate_published_graph(graph):
     return _validate_graph_core(graph, allowed_types=PUBLISHED_TYPES)
 
 def graph_runtime_ready(graph):
-    """True iff every node type is executable on *this* Voronka build (classic TYPES).
+    """True iff every node type is executable on *this* Voronka build (TYPES).
 
-    PDialog-only types (llm_reply/escalate/…) stay inactive until VR-124/#21 merges into the
-    running TYPES set. Do not assume that PR is on main.
+    Remaining forward-compat descriptors (send_template/tag_contact) keep Versions
+    stored_inactive until their runtime lands.
     """
     nodes = (graph or {}).get("nodes") or {}
     return all(isinstance(n, dict) and n.get("type") in TYPES for n in nodes.values())
