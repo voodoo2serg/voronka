@@ -154,6 +154,52 @@ def test_lead_created_idempotent(crm, monkeypatch):
         assert allowed, reason
 
 
+def test_raga_lead_creates_person_via_generic_path(crm, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "raga-lead-7",
+        "idempotency_key": "raga-lead-7",
+        "source": "raga_site",
+        "email": "raga.lead@example.ru",
+        "name": "RAGA Lead",
+        "promo_code": "ZIMA2027",
+        "consent": True,
+        "ads_consent": False,
+        "project_id": "p",
+    }
+    raw = json.dumps(payload).encode()
+    headers = _auth_headers("inbound-secret", raw)
+    r = crm.client.post("/api/crm/integrations/leads", content=raw, headers=headers)
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    assert r.json().get("person_id")
+    with crm.db() as db:
+        from app.crm_models import Profile
+
+        profile = db.scalar(select(Profile).where(Profile.email == "raga.lead@example.ru"))
+        assert profile and profile.source == "raga_site" and profile.person_id
+        inbox = db.scalar(select(IntegrationInbox).where(IntegrationInbox.event_key == "raga-lead-7"))
+        assert inbox and inbox.source == "raga_site"
+
+
+def test_solo_destination_missing_stays_pending(crm, monkeypatch):
+    monkeypatch.delenv("SOLO_PR_EVENTS_URL", raising=False)
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-secret")
+    o = order(crm)
+    assert crm.client.post(
+        f"/api/crm/orders/{o['id']}/payments",
+        json={"amount_minor": 100000, "external_id": "manual-solo-pending", "evidence": "Выписка"},
+    ).status_code == 200
+    with crm.db.begin() as db:
+        assert process_pending(db) >= 1
+        drain_outbox(db)
+        rows = list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.destination == "solo_pr")))
+        assert rows
+        assert all(r.state == "pending" and r.last_error == "destination_not_configured" for r in rows)
+
+
 def test_learning_completed_marks_academic(crm, monkeypatch):
     monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
     person = contact(crm, email="student@example.ru")

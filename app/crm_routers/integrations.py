@@ -22,6 +22,9 @@ from app.integrations import verify_bearer_or_hmac
 router = APIRouter()
 
 
+LEAD_SOURCES = Literal["solo_pr", "raga", "raga_site"]
+
+
 class LeadBody(Body):
     event_id: str = Field(min_length=4, max_length=160)
     kind: Literal["lead.created"] = "lead.created"
@@ -34,8 +37,9 @@ class LeadBody(Body):
     consent: bool = False
     ads_consent: bool = False
     created: str = Field(default="", max_length=80)
-    source: Literal["solo_pr"] = "solo_pr"
+    source: LEAD_SOURCES = "solo_pr"
     project_id: str | None = None
+    promo_code: str = Field(default="", max_length=40)
 
 
 class CompletionBody(Body):
@@ -78,8 +82,25 @@ def _merge_envelope(raw: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _normalize_lead_source(raw_source: Any) -> str:
+    value = str(raw_source or "solo_pr").strip().lower()
+    aliases = {
+        "solo": "solo_pr",
+        "solo-pr": "solo_pr",
+        "solo_pr": "solo_pr",
+        "raga": "raga",
+        "raga_site": "raga_site",
+        "raga-site": "raga_site",
+        "rag_for_ai": "raga",
+    }
+    source = aliases.get(value, value)
+    if source not in {"solo_pr", "raga", "raga_site"}:
+        raise HTTPException(422, "source должен быть solo_pr|raga|raga_site")
+    return source
+
+
 def normalize_lead_body(raw: dict[str, Any]) -> LeadBody:
-    """Dual-read solo_pr lead.created: type|kind, idempotency_key|event_id, data|flat."""
+    """Dual-read lead.created (solo_pr / RAGA): type|kind, idempotency_key|event_id, data|flat."""
     if not isinstance(raw, dict):
         raise HTTPException(422, "Ожидался JSON-объект")
     nested = raw.get("data") if isinstance(raw.get("data"), dict) else {}
@@ -94,6 +115,7 @@ def normalize_lead_body(raw: dict[str, Any]) -> LeadBody:
         nested_kind = nested.get("kind")
         if nested_kind and str(nested_kind) != "lead.created":
             service = str(nested_kind)
+    source = _normalize_lead_source(merged.get("source") or nested.get("source") or "solo_pr")
     try:
         return LeadBody(
             event_id=event_id,
@@ -107,8 +129,9 @@ def normalize_lead_body(raw: dict[str, Any]) -> LeadBody:
             consent=bool(merged.get("consent", False)),
             ads_consent=bool(merged.get("ads_consent", False)),
             created=str(merged.get("created") or ""),
-            source="solo_pr",
+            source=source,  # type: ignore[arg-type]
             project_id=merged.get("project_id"),
+            promo_code=str(merged.get("promo_code") or merged.get("promo") or "")[:40],
         )
     except ValidationError as exc:
         raise HTTPException(422, exc.errors()) from exc
@@ -175,11 +198,8 @@ def _find_profile_by_keycloak(db, keycloak_sub: str) -> Profile | None:
     return None
 
 
-@router.post("/integrations/solo_pr/leads")
-async def inbound_lead(request: Request):
-    raw = await _require_integration(request)
-    payload = _parse_json_body(raw)
-    body = normalize_lead_body(payload)
+def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
+    """Upsert Person/Profile/Deal from any marketing lead source (solo_pr / RAGA)."""
     project_id = body.project_id or os.getenv("DEFAULT_PROJECT_ID", "")
     if not project_id:
         raise HTTPException(503, "DEFAULT_PROJECT_ID не задан для входящих лидов")
@@ -188,36 +208,45 @@ async def inbound_lead(request: Request):
         phone = normalize_phone(body.contact if body.contact_type == "phone" else "")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    source = body.source
+    default_name = {
+        "solo_pr": "Лид сайта",
+        "raga": "Лид RAGA",
+        "raga_site": "Лид RAGA",
+    }.get(source, "Лид")
     with Session.begin() as db:
         prior = db.scalar(
             select(IntegrationInbox).where(
-                IntegrationInbox.source == "solo_pr", IntegrationInbox.event_key == body.event_id
+                IntegrationInbox.source == source, IntegrationInbox.event_key == body.event_id
             )
         )
         if prior:
-            return {"ok": True, "duplicate": True, "profile_id": prior.profile_id, "inbox_id": prior.id}
+            return {"ok": True, "duplicate": True, "profile_id": prior.profile_id, "inbox_id": prior.id, "person_id": None}
         profile = None
         if email:
             profile = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.email == email))
         if profile is None and phone:
             profile = db.scalar(select(Profile).where(Profile.project_id == project_id, Profile.phone == phone))
+        lead_extra = {
+            "lead_event_id": body.event_id,
+            "contact_type": body.contact_type,
+            "service": body.service,
+            "consent": body.consent,
+            "ads_consent": body.ads_consent,
+            "created": body.created,
+            "lead_source": source,
+            "promo_code": body.promo_code,
+        }
         if profile is None:
             profile = create_profile(
                 db,
                 project_id,
                 {
-                    "name": body.name or email or phone or "Лид сайта",
+                    "name": body.name or email or phone or default_name,
                     "email": email,
                     "phone": phone,
-                    "source": "solo_pr",
-                    "extra": {
-                        "lead_event_id": body.event_id,
-                        "contact_type": body.contact_type,
-                        "service": body.service,
-                        "consent": body.consent,
-                        "ads_consent": body.ads_consent,
-                        "created": body.created,
-                    },
+                    "source": source,
+                    "extra": lead_extra,
                 },
             )
         else:
@@ -227,16 +256,7 @@ async def inbound_lead(request: Request):
             person_graph.sync_profile_contact_points(db, profile)
             # Copy before mutate: plain JSON columns are not mutable-tracked.
             extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
-            extra.update(
-                {
-                    "lead_event_id": body.event_id,
-                    "contact_type": body.contact_type,
-                    "service": body.service,
-                    "consent": body.consent,
-                    "ads_consent": body.ads_consent,
-                    "created": body.created,
-                }
-            )
+            extra.update(lead_extra)
             profile.extra = extra
         # CRM-102 / MAIL-101: record form consent onto email ContactPoint.
         from app import person_graph
@@ -248,7 +268,7 @@ async def inbound_lead(request: Request):
                 db, person, channel="email", value=email, verified=False
             )
         if email_cp and body.consent:
-            evidence = f"solo_pr lead.created:{body.event_id}"
+            evidence = f"{source} lead.created:{body.event_id}"
             person_graph.set_consent(
                 db,
                 email_cp.id,
@@ -270,12 +290,15 @@ async def inbound_lead(request: Request):
                 status="granted" if body.ads_consent else "denied",
                 evidence=evidence,
             )
+        deal_title = body.service or ("RAGA signup" if source.startswith("raga") else "Заявка с сайта")
+        if body.promo_code and source.startswith("raga"):
+            deal_title = f"{deal_title} ({body.promo_code})"
         db.add(
             Deal(
                 id=uid(),
                 project_id=project_id,
                 profile_id=profile.id,
-                title=body.service or "Заявка с сайта",
+                title=deal_title[:200],
                 stage="new",
                 next_action="Связаться с лидом",
             )
@@ -289,14 +312,14 @@ async def inbound_lead(request: Request):
                     profile_id=profile.id,
                     actor_id=owner.telegram_id,
                     kind="lead",
-                    channel="solo_pr",
+                    channel=source,
                     outcome="lead.created",
                     body=body.message[:20000],
                 )
             )
         row = IntegrationInbox(
             id=uid(),
-            source="solo_pr",
+            source=source,
             event_key=body.event_id,
             kind="lead.created",
             payload=body.model_dump(),
@@ -306,7 +329,22 @@ async def inbound_lead(request: Request):
         )
         db.add(row)
         db.flush()
-        return {"ok": True, "duplicate": False, "profile_id": profile.id, "inbox_id": row.id}
+        return {
+            "ok": True,
+            "duplicate": False,
+            "profile_id": profile.id,
+            "person_id": profile.person_id,
+            "inbox_id": row.id,
+        }
+
+
+@router.post("/integrations/solo_pr/leads")
+@router.post("/integrations/leads")
+async def inbound_lead(request: Request):
+    raw = await _require_integration(request)
+    payload = _parse_json_body(raw)
+    body = normalize_lead_body(payload)
+    return _apply_inbound_lead(body)
 
 
 @router.post("/integrations/lms_end/completions")
@@ -454,6 +492,11 @@ def integration_status(admin=Depends(crm_actor)):
         "solo_pr": {
             "events_url_set": bool(os.getenv("SOLO_PR_EVENTS_URL")),
             "secret_set": bool(os.getenv("SOLO_PR_WEBHOOK_SECRET")),
+            "events_url_hint": "https://solo-pr.ru/api/integrations/voronka",
+        },
+        "leads": {
+            "accepted_sources": ["solo_pr", "raga", "raga_site"],
+            "paths": ["/api/crm/integrations/solo_pr/leads", "/api/crm/integrations/leads"],
         },
         "lms_end": {
             "enrollment_url_set": bool(os.getenv("LMS_END_ENROLLMENT_URL")),

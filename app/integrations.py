@@ -569,9 +569,9 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
     url = _url(row.destination)
     secret = _secret(row.destination)
     if not url or not secret:
-        # CJ-107: Signal CE may be configured after grants land — keep pending/retryable
-        # instead of permanently failing durable access notifications.
-        if row.destination == DEST_SIGNAL:
+        # Keep neighbor money/access/CE events retryable when env is filled later
+        # (solo_pr URL historically missing → permanent failed was wrong).
+        if row.destination in {DEST_SIGNAL, DEST_SOLO, DEST_LMS}:
             row.state = "pending"
             row.last_error = "destination_not_configured"
             row.updated_at = now()

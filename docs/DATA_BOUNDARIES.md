@@ -32,6 +32,7 @@ Chatwoot и EspoCRM **не** входят в стек.
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/api/crm/integrations/solo_pr/leads` | `lead.created` (идемпотентно по `event_id`\|`idempotency_key`; dual-read `type`\|`kind`, nested `data`\|flat) |
+| `POST` | `/api/crm/integrations/leads` | то же; `source=solo_pr\|raga\|raga_site` (маркетинговые лиды RAGA → Person, без shared DB) |
 | `POST` | `/api/crm/integrations/commerce/quote` | Checkout quote / Order в ledger voronka |
 | `GET\|POST` | `/api/crm/robokassa/result` | ResultURL провайдера (или proxy с сайта на этот URL) |
 
