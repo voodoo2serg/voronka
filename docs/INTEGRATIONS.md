@@ -34,7 +34,9 @@ Robokassa ResultURL
 
 ## AI
 
-Провайдеры: RAGA / OpenRouter / Ollama. Правила: global → project → connection. Черновик всегда `sent: false`.
+Провайдеры (env → `/api/crm/ai/status` → Ops **AiSection**): `raga` (`RAG_API_*` + `RAG_PROJECT_MODELS`), `openrouter` (`OPENROUTER_*`), `ollama` (`OLLAMA_*`), `openai_compatible` (`OPENAI_COMPAT_BASE_URL` / `OPENAI_COMPAT_MODEL` / optional `OPENAI_COMPAT_API_KEY`). Правила: global → project → connection. Черновик всегда `sent: false`; `auto_send` отсутствует. Узлы `llm_reply` в графе — draft-first (`draft_only` / `human_approval`).
+
+**Company setup:** `GET/POST /api/crm/projects/{pid}/company-setup` — project AiRule + checklist согласий / Signal welcome·inquiry·`course.access_granted` / AccessGrant path. Не включает production mass-send.
 
 ## Media / campaigns
 

@@ -15,6 +15,7 @@ from app.crm_routers.portal import router as portal_router
 from app.crm_routers.m2m_communications import router as m2m_communications_router
 from app.crm_routers.customer_graph import router as customer_graph_router
 from app.crm_routers.audience_import import router as audience_import_router
+from app.crm_routers.company_setup import router as company_setup_router
 
 
 def build_router() -> APIRouter:
@@ -32,5 +33,6 @@ def build_router() -> APIRouter:
     router.include_router(portal_router)
     router.include_router(customer_graph_router)
     router.include_router(audience_import_router)
+    router.include_router(company_setup_router)
     router.include_router(m2m_communications_router)
     return router

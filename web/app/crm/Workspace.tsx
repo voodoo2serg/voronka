@@ -1942,6 +1942,28 @@ export default function Workspace() {
                     ) : (
                       <p className="fine">Статус почты недоступен</p>
                     )}
+                    <h3>Настройка компании</h3>
+                    <p className="fine">
+                      Согласия (transactional/service/marketing), чеклист Signal welcome/inquiry/access, путь AccessGrant.
+                      Массовая production-отправка не включается.
+                    </p>
+                    {me.role === 'owner' && (
+                      <button
+                        className="primary"
+                        onClick={() =>
+                          void act(async () => {
+                            const r = await api(`/projects/${pid}/company-setup`, 'POST');
+                            setNotice(
+                              r.ai_rule_created
+                                ? 'Правила компании применены (AiRule создан). Проверьте Signal seed и AccessGrant path.'
+                                : 'Правила компании обновлены. Signal seed и AccessGrant — по чеклисту.',
+                            );
+                          })
+                        }
+                      >
+                        Применить defaults проекта
+                      </button>
+                    )}
                     <h3>Интеграции</h3>
                     {Object.entries(overview.integrations || {}).map(([key, value]) => (
                       <div className="direction" key={key}>
