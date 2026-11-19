@@ -31,6 +31,9 @@ router = APIRouter(prefix="/oidc", tags=["CRM OIDC"])
 
 _STATE_COOKIE = "crm_oidc_state"
 _STATE_TTL = 600
+# Keycloak default actionTokenGeneratedByUserLifespan for reset is 12h — keep
+# PKCE verifier + state cookie alive through email delivery and link click.
+_RECOVER_STATE_TTL = 12 * 60 * 60
 _ALLOWED_RETURN_TO = frozenset({"/crm/", "/ops/"})
 
 
@@ -99,15 +102,17 @@ def login(return_to: str = "/crm/", recover: int = 0):
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
+    do_recover = bool(recover)
+    ttl = _RECOVER_STATE_TTL if do_recover else _STATE_TTL
     # One-time server-side PKCE verifier + nonce. No OAuth tokens in JS or cookies.
     auth.cache.setex(
         "crm:oidc:" + state,
-        _STATE_TTL,
+        ttl,
         json.dumps({
             "verifier": verifier,
             "nonce": nonce,
             "return_to": _safe_return_to(return_to),
-            "recover": bool(recover),
+            "recover": do_recover,
         }),
     )
     params = {
@@ -121,11 +126,11 @@ def login(return_to: str = "/crm/", recover: int = 0):
         "code_challenge_method": "S256",
     }
     endpoint = info["authorization_endpoint"]
-    if recover:
+    if do_recover:
         endpoint = _forgot_credentials_endpoint(endpoint)
     response = RedirectResponse(endpoint + "?" + urlencode(params), status_code=302)
     response.set_cookie(
-        _STATE_COOKIE, state, max_age=_STATE_TTL, secure=True,
+        _STATE_COOKIE, state, max_age=ttl, secure=True,
         httponly=True, samesite="lax", path="/api/crm/oidc",
     )
     return response

@@ -10,8 +10,25 @@ import { PORTAL_URLS } from '../portals';
  */
 const CRM_OIDC_LOGIN =
   PORTAL_URLS.crm + '/api/crm/oidc/login?return_to=' + encodeURIComponent('/ops/');
-const CRM_OIDC_RECOVER = PORTAL_URLS.crm + '/api/crm/oidc/login?recover=1';
+const CRM_OIDC_RECOVER =
+  PORTAL_URLS.crm +
+  '/api/crm/oidc/login?recover=1&return_to=' +
+  encodeURIComponent('/ops/');
 const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
+
+function opsRecoveryHref(recoveryPath: string): string {
+  const absolute = recoveryPath.startsWith('http')
+    ? recoveryPath
+    : PORTAL_URLS.crm + recoveryPath;
+  try {
+    const url = new URL(absolute);
+    url.searchParams.set('recover', '1');
+    url.searchParams.set('return_to', '/ops/');
+    return url.toString();
+  } catch {
+    return CRM_OIDC_RECOVER;
+  }
+}
 
 export function LoginScreen({
   api,
@@ -53,11 +70,8 @@ export function LoginScreen({
         setShowLocal(!enabled || !nextCutover);
         if (result.recovery_path) {
           // Absolute CRM host so PKCE state cookie is set on the callback origin.
-          setRecoveryPath(
-            result.recovery_path.startsWith('http')
-              ? result.recovery_path
-              : PORTAL_URLS.crm + result.recovery_path,
-          );
+          // Keep return_to=/ops/ so post-reset lands back in ops, not CRM.
+          setRecoveryPath(opsRecoveryHref(result.recovery_path));
         }
       })
       .catch(() => {

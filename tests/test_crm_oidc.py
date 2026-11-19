@@ -167,6 +167,26 @@ def test_recover_login_uses_forgot_credentials_endpoint(system, monkeypatch):
     state = params["state"][0]
     payload = json.loads(system.cache.get("crm:oidc:" + state))
     assert payload["recover"] is True
+    assert payload["return_to"] == "/crm/"
+    # Cookie Max-Age must outlive email delivery (KC reset action token ~12h).
+    assert f"Max-Age={oidc_staff._RECOVER_STATE_TTL}" in response.headers["set-cookie"]
+    assert oidc_staff._RECOVER_STATE_TTL > oidc_staff._STATE_TTL
+
+
+def test_recover_login_preserves_ops_return_to(system, monkeypatch):
+    configure(monkeypatch)
+    monkeypatch.setattr(oidc_staff, "_discovery", lambda issuer: {
+        "authorization_endpoint": issuer + "/protocol/openid-connect/auth",
+    })
+    response = system.client.get(
+        "/api/crm/oidc/login?recover=1&return_to=/ops/",
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
+    payload = json.loads(system.cache.get("crm:oidc:" + state))
+    assert payload["recover"] is True
+    assert payload["return_to"] == "/ops/"
 
 
 def test_forgot_credentials_endpoint_helper():
