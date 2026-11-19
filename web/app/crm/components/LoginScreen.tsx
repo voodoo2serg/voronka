@@ -28,14 +28,31 @@ export function LoginScreen({
   const [code, setCode] = useState('');
   const [purpose, setPurpose] = useState('reset');
   const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [cutover, setCutover] = useState(false);
+  const [showLocal, setShowLocal] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
-      .then((response) => response.ok ? response.json() : { enabled: false })
-      .then((result: { enabled?: boolean }) => { if (!cancelled) setSsoEnabled(result.enabled === true); })
-      .catch(() => { if (!cancelled) setSsoEnabled(false); });
-    return () => { cancelled = true; };
+      .then((response) => (response.ok ? response.json() : { enabled: false }))
+      .then((result: { enabled?: boolean; cutover?: boolean }) => {
+        if (cancelled) return;
+        const enabled = result.enabled === true;
+        const nextCutover = result.cutover === true;
+        setSsoEnabled(enabled);
+        setCutover(nextCutover);
+        setShowLocal(!enabled || !nextCutover);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSsoEnabled(false);
+          setCutover(false);
+          setShowLocal(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
 
@@ -51,76 +68,89 @@ export function LoginScreen({
             <a className="primary full" href="/api/crm/oidc/login">
               Войти через единый аккаунт SIGNAL
             </a>
-            <p className="fine">Если учётная запись ещё не привязана, используйте прежний вход.</p>
+            <p className="fine">
+              {cutover
+                ? 'Штатный вход — через Keycloak. Локальный пароль только для аварии.'
+                : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
+            </p>
           </div>
         )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void onBusy(async () => {
-              if (recover) {
-                if (code) {
-                  await api('/recovery/finish', 'POST', { login, purpose, code, password });
-                  onNotice('Операция выполнена. Можно войти.');
-                  setRecover(false);
-                  setCode('');
-                } else {
-                  await api('/recovery/start', 'POST', { login, purpose });
-                  onNotice('Если аккаунт подходит для операции, код отправлен.');
-                }
-              } else {
-                const r = await api('/login', 'POST', { login, password });
-                sessionStorage.removeItem('crm-token');
-                onToken(r.token);
-              }
-            });
-          }}
-        >
-          <label>
-            Логин
-            <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
-          </label>
-          {recover && (
-            <>
-              <label>
-                Операция
-                <select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
-                  <option value="reset">Восстановить пароль</option>
-                  <option value="verify">Подтвердить email</option>
-                </select>
-              </label>
-              <label>
-                Код из письма
-                <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Для получения кода оставьте пустым" />
-              </label>
-            </>
-          )}
-          {(!recover || (purpose === 'reset' && code)) && (
-            <label>
-              {recover ? 'Новый пароль' : 'Пароль'}
-              <input
-                type="password"
-                autoComplete={recover ? 'new-password' : 'current-password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-          )}
-          <button className="primary full" disabled={busy}>
-            {recover ? (code ? 'Подтвердить' : 'Получить код') : 'Войти в кабинет'}
+        {cutover && ssoEnabled && !recover && !showLocal && (
+          <button className="link" type="button" onClick={() => setShowLocal(true)}>
+            Аварийный вход по локальному паролю
           </button>
-        </form>
-        <button
-          className="link"
-          onClick={() => {
-            setRecover(!recover);
-            onError('');
-            onNotice('');
-          }}
-        >
-          {recover ? 'Вернуться ко входу' : 'Забыли пароль или нужно подтвердить почту?'}
-        </button>
+        )}
+        {(showLocal || recover) && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onBusy(async () => {
+                if (recover) {
+                  if (code) {
+                    await api('/recovery/finish', 'POST', { login, purpose, code, password });
+                    onNotice('Операция выполнена. Можно войти.');
+                    setRecover(false);
+                    setCode('');
+                  } else {
+                    await api('/recovery/start', 'POST', { login, purpose });
+                    onNotice('Если аккаунт подходит для операции, код отправлен.');
+                  }
+                } else {
+                  const r = await api('/login', 'POST', { login, password });
+                  sessionStorage.removeItem('crm-token');
+                  onToken(r.token);
+                }
+              });
+            }}
+          >
+            <label>
+              Логин
+              <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
+            </label>
+            {recover && (
+              <>
+                <label>
+                  Операция
+                  <select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
+                    <option value="reset">Восстановить пароль</option>
+                    <option value="verify">Подтвердить email</option>
+                  </select>
+                </label>
+                <label>
+                  Код из письма
+                  <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Для получения кода оставьте пустым" />
+                </label>
+              </>
+            )}
+            {(!recover || (purpose === 'reset' && code)) && (
+              <label>
+                {recover ? 'Новый пароль' : 'Пароль'}
+                <input
+                  type="password"
+                  autoComplete={recover ? 'new-password' : 'current-password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </label>
+            )}
+            <button className="primary full" disabled={busy}>
+              {recover ? (code ? 'Подтвердить' : 'Получить код') : cutover ? 'Аварийный вход' : 'Войти в кабинет'}
+            </button>
+          </form>
+        )}
+        {(showLocal || recover) && (
+          <button
+            className="link"
+            onClick={() => {
+              setRecover(!recover);
+              onError('');
+              onNotice('');
+            }}
+          >
+            {recover ? 'Вернуться ко входу' : 'Забыли пароль или нужно подтвердить почту?'}
+          </button>
+        )}
         {error && <p role="alert" className="error">{error}</p>}
         {notice && <p role="status" className="notice">{notice}</p>}
         <p className="fine">Нет аккаунта? Обратитесь к владельцу проекта.</p>

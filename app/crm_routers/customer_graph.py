@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
 from sqlalchemy import select, or_
 
+from app import auth
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
 from app.crm_models import (
+    Account,
     Activity,
     Agreement,
     Communication,
@@ -585,4 +587,22 @@ def resolve_oidc(issuer: str, subject: str, admin=Depends(crm_actor)):
         row = db.scalar(select(OidcLink).where(OidcLink.issuer == issuer, OidcLink.subject == subject))
         if row is None or row.provisioning_status == "revoked":
             raise HTTPException(404, "OIDC link не найден")
+        return encode(row)
+
+
+@router.post("/oidc-links/{link_id}/revoke")
+def revoke_oidc(link_id: str, admin=Depends(crm_actor)):
+    """Revoke issuer+sub mapping. Does not delete Account/Admin or change roles."""
+    staff_owner(admin)
+    with Session.begin() as db:
+        row = must(db.get(OidcLink, link_id))
+        if row.provisioning_status == "revoked":
+            return encode(row)
+        row.provisioning_status = "revoked"
+        row.updated_at = now()
+        audit(db, admin, "oidc.revoked", oidc_link_id=row.id, account_id=row.account_id)
+        if row.account_id:
+            account = db.get(Account, row.account_id)
+            if account:
+                auth.revoke_sessions(account.admin_id)
         return encode(row)

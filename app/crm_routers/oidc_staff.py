@@ -1,16 +1,18 @@
-"""Opt-in Keycloak authorization-code + PKCE login for existing CRM staff.
+"""Keycloak authorization-code + PKCE BFF for existing CRM staff (AUTH-203).
 
 No auto-provision, no auto-link by email, and no local password changes.
+Verified issuer+sub maps only via crm_oidc_links → existing Account/Admin.
 Existing CRM roles and project memberships remain authoritative.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
-import time
 import json
 import os
 import secrets
+import time
 from urllib.parse import urlencode
 
 import httpx
@@ -21,6 +23,8 @@ from sqlalchemy import select
 from app import auth
 from app.crm_deps import Session, set_session_cookie
 from app.crm_models import Account, OidcLink
+from app.crm_oidc_cutover import cutover_enabled, status_payload
+from app.crm_service import audit
 from app.db import Admin
 
 router = APIRouter(prefix="/oidc", tags=["CRM OIDC"])
@@ -67,6 +71,10 @@ def _discovery(issuer: str) -> dict:
     return info
 
 
+def _pkce_challenge(verifier: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+
+
 @router.get("/status")
 def status():
     try:
@@ -74,7 +82,7 @@ def status():
         enabled = True
     except HTTPException:
         enabled = False
-    return {"enabled": enabled, "mode": "existing-linked-staff-only", "local_login_unchanged": True}
+    return status_payload(enabled)
 
 
 @router.get("/login")
@@ -82,24 +90,33 @@ def login(return_to: str = "/crm/"):
     issuer, client_id, _, redirect_uri = _config()
     info = _discovery(issuer)
     state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
-    challenge = __import__("base64").urlsafe_b64encode(
-        hashlib.sha256(verifier.encode("ascii")).digest()
-    ).rstrip(b"=").decode("ascii")
-    # One-time server-side PKCE verifier. No OAuth tokens in JS or cookies.
+    # One-time server-side PKCE verifier + nonce. No OAuth tokens in JS or cookies.
     auth.cache.setex(
         "crm:oidc:" + state,
         _STATE_TTL,
-        json.dumps({"verifier": verifier, "return_to": _safe_return_to(return_to)}),
+        json.dumps({
+            "verifier": verifier,
+            "nonce": nonce,
+            "return_to": _safe_return_to(return_to),
+        }),
     )
     params = {
-        "response_type": "code", "client_id": client_id,
-        "redirect_uri": redirect_uri, "scope": "openid profile email",
-        "state": state, "code_challenge": challenge, "code_challenge_method": "S256",
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": "openid profile email",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": _pkce_challenge(verifier),
+        "code_challenge_method": "S256",
     }
     response = RedirectResponse(info["authorization_endpoint"] + "?" + urlencode(params), status_code=302)
-    response.set_cookie(_STATE_COOKIE, state, max_age=_STATE_TTL, secure=True,
-                        httponly=True, samesite="lax", path="/api/crm/oidc")
+    response.set_cookie(
+        _STATE_COOKIE, state, max_age=_STATE_TTL, secure=True,
+        httponly=True, samesite="lax", path="/api/crm/oidc",
+    )
     return response
 
 
@@ -117,25 +134,55 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         raise HTTPException(401, "Ссылка входа истекла или уже использована")
     payload = json.loads(saved)
     verifier = payload["verifier"]
+    expected_nonce = payload.get("nonce") or ""
     return_to = _safe_return_to(payload.get("return_to"))
     info = _discovery(issuer)
+    tokens: dict = {}
+    identity: dict = {}
     try:
         with httpx.Client(timeout=8.0, follow_redirects=False) as client:
             token_response = client.post(info["token_endpoint"], data={
-                "grant_type": "authorization_code", "client_id": client_id,
-                "client_secret": client_secret, "code": code,
-                "redirect_uri": redirect_uri, "code_verifier": verifier,
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
             })
             token_response.raise_for_status()
-            access_token = str(token_response.json().get("access_token") or "")
+            tokens = token_response.json()
+            access_token = str(tokens.get("access_token") or "")
             if not access_token:
                 raise ValueError("missing access token")
-            identity_response = client.get(info["userinfo_endpoint"],
-                                           headers={"Authorization": "Bearer " + access_token})
+            identity_response = client.get(
+                info["userinfo_endpoint"],
+                headers={"Authorization": "Bearer " + access_token},
+            )
             identity_response.raise_for_status()
             identity = identity_response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         raise HTTPException(401, "Не удалось подтвердить вход в Keycloak") from exc
+    # userinfo iss is optional; when present it must match configured issuer.
+    claimed_iss = identity.get("iss")
+    if claimed_iss is not None and claimed_iss != issuer:
+        raise HTTPException(401, "Идентификатор Keycloak не совпал")
+    # Nonce is carried on the ID token; when Keycloak returns id_token, reject mismatch.
+    id_token = tokens.get("id_token")
+    if isinstance(id_token, str) and id_token.count(".") == 2 and expected_nonce:
+        try:
+            mid = id_token.split(".")[1]
+            mid += "=" * (-len(mid) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(mid.encode("ascii")))
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(401, "Некорректный идентификационный токен") from exc
+        if claims.get("iss") != issuer:
+            raise HTTPException(401, "Идентификатор Keycloak не совпал")
+        if claims.get("nonce") != expected_nonce:
+            raise HTTPException(401, "Неверное состояние авторизации")
+        aud = claims.get("aud")
+        aud_ok = aud == client_id or (isinstance(aud, list) and client_id in aud)
+        if not aud_ok:
+            raise HTTPException(401, "Неверный получатель токена")
     sub = identity.get("sub")
     if not isinstance(sub, str) or not sub or len(sub) > 250:
         raise HTTPException(401, "Keycloak не предоставил идентификатор")
@@ -153,18 +200,21 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         ).hexdigest()
         try:
             with httpx.Client(timeout=5.0, follow_redirects=False) as client:
-                gate = client.post(access_url, json={"issuer": issuer, "subject": sub},
+                gate = client.post(
+                    access_url,
+                    json={"issuer": issuer, "subject": sub},
                     headers={
                         "X-Signal-Service": "voronka",
                         "X-Signal-Timestamp": ts,
                         "X-Signal-Signature": signature,
-                    })
+                    },
+                )
                 gate.raise_for_status()
                 if gate.json().get("allowed") is not True:
                     raise HTTPException(403, "Доступ к CRM не разрешён в SIGNAL")
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(503, "Не удалось проверить разрешение CRM") from exc
-    with Session() as db:
+    with Session.begin() as db:
         link = db.scalar(select(OidcLink).where(
             OidcLink.issuer == issuer, OidcLink.subject == sub,
             OidcLink.provisioning_status == "linked"))
@@ -174,6 +224,11 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         admin = db.get(Admin, account.admin_id) if account else None
         if not admin or not admin.active or admin.role not in {"owner", "editor", "manager"}:
             raise HTTPException(403, "Доступ к CRM не предоставлен")
+        # Email claim never elevates role or creates a second owner.
+        audit(
+            db, admin, "oidc.login",
+            issuer=issuer, subject=sub, account_id=account.id, cutover=cutover_enabled(),
+        )
         session = auth.issue_session(admin.telegram_id)
     response = RedirectResponse(return_to, status_code=303)
     set_session_cookie(response, session)
