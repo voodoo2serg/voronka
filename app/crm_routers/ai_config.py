@@ -20,7 +20,7 @@ class AiRuleBody(Body):
     scope: Literal["global", "project", "connection"]
     project_id: str | None = None
     connection_id: str | None = None
-    provider: Literal["inherit", "raga", "openrouter", "ollama"] = "inherit"
+    provider: Literal["inherit", "raga", "openrouter", "ollama", "openai_compatible"] = "inherit"
     model: str = Field(default="", max_length=120)
     system_rules: str = Field(default="", max_length=20000)
     active: bool = True

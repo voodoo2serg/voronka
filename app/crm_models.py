@@ -275,6 +275,37 @@ class AiRule(Base):
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
 
 
+class LlmReplyAudit(Base):
+    """Minimal Voronka-only audit for llm_reply (no Phoenix). Draft stays local for inbox approve/edit/reject."""
+    __tablename__ = "llm_reply_audits"
+    __table_args__ = (
+        CheckConstraint(
+            "response_status IN ('ok', 'error', 'timeout', 'fallback', 'pending', 'approved', 'rejected', 'edited')"
+        ),
+        CheckConstraint("mode IN ('draft_only', 'human_approval')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id"), index=True)
+    node_id: Mapped[str] = mapped_column(String(80))
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id"), index=True)
+    identity_id: Mapped[str] = mapped_column(String(36), ForeignKey("identities.id"), index=True)
+    contact_id: Mapped[str] = mapped_column(String(36), ForeignKey("contacts.id"), index=True)
+    connection_id: Mapped[str] = mapped_column(String(36), ForeignKey("connections.id"))
+    project_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("projects.id"), nullable=True, index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    rules_version: Mapped[str] = mapped_column(String(120), default="")
+    mode: Mapped[str] = mapped_column(String(30), default="draft_only")
+    response_status: Mapped[str] = mapped_column(String(30), default="pending")
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_class: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    approved_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("admins.telegram_id"), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("outbox.id"), nullable=True)
+    draft_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class CampaignRecipient(Base):
     __tablename__ = "crm_campaign_recipients"
     __table_args__ = (UniqueConstraint("campaign_id", "profile_id"),)

@@ -2010,6 +2010,60 @@ export default function Workspace() {
                 Ответить через подключение
               </button>
             )}
+            {!!detail.llm_drafts?.length && (
+              <>
+                <h3>Черновики ИИ (сценарий)</h3>
+                {detail.llm_drafts.map((draft: Row) => (
+                  <div className="mini-card" key={draft.id}>
+                    <b>{draft.response_status}</b>
+                    <small>
+                      {' '}
+                      · {draft.mode} · rules {draft.rules_version} · {draft.model || draft.provider}
+                    </small>
+                    <p>{draft.draft_text}</p>
+                    {['pending', 'ok', 'fallback'].includes(draft.response_status) && (
+                      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          className="primary"
+                          onClick={() =>
+                            setForm({
+                              title: 'Утвердить черновик',
+                              fields: [
+                                {
+                                  key: 'text',
+                                  label: 'Текст',
+                                  type: 'textarea',
+                                  required: true,
+                                  value: draft.draft_text || '',
+                                },
+                              ],
+                              save: async (v) => {
+                                await api('/llm-drafts/' + draft.id + '/approve', 'POST', v);
+                                setNotice('Черновик утверждён и поставлен в очередь.');
+                                await refreshDetail();
+                              },
+                            })
+                          }
+                        >
+                          Утвердить
+                        </button>
+                        <button
+                          onClick={() =>
+                            void (async () => {
+                              await api('/llm-drafts/' + draft.id + '/reject', 'POST', {});
+                              setNotice('Черновик отклонён.');
+                              await refreshDetail();
+                            })()
+                          }
+                        >
+                          Отклонить
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
             <h3>История</h3>
             {detail.activities.map((a: Row) => (
               <article className="timeline" key={a.id}>
