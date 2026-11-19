@@ -309,6 +309,7 @@ def overview(pid: str, admin=Depends(crm_actor)):
                                  "raga": ai["raga"]["configured"],
                                  "openrouter": ai["openrouter"]["configured"],
                                  "ollama": ai["ollama"]["configured"],
+                                 "openai_compatible": ai["openai_compatible"]["configured"],
                                  "solo_pr": bool(os.getenv("SOLO_PR_EVENTS_URL") and os.getenv("SOLO_PR_WEBHOOK_SECRET")),
                                  "lms_end": bool(os.getenv("LMS_END_ENROLLMENT_URL") and (os.getenv("LMS_END_WEBHOOK_SECRET") or os.getenv("LMS_M2M_TOKEN"))),
                                  "chamilo": "not_implemented"},

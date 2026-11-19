@@ -24,6 +24,7 @@ export function AiSection({
     ['raga', status?.raga],
     ['openrouter', status?.openrouter],
     ['ollama', status?.ollama],
+    ['openai_compatible', status?.openai_compatible],
   ] as const;
 
   return (
@@ -40,7 +41,9 @@ export function AiSection({
             <p>{id}</p>
             <strong>{conf?.configured ? 'ok' : 'не настроено'}</strong>
             <small className="muted">
-              {id === 'ollama' && conf?.base_url ? conf.base_url : conf?.default_model || conf?.models_mapped?.join(', ') || '—'}
+              {(id === 'ollama' || id === 'openai_compatible') && conf?.base_url
+                ? conf.base_url
+                : conf?.default_model || conf?.models_mapped?.join(', ') || '—'}
             </small>
           </article>
         ))}
@@ -84,6 +87,7 @@ export function AiSection({
             <option value="raga">raga</option>
             <option value="openrouter">openrouter</option>
             <option value="ollama">ollama</option>
+            <option value="openai_compatible">openai_compatible</option>
           </select>
         </label>
         <label>
