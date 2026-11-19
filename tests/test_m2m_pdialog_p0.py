@@ -5,13 +5,17 @@ import json
 import secrets
 
 import pytest
-from sqlalchemy import select
 
 from test_operational import system  # noqa: F401 — fixture for crm
 from test_crm import crm  # noqa: F401
 from app.crm_service import uid
 from app.db import Contact, Entry, Funnel, Identity, Run, Version, now
-from app.graph import FORWARD_COMPAT_TYPES, validate_published_graph
+from app.graph import (
+    FORWARD_COMPAT_TYPES,
+    graph_runtime_ready,
+    validate_graph,
+    validate_published_graph,
+)
 from app.integrations import format_signature, sign_payload
 from app.m2m_signal import expand_scopes
 
@@ -44,7 +48,7 @@ def m2m(crm, monkeypatch):
     return crm
 
 
-def _payload(**overrides):
+def _llm_payload(**overrides):
     graph = {
         "start": "greet",
         "nodes": {
@@ -79,22 +83,62 @@ def _payload(**overrides):
     return body
 
 
+def _classic_payload(**overrides):
+    graph = {
+        "start": "greet",
+        "nodes": {
+            "greet": {"type": "text", "text": "Привет", "next": "end"},
+            "end": {"type": "finish"},
+        },
+    }
+    body = {
+        "schema_version": 1,
+        "construct": "personal_dialog",
+        "brand_id": "brand-1",
+        "scenario_id": "scenario-classic",
+        "signal_version_id": "sv-classic",
+        "rules_version": "rules-1:v1",
+        "rules_text": "ok",
+        "connection_ids": ["tg"],
+        "external_idempotency_key": "pdialog-classic-idem-001",
+        "funnel_name": "Classic dialog",
+        "graph": graph,
+    }
+    body.update(overrides)
+    return body
+
+
 def test_scenario_star_expands():
     assert "scenario:publish" in expand_scopes({"scenario:*"})
     assert "llm_reply" in FORWARD_COMPAT_TYPES
 
 
-def test_validate_published_graph_llm_reply():
-    g = _payload()["graph"]
+def test_validate_published_graph_reuses_classic_invariants():
+    g = _llm_payload()["graph"]
     validate_published_graph(g)
-    bad = json.loads(json.dumps(g))
-    bad["nodes"]["llm"]["auto_send"] = True
+    assert graph_runtime_ready(g) is False
+
+    # question without key — must fail (classic invariant preserved)
+    bad = {
+        "start": "q",
+        "nodes": {
+            "q": {"type": "question", "text": "Как дела?", "options": ["ок"], "next": "end"},
+            "end": {"type": "finish"},
+        },
+    }
     with pytest.raises(ValueError):
         validate_published_graph(bad)
+    with pytest.raises(ValueError):
+        validate_graph(bad)
+
+    bad_llm = json.loads(json.dumps(g))
+    bad_llm["nodes"]["llm"]["auto_send"] = True
+    with pytest.raises(ValueError):
+        validate_published_graph(bad_llm)
 
 
-def test_publish_idempotent_and_status(m2m):
-    payload = _payload()
+def test_llm_graph_stored_inactive(m2m):
+    payload = _llm_payload()
     body = json.dumps(payload, separators=(",", ":")).encode()
     r = m2m.client.post(
         "/api/crm/m2m/projects/p/scenarios/versions",
@@ -104,17 +148,16 @@ def test_publish_idempotent_and_status(m2m):
     assert r.status_code == 200, r.text
     first = r.json()
     assert first["idempotent_replay"] is False
+    assert first["activated"] is False
     assert first["voronka_version_id"]
-    assert first["voronka_funnel_id"]
-    assert first["rules_version"] == "rules-1:v1"
 
     with m2m.db() as db:
         version = db.get(Version, first["voronka_version_id"])
-        assert version is not None
         assert version.graph["nodes"]["llm"]["type"] == "llm_reply"
-        assert version.graph["meta"]["rules_version"] == "rules-1:v1"
+        assert version.graph["meta"]["activation"] == "stored_inactive"
         funnel = db.get(Funnel, first["voronka_funnel_id"])
-        assert funnel.published_version_id == version.id
+        # Must NOT become executable head while descriptors lack runtime support
+        assert funnel.published_version_id != version.id
 
     body2 = json.dumps(payload, separators=(",", ":")).encode()
     r2 = m2m.client.post(
@@ -122,9 +165,9 @@ def test_publish_idempotent_and_status(m2m):
         content=body2,
         headers=_headers(body2, scopes="scenario:publish"),
     )
-    assert r2.status_code == 200, r2.text
+    assert r2.status_code == 200
     assert r2.json()["idempotent_replay"] is True
-    assert r2.json()["voronka_version_id"] == first["voronka_version_id"]
+    assert r2.json()["activated"] is False
 
     empty = b""
     r3 = m2m.client.request(
@@ -133,15 +176,54 @@ def test_publish_idempotent_and_status(m2m):
         content=empty,
         headers=_headers(empty, scopes="scenario:status"),
     )
-    assert r3.status_code == 200, r3.text
-    st = r3.json()
-    assert st["rules_version"] == "rules-1:v1"
-    assert st["is_published_head"] is True
-    assert st["run_total"] == 0
+    assert r3.status_code == 200
+    assert r3.json()["is_published_head"] is False
+
+
+def test_classic_graph_activates_with_bindings(m2m):
+    payload = _classic_payload()
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    r = m2m.client.post(
+        "/api/crm/m2m/projects/p/scenarios/versions",
+        content=body,
+        headers=_headers(body, scopes="scenario:publish"),
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["activated"] is True
+    with m2m.db() as db:
+        funnel = db.get(Funnel, out["voronka_funnel_id"])
+        assert funnel.published_version_id == out["voronka_version_id"]
+
+
+def test_activate_requires_validate_bindings(m2m):
+    # Classic graph with handoff to unknown connection → bindings fail before activate
+    graph = {
+        "start": "greet",
+        "nodes": {
+            "greet": {"type": "text", "text": "hi", "next": "sw"},
+            "sw": {"type": "handoff", "connection_id": "missing-bot", "next": "end"},
+            "end": {"type": "finish"},
+        },
+    }
+    payload = _classic_payload(
+        scenario_id="scenario-handoff-bad",
+        signal_version_id="sv-handoff",
+        external_idempotency_key="pdialog-handoff-bad-001",
+        graph=graph,
+        connection_ids=["tg"],
+    )
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    r = m2m.client.post(
+        "/api/crm/m2m/projects/p/scenarios/versions",
+        content=body,
+        headers=_headers(body, scopes="scenario:publish"),
+    )
+    assert r.status_code == 422
 
 
 def test_reject_auto_send(m2m):
-    payload = _payload()
+    payload = _llm_payload()
     payload["auto_send"] = True
     body = json.dumps(payload, separators=(",", ":")).encode()
     r = m2m.client.post(
@@ -153,13 +235,15 @@ def test_reject_auto_send(m2m):
 
 
 def test_pause_execution(m2m):
-    payload = _payload(external_idempotency_key="pdialog-pause-idem-001")
-    body = json.dumps(payload, separators=(",", ":")).encode()
+    # Activate a classic version so Entry/Run are meaningful
+    classic = _classic_payload(external_idempotency_key="pdialog-pause-classic-001")
+    body = json.dumps(classic, separators=(",", ":")).encode()
     pub = m2m.client.post(
         "/api/crm/m2m/projects/p/scenarios/versions",
         content=body,
         headers=_headers(body, scopes="scenario:publish"),
     ).json()
+    assert pub["activated"] is True
 
     with m2m.db.begin() as db:
         token = secrets.token_urlsafe(8)

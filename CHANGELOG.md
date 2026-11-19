@@ -4,8 +4,9 @@
 
 - M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.
 - `POST /api/crm/m2m/projects/{pid}/scenarios/versions` — accept/store immutable Funnel+Version from Signal (idempotent `external_idempotency_key`).
+- Descriptor-only graphs (`llm_reply`/`escalate`/…) are **stored inactive** (`activated=false`); do **not** set `published_version_id` until runtime TYPES support them (VR-124/#21 not assumed on main). Classic-only graphs activate after `validate_bindings`.
 - `POST .../executions/{execution_id}/pause` and `GET .../scenarios/versions/{id}/status`.
-- `validate_published_graph` allows forward-compat `llm_reply` (draft_only|human_approval + rules_version pin), `escalate`/`operator_pause`, `send_template`, `tag_contact`; rejects `auto_send`.
+- `validate_published_graph` reuses classic `validate_graph` invariants and extends allowed types for forward-compat descriptors; rejects `auto_send`.
 - Mini App `/api/funnels/{id}/publish` remains strict `validate_graph` (no second canvas).
 
 ## Unreleased — CJ-108 SIGNAL_M2M_SCOPES (env allowlist)

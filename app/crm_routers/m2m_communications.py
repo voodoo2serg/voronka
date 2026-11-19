@@ -22,7 +22,7 @@ from app.crm_models import Campaign, CampaignRecipient, Profile, IntegrationInbo
 from app.crm_service import uid, available_identity, ensure_profile
 from app.db import Connection, Outbox, Asset, Identity, Event, Funnel, Version, Run, Project, now
 from app import media as media_mod
-from app.graph import validate_published_graph
+from app.graph import graph_runtime_ready, validate_bindings, validate_published_graph
 from app.m2m_signal import (
     SignalM2MPrincipal,
     assert_project_allowed,
@@ -1163,6 +1163,7 @@ async def m2m_publish_scenario_version(
                 "voronka_funnel_id": prior.get("voronka_funnel_id"),
                 "signal_version_id": prior.get("signal_version_id"),
                 "rules_version": prior.get("rules_version"),
+                "activated": bool(prior.get("activated")),
                 "idempotent_replay": True,
             }
 
@@ -1171,11 +1172,22 @@ async def m2m_publish_scenario_version(
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
-        # Soft-check connections belong to project when provided
-        for cid in body.connection_ids or []:
+        connection_ids = list(body.connection_ids or [])
+        for cid in connection_ids:
             conn = db.get(Connection, cid)
             if not conn or conn.project_id != pid:
                 raise HTTPException(422, f"connection_id не в проекте: {cid}")
+
+        # Activate only when every node is runtime-ready on this build (classic TYPES).
+        # PDialog-only types (llm_reply/escalate/…) stay stored/inactive until VR-124/#21 lands.
+        activate = graph_runtime_ready(body.graph)
+        if activate:
+            if not connection_ids:
+                raise HTTPException(422, "connection_ids required to activate a runtime-ready Version")
+            try:
+                validate_bindings(db, body.graph, connection_ids)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
 
         funnel = None
         if body.voronka_funnel_id:
@@ -1201,6 +1213,7 @@ async def m2m_publish_scenario_version(
                 "rules_text": (body.rules_text or "")[:8192],
                 "brand_id": body.brand_id,
                 "source": "signal_pdialog",
+                "activation": "active" if activate else "stored_inactive",
             }
         )
         graph_store["meta"] = meta
@@ -1210,7 +1223,7 @@ async def m2m_publish_scenario_version(
                 id=uid(),
                 name=(body.funnel_name or "Personal Dialog")[:160],
                 project_id=pid,
-                connection_ids=list(body.connection_ids or []),
+                connection_ids=connection_ids,
                 draft=graph_store,
                 revision=1,
             )
@@ -1218,12 +1231,14 @@ async def m2m_publish_scenario_version(
         else:
             funnel.draft = graph_store
             funnel.revision = int(funnel.revision or 0) + 1
-            if body.connection_ids:
-                funnel.connection_ids = list(body.connection_ids)
+            if connection_ids:
+                funnel.connection_ids = connection_ids
 
         version = Version(id=uid(), funnel_id=funnel.id, graph=graph_store)
         db.add(version)
-        funnel.published_version_id = version.id
+        # Never promote descriptor-only graphs to executable head (Entry would run them).
+        if activate:
+            funnel.published_version_id = version.id
 
         inbox_payload = {
             "project_id": pid,
@@ -1233,6 +1248,7 @@ async def m2m_publish_scenario_version(
             "scenario_id": body.scenario_id,
             "rules_version": body.rules_version,
             "brand_id": body.brand_id,
+            "activated": activate,
         }
         db.add(
             IntegrationInbox(
@@ -1253,6 +1269,7 @@ async def m2m_publish_scenario_version(
             version_id=version.id,
             funnel_id=funnel.id,
             scenario_id=body.scenario_id,
+            activated=activate,
         )
         db.commit()
         return {
@@ -1260,6 +1277,7 @@ async def m2m_publish_scenario_version(
             "voronka_funnel_id": funnel.id,
             "signal_version_id": body.signal_version_id,
             "rules_version": body.rules_version,
+            "activated": activate,
             "idempotent_replay": False,
         }
 
