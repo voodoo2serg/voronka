@@ -147,7 +147,32 @@ def test_status_reports_cutover_mode(system, monkeypatch):
     assert status["local_login_unchanged"] is False
     assert status["local_login"] == "break-glass-audited"
     assert status["password_create"] == "break-glass-audited"
+    assert status["recovery_path"] == "/api/crm/oidc/login?recover=1"
     assert cutover_enabled() is True
+
+
+def test_recover_login_uses_forgot_credentials_endpoint(system, monkeypatch):
+    configure(monkeypatch)
+    monkeypatch.setattr(oidc_staff, "_discovery", lambda issuer: {
+        "authorization_endpoint": issuer + "/protocol/openid-connect/auth",
+    })
+    response = system.client.get("/api/crm/oidc/login?recover=1", follow_redirects=False)
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert "/protocol/openid-connect/forgot-credentials?" in location
+    assert "/protocol/openid-connect/auth?" not in location
+    params = parse_qs(urlparse(location).query)
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["client_id"] == ["voronka-crm"]
+    state = params["state"][0]
+    payload = json.loads(system.cache.get("crm:oidc:" + state))
+    assert payload["recover"] is True
+
+
+def test_forgot_credentials_endpoint_helper():
+    auth = "https://auth.solo-pr.ru/realms/solo-pr/protocol/openid-connect/auth"
+    assert oidc_staff._forgot_credentials_endpoint(auth).endswith("/forgot-credentials")
+    assert not oidc_staff._forgot_credentials_endpoint(auth).endswith("/auth/forgot-credentials")
 
 
 def test_cutover_blocks_routine_staff_password(crm, monkeypatch):

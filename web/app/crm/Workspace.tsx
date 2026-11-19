@@ -639,7 +639,7 @@ export default function Workspace() {
       </aside>
       <div className="main-area">
         <header className="topbar">
-          <SignalLauncher/>
+          <SignalLauncher role={typeof me?.role === 'string' ? me.role : undefined}/>
           <span>
             CRM <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
           </span>

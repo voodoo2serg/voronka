@@ -29,4 +29,6 @@ def status_payload(enabled: bool) -> dict:
         "local_login_unchanged": not cutover,
         "local_login": "break-glass-audited" if cutover else "primary",
         "password_create": "break-glass-audited" if cutover else "allowed",
+        # BFF-mediated Keycloak reset (client + PKCE), not local CRM recovery codes.
+        "recovery_path": "/api/crm/oidc/login?recover=1" if enabled else None,
     }

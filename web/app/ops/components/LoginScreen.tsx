@@ -10,6 +10,8 @@ import { PORTAL_URLS } from '../portals';
  */
 const CRM_OIDC_LOGIN =
   PORTAL_URLS.crm + '/api/crm/oidc/login?return_to=' + encodeURIComponent('/ops/');
+const CRM_OIDC_RECOVER = PORTAL_URLS.crm + '/api/crm/oidc/login?recover=1';
+const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
 
 export function LoginScreen({
   api,
@@ -35,19 +37,28 @@ export function LoginScreen({
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
+  const [recoveryPath, setRecoveryPath] = useState(CRM_OIDC_RECOVER);
 
   useEffect(() => {
     let cancelled = false;
-    // Same-origin status (shared backend); login navigates to CRM origin.
+    // Same-origin status (shared backend); login/recover navigate to CRM origin.
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then((result: { enabled?: boolean; cutover?: boolean }) => {
+      .then((result: { enabled?: boolean; cutover?: boolean; recovery_path?: string | null }) => {
         if (cancelled) return;
         const enabled = result.enabled === true;
         const nextCutover = result.cutover === true;
         setSsoEnabled(enabled);
         setCutover(nextCutover);
         setShowLocal(!enabled || !nextCutover);
+        if (result.recovery_path) {
+          // Absolute CRM host so PKCE state cookie is set on the callback origin.
+          setRecoveryPath(
+            result.recovery_path.startsWith('http')
+              ? result.recovery_path
+              : PORTAL_URLS.crm + result.recovery_path,
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -77,6 +88,13 @@ export function LoginScreen({
               {cutover
                 ? 'Штатный вход — через Keycloak. Локальный пароль только для аварии.'
                 : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
+            </p>
+            <a className="link" href={recoveryPath}>
+              Забыли пароль?
+            </a>
+            <p className="fine">
+              Восстановление только через единый аккаунт SIGNAL. После запроса:{' '}
+              «{IDP_MAIL_COPY}»
             </p>
           </div>
         )}
