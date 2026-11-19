@@ -248,6 +248,104 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
         _record_access_interaction(db, grant=grant, order=order, profile=profile, hints=hints)
 
 
+def signal_access_granted_event_id(grant_id: str) -> str:
+    """CE-safe idempotency key for Signal intake.
+
+    Signal `event_id` allowlist is `[a-zA-Z0-9:_-]{8,120}` — dots are rejected
+    (`invalid_event_fields`). Keep `event_type=course.access_granted` on the wire;
+    only the idempotency key uses underscores.
+    """
+    return f"course_access_granted:{grant_id}"
+
+
+def legacy_signal_access_granted_event_id(grant_id: str) -> str:
+    """Pre-fix dotted key — invalid for Signal CE intake, may exist in outbox/Interaction."""
+    return f"course.access_granted:{grant_id}"
+
+
+def signal_access_outbox_for_grant(db, grant_id: str) -> list[IntegrationOutbox]:
+    """Modern + legacy Signal access rows for one grant (kind + event_id + payload)."""
+    modern = signal_access_granted_event_id(grant_id)
+    legacy = legacy_signal_access_granted_event_id(grant_id)
+    rows = list(
+        db.scalars(
+            select(IntegrationOutbox).where(
+                IntegrationOutbox.kind == "course.access_granted",
+                or_(
+                    IntegrationOutbox.event_id == modern,
+                    IntegrationOutbox.event_id == legacy,
+                ),
+            )
+        )
+    )
+    if rows:
+        return rows
+    candidates = list(
+        db.scalars(
+            select(IntegrationOutbox).where(IntegrationOutbox.kind == "course.access_granted").limit(500)
+        )
+    )
+    return [r for r in candidates if (r.payload or {}).get("grant_id") == grant_id]
+
+
+def adopt_signal_access_outbox(db, row: IntegrationOutbox, *, grant_id: str | None = None) -> IntegrationOutbox:
+    """Rewrite dotted CE-invalid event_id → course_access_granted:{grant}; avoid duplicates."""
+    if row.kind != "course.access_granted":
+        return row
+    payload = dict(row.payload or {})
+    gid = str(grant_id or payload.get("grant_id") or "")
+    if not gid and ":" in (row.event_id or ""):
+        gid = row.event_id.split(":", 1)[-1]
+    if not gid:
+        return row
+    modern = signal_access_granted_event_id(gid)
+    if row.event_id == modern:
+        if payload.get("event_id") != modern:
+            payload["event_id"] = modern
+            row.payload = payload
+            row.updated_at = now()
+        return row
+    existing = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.event_id == modern))
+    if existing and existing.id != row.id:
+        # Prefer modern row; leave legacy as historical dead-end without CE retry.
+        return existing
+    row.event_id = modern
+    payload["event_id"] = modern
+    payload.setdefault("grant_id", gid)
+    row.payload = payload
+    row.updated_at = now()
+    db.flush()
+    return row
+
+
+def adopt_signal_access_interaction(db, *, grant_id: str) -> None:
+    """Move Interaction.external_event_key from dotted legacy → CE-safe modern key."""
+    from app.crm_models import Interaction
+
+    modern = signal_access_granted_event_id(grant_id)
+    legacy = legacy_signal_access_granted_event_id(grant_id)
+    modern_row = db.scalar(
+        select(Interaction).where(
+            Interaction.source_service == "voronka",
+            Interaction.external_event_key == modern,
+        )
+    )
+    legacy_row = db.scalar(
+        select(Interaction).where(
+            Interaction.source_service == "voronka",
+            Interaction.external_event_key == legacy,
+        )
+    )
+    if legacy_row and modern_row and legacy_row.id != modern_row.id:
+        # Keep modern; clear legacy key so unique constraint allows a single timeline fact.
+        legacy_row.external_event_key = None
+        db.flush()
+        return
+    if legacy_row and not modern_row:
+        legacy_row.external_event_key = modern
+        db.flush()
+
+
 def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | None = None) -> None:
     """Outbox → Signal Communication Engine `course.access_granted`."""
     email = (getattr(profile, "email", None) or "").strip()
@@ -255,25 +353,51 @@ def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | No
     if not email or "@" not in email:
         return
     hints = hints or _product_hints(order)
-    event_id = f"course.access_granted:{grant.id}"
+    event_id = signal_access_granted_event_id(grant.id)
     service = str(hints.get("service") or hints.get("course_id") or grant.resource or "курс")
+    payload = {
+        "event_id": event_id,
+        "event_type": "course.access_granted",
+        "email": email,
+        "service": service[:120],
+        "grant_id": grant.id,
+        "order_id": order.id,
+        "project_id": order.project_id,
+        "source": "voronka",
+        "correlation_id": order.id,
+    }
+    # Adopt legacy dotted row instead of inserting a second CE-safe event_id.
+    existing_rows = signal_access_outbox_for_grant(db, grant.id)
+    if existing_rows:
+        row = adopt_signal_access_outbox(db, existing_rows[0], grant_id=grant.id)
+        # Drop extra legacy siblings after adoption to keep one fact per grant.
+        for sibling in existing_rows[1:]:
+            if sibling.id == row.id:
+                continue
+            if sibling.event_id == legacy_signal_access_granted_event_id(grant.id):
+                # Leave undeliverable duplicate as dead without CE retry noise.
+                if sibling.state != "dead":
+                    sibling.state = "dead"
+                    sibling.last_error = "superseded_by_ce_safe_event_id"
+                    sibling.updated_at = now()
+        row.payload = {**(row.payload or {}), **payload}
+        if not row.correlation_id:
+            row.correlation_id = order.id
+        if row.state in {"dead", "failed"}:
+            row.state = "pending"
+            row.attempts = 0
+            row.next_attempt_at = now()
+            row.last_error = ""
+        row.updated_at = now()
+        db.flush()
+        return
     enqueue_event(
         db,
         destination=DEST_SIGNAL,
         kind="course.access_granted",
         event_id=event_id,
         correlation_id=order.id,
-        payload={
-            "event_id": event_id,
-            "event_type": "course.access_granted",
-            "email": email,
-            "service": service[:120],
-            "grant_id": grant.id,
-            "order_id": order.id,
-            "project_id": order.project_id,
-            "source": "voronka",
-            "correlation_id": order.id,
-        },
+        payload=payload,
     )
 
 
@@ -284,6 +408,7 @@ def _record_access_interaction(db, *, grant, order, profile, hints: dict | None 
     from app import person_graph
 
     hints = hints or {}
+    adopt_signal_access_interaction(db, grant_id=grant.id)
     person_graph.record_interaction(
         db,
         person_id=person_id,
@@ -292,7 +417,7 @@ def _record_access_interaction(db, *, grant, order, profile, hints: dict | None 
         channel="email",
         project_id=order.project_id,
         source_service="voronka",
-        external_event_key=f"course.access_granted:{grant.id}",
+        external_event_key=signal_access_granted_event_id(grant.id),
         payload={
             "grant_id": grant.id,
             "order_id": order.id,
