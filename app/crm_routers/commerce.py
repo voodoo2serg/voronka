@@ -5,7 +5,6 @@ import os
 import secrets
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -22,6 +21,7 @@ from app.entitlement import queue_for_payment, redact_robokassa_params
 from app import integrations
 from app import ledger
 from app import person_graph
+from app import robokassa_receipt
 
 router = APIRouter()
 
@@ -331,14 +331,35 @@ def checkout(oid: str, amount_minor: int | None = None, admin=Depends(crm_actor)
         number = str(secrets.randbelow(10**14 - 1) + 1)
         row = Invoice(id=uid(), order_id=oid, number=number, amount_minor=amount, test=test)
         db.add(row)
-        value = f"{amount // 100}.{amount % 100:02d}"
+        value = robokassa_receipt.money_major(amount)
         algorithm = os.getenv("ROBOKASSA_HASH", "sha256").lower()
-        if algorithm not in {"md5", "sha256", "sha512"}:
+        if algorithm not in robokassa_receipt.ALLOWED_HASH:
             raise HTTPException(503, "Неизвестный алгоритм Robokassa")
-        signature = hashlib.new(algorithm, f"{merchant}:{value}:{number}:{password}".encode()).hexdigest()
-        params = {"MerchantLogin": merchant, "OutSum": value, "InvId": number, "SignatureValue": signature,
-                  "Description": order.snapshot["name"][:100], "IsTest": int(test)}
-        return {"url": "https://auth.robokassa.ru/Merchant/Index.aspx?" + urlencode(params), "invoice_id": row.id, "test": test}
+        try:
+            receipt = robokassa_receipt.build_receipt(
+                amount_minor=amount,
+                order_total_minor=order.total_minor,
+                snapshot=order.snapshot if isinstance(order.snapshot, dict) else None,
+            )
+            paid = robokassa_receipt.payment_query(
+                merchant=merchant,
+                out_sum=value,
+                inv_id=number,
+                password1=password,
+                description=str((order.snapshot or {}).get("name") or "Оплата"),
+                is_test=test,
+                receipt=receipt,
+                algorithm=algorithm,
+            )
+        except ValueError as exc:
+            raise HTTPException(503, f"Фискальный Receipt не собран: {exc}") from exc
+        return {
+            "url": paid["url"],
+            "invoice_id": row.id,
+            "test": test,
+            "receipt": paid["receipt"],
+            "receipt_in_adapter": True,
+        }
 
 
 @router.api_route("/robokassa/result", methods=["GET", "POST"])

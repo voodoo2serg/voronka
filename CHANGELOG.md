@@ -8,6 +8,14 @@
 - CRM «История» renders Signal CE writeback (kind / status / body_preview) ahead of manual activities.
 - Tests: CJ-108 ingest contact detail + project-scope / aligned-comms coverage.
 
+## Unreleased — PAY-101 Robokassa Receipt (VR-187)
+
+- Robokassa checkout sends fiscal `Receipt` (54-FZ nomenclature) and includes URL-encoded Receipt in `SignatureValue`.
+- Module `app/robokassa_receipt.py`; env names: `ROBOKASSA_RECEIPT_TAX`, `ROBOKASSA_RECEIPT_SNO`, optional payment method/object.
+- Checkout GET URL **double-encodes** Receipt on the wire (`%257B…`); signature keeps single-encoded form (Robokassa official examples).
+- CRM fiscal checklist honesty: `receipt_in_adapter=true`; shop fiscal / staging / owner approval remain open; **`ROBOKASSA_LIVE_READY` not flipped**.
+- Tests: `tests/test_robokassa_receipt.py`.
+
 ## Unreleased — Media SoR Wave B (VR-180)
 
 - Consume Signal/Registry `asset_id` via M2M: `POST …/assets/ensure-from-signal`, import accepts `signal_asset_id`.
