@@ -34,7 +34,7 @@ Robokassa ResultURL
 
 `ROBOKASSA_LIVE_READY` остаётся `0`, пока не закрыт чек-лист в [OPERATIONS.md](./OPERATIONS.md) и нет письменного решения владельца. **Не** включать из деплоя/кода «для удобства».
 
-Адаптер **передаёт** параметр `Receipt` (номенклатура 54-FZ) в `POST /orders/{id}/robokassa`: JSON в запросе и в контрольной подписи `MerchantLogin:OutSum:InvId:Receipt:Пароль#1` (Receipt URL-encoded). Env (имена, без секретов): `ROBOKASSA_RECEIPT_TAX` (обязателен для честной ставки; default `none`), опционально `ROBOKASSA_RECEIPT_SNO`, `ROBOKASSA_RECEIPT_PAYMENT_METHOD`, `ROBOKASSA_RECEIPT_PAYMENT_OBJECT`. Модуль: `app/robokassa_receipt.py`.
+Адаптер **передаёт** параметр `Receipt` (номенклатура 54-FZ) в `POST /orders/{id}/robokassa`: JSON в запросе и в контрольной подписи `MerchantLogin:OutSum:InvId:Receipt:Пароль#1` (Receipt однократно URL-encoded в подписи). В GET checkout URL Receipt **дважды** URL-encoded на проводе (`%257B…`), чтобы после одного decode совпадал с подписью. Env (имена, без секретов): `ROBOKASSA_RECEIPT_TAX` (обязателен для честной ставки; default `none`), опционально `ROBOKASSA_RECEIPT_SNO`, `ROBOKASSA_RECEIPT_PAYMENT_METHOD`, `ROBOKASSA_RECEIPT_PAYMENT_OBJECT`. Модуль: `app/robokassa_receipt.py`.
 
 ## AI
 

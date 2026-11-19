@@ -3,6 +3,10 @@
 Docs: https://docs.robokassa.ru/ru/fiscalization
 Signature with Receipt: MerchantLogin:OutSum:InvId:Receipt:Password#1
 where Receipt is URL-encoded JSON (quote, not '+'-space).
+
+Checkout GET URLs must double-encode Receipt on the wire (%257B…): signature
+uses the single-encoded form; one query decode must recover that form
+(see https://docs.robokassa.ru/ru/saving request examples).
 """
 from __future__ import annotations
 
@@ -175,10 +179,13 @@ def payment_query(
         "SignatureValue": signature,
         "IsTest": int(bool(is_test)),
     }
-    # Encode Receipt with the same quote() used in the signature; avoid double-encoding via urlencode.
-    query = urlencode(base) + "&Receipt=" + receipt_encoded
+    # Signature uses single-encoded Receipt (%7B...). On the wire Robokassa expects
+    # double-encoding (%257B...) so one query decode yields the signed value
+    # (official examples: docs.robokassa.ru/ru/saving).
+    query = urlencode({**base, "Receipt": receipt_encoded})
     return {
         "url": "https://auth.robokassa.ru/Merchant/Index.aspx?" + query,
+        # Form/POST field value = single-encoded (browser/form encodes again on submit).
         "params": {**base, "Receipt": receipt_encoded},
         "receipt": receipt,
         "receipt_encoded": receipt_encoded,

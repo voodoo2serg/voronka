@@ -4,6 +4,7 @@
 
 - Robokassa checkout sends fiscal `Receipt` (54-FZ nomenclature) and includes URL-encoded Receipt in `SignatureValue`.
 - Module `app/robokassa_receipt.py`; env names: `ROBOKASSA_RECEIPT_TAX`, `ROBOKASSA_RECEIPT_SNO`, optional payment method/object.
+- Checkout GET URL **double-encodes** Receipt on the wire (`%257B…`); signature keeps single-encoded form (Robokassa official examples).
 - CRM fiscal checklist honesty: `receipt_in_adapter=true`; shop fiscal / staging / owner approval remain open; **`ROBOKASSA_LIVE_READY` not flipped**.
 - Tests: `tests/test_robokassa_receipt.py`.
 

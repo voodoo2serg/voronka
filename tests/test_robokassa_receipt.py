@@ -52,7 +52,7 @@ def test_sign_payment_includes_url_encoded_receipt():
     }
     raw, encoded = robokassa_receipt.encode_receipt(receipt)
     assert json.loads(raw) == receipt
-    assert "%" in encoded or encoded == raw  # quote of ASCII JSON may equal raw
+    assert "%" in encoded  # Cyrillic / braces quoted
     sig = robokassa_receipt.sign_payment(
         merchant="merchant",
         out_sum="1000.00",
@@ -68,6 +68,46 @@ def test_sign_payment_includes_url_encoded_receipt():
     # Old formula without Receipt must not match.
     old = hashlib.sha256(b"merchant:1000.00:42:test-first").hexdigest()
     assert sig != old
+
+
+def test_payment_query_double_encodes_receipt_on_wire():
+    receipt = {
+        "items": [{
+            "name": "Курс",
+            "quantity": 1,
+            "sum": 10.0,
+            "payment_method": "full_prepayment",
+            "payment_object": "service",
+            "tax": "none",
+        }]
+    }
+    paid = robokassa_receipt.payment_query(
+        merchant="merchant",
+        out_sum="10.00",
+        inv_id="99",
+        password1="secret",
+        description="Курс",
+        is_test=True,
+        receipt=receipt,
+        algorithm="sha256",
+    )
+    _, signed = robokassa_receipt.encode_receipt(receipt)
+    assert paid["receipt_encoded"] == signed
+    assert paid["params"]["Receipt"] == signed  # form value = single-encoded
+    wire = urlparse(paid["url"]).query
+    start = wire.index("Receipt=") + len("Receipt=")
+    end = wire.find("&", start)
+    receipt_wire = wire[start:] if end < 0 else wire[start:end]
+    assert receipt_wire.startswith("%25")  # %7B → %257B on the wire
+    assert unquote(receipt_wire) == signed
+    assert paid["params"]["SignatureValue"] == robokassa_receipt.sign_payment(
+        merchant="merchant",
+        out_sum="10.00",
+        inv_id="99",
+        password1="secret",
+        receipt_encoded=signed,
+        algorithm="sha256",
+    )
 
 
 def test_checkout_url_embeds_receipt_and_matching_signature(crm, monkeypatch):
@@ -95,20 +135,25 @@ def test_checkout_url_embeds_receipt_and_matching_signature(crm, monkeypatch):
     assert qs["MerchantLogin"] == ["merchant"]
     assert qs["OutSum"] == ["1000.00"]
     assert "Receipt" in qs
-    # Signature uses URL-encoded Receipt; parse_qs decodes — take raw fragment from query.
+    # On the wire Receipt is double-encoded (%257B…); one unquote → signed value (%7B…).
     raw_query = parsed.query
     marker = "Receipt="
     start = raw_query.index(marker) + len(marker)
     end = raw_query.find("&", start)
-    receipt_encoded = raw_query[start:] if end < 0 else raw_query[start:end]
-    decoded = json.loads(unquote(receipt_encoded))
+    receipt_on_wire = raw_query[start:] if end < 0 else raw_query[start:end]
+    assert "%25" in receipt_on_wire  # percent signs themselves are encoded
+    receipt_for_sign = unquote(receipt_on_wire)
+    assert receipt_for_sign.startswith("%7B") or receipt_for_sign.startswith("{")
+    decoded = json.loads(unquote(receipt_for_sign))
     assert decoded == body["receipt"]
+    _, expected_encoded = robokassa_receipt.encode_receipt(body["receipt"])
+    assert receipt_for_sign == expected_encoded
     with crm.db() as db:
         invoice = db.get(Invoice, body["invoice_id"])
         number = invoice.number
     assert qs["InvId"] == [number]
     expected = hashlib.sha256(
-        f"merchant:1000.00:{number}:{receipt_encoded}:test-first".encode()
+        f"merchant:1000.00:{number}:{receipt_for_sign}:test-first".encode()
     ).hexdigest()
     assert qs["SignatureValue"][0].lower() == expected.lower()
 
