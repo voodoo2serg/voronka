@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import type { ApiFn } from '../types';
+import { PORTAL_URLS } from '../portals';
+
+/**
+ * OIDC authorize + state cookie must start on the CRM callback host
+ * (crm.solo-pr.ru), not voronka.solo-pr.ru — host-only cookie otherwise 401s.
+ */
+const CRM_OIDC_LOGIN =
+  PORTAL_URLS.crm + '/api/crm/oidc/login?return_to=' + encodeURIComponent('/ops/');
 
 export function LoginScreen({
   api,
@@ -28,6 +36,7 @@ export function LoginScreen({
 
   useEffect(() => {
     let cancelled = false;
+    // Same-origin status (shared backend); login navigates to CRM origin.
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
       .then((result: { enabled?: boolean }) => {
@@ -50,7 +59,7 @@ export function LoginScreen({
         <p className="muted">Боты · Сценарии · Рассылки · Поддержка · AI. Клиенты и платежи — в CRM.</p>
         {ssoEnabled && (
           <div>
-            <a className="primary full" href="/api/crm/oidc/login?return_to=/ops/">
+            <a className="primary full" href={CRM_OIDC_LOGIN}>
               Войти через единый аккаунт SIGNAL
             </a>
             <p className="fine">Если учётная запись ещё не привязана, используйте прежний вход.</p>
