@@ -429,16 +429,21 @@ async def public_quote(request: Request, body: QuoteBody):
 
 
 @router.get("/projects/{pid}/integration-outbox")
-def list_outbox(pid: str, admin=Depends(crm_actor)):
+def list_outbox(pid: str, state: str | None = None, admin=Depends(crm_actor)):
     staff_owner(admin)
     with Session() as db:
         project_access(db, admin, pid)
-        rows = list(db.scalars(select(IntegrationOutbox).order_by(IntegrationOutbox.created_at.desc()).limit(200)))
+        q = select(IntegrationOutbox).order_by(IntegrationOutbox.created_at.desc()).limit(200)
+        if state:
+            q = select(IntegrationOutbox).where(IntegrationOutbox.state == state).order_by(
+                IntegrationOutbox.created_at.desc()
+            ).limit(200)
+        rows = list(db.scalars(q))
         # Filter loosely by payload project_id when present.
         return [
             encode(r)
             for r in rows
-            if (r.payload or {}).get("project_id") in {None, pid} or r.destination in {"solo_pr", "lms_end"}
+            if (r.payload or {}).get("project_id") in {None, pid} or r.destination in {"solo_pr", "lms_end", "signal"}
         ]
 
 

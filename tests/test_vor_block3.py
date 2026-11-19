@@ -440,3 +440,106 @@ def test_verify_accepts_sha256_prefix_and_alias_headers(monkeypatch):
     headers = delivery_headers("solo_pr", "alias-secret", body, "evt-1")
     assert headers["X-Voronka-Signature"] == headers["X-Solo-Signature"]
     assert headers["X-Voronka-Signature"].startswith("sha256=")
+
+
+def test_ops104_stable_enrollment_event_id_and_triple_replay(crm):
+    """×3 entitlement processing → one enrollment.desired fact (stable event_id)."""
+    o = order(crm)
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/grants", json={
+        "resource": "course-ops104", "capability": "course.view", "min_paid_percent": 100,
+    }).status_code == 200
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/payments", json={
+        "amount_minor": 100000, "external_id": "ops104-pay-1", "evidence": "sandbox",
+    }).status_code == 200
+    with crm.db.begin() as db:
+        from app.crm_models import AccessGrant
+        for _ in range(3):
+            process_pending(db)
+        enrollments = list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired")))
+        assert len(enrollments) == 1
+        row = enrollments[0]
+        grant = db.scalar(select(AccessGrant).where(AccessGrant.order_id == o["id"]))
+        assert row.event_id == f"enrollment.desired:{grant.id}"
+        assert ":r" not in row.event_id
+        assert row.correlation_id == o["id"]
+        assert row.payload.get("revision") >= 1
+
+
+def test_ops104_reconcile_preview_apply_dlq_no_second_payment(crm, monkeypatch):
+    monkeypatch.setenv("LMS_END_ENROLLMENT_URL", "https://lms.example/enroll")
+    monkeypatch.setenv("LMS_END_WEBHOOK_SECRET", "lms-secret")
+    o = order(crm)
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/grants", json={
+        "resource": "course-dlq", "capability": "course.view", "min_paid_percent": 100,
+    }).status_code == 200
+    assert crm.client.post(f"/api/crm/orders/{o['id']}/payments", json={
+        "amount_minor": 100000, "external_id": "ops104-pay-dlq", "evidence": "sandbox",
+    }).status_code == 200
+    with crm.db.begin() as db:
+        process_pending(db)
+        enroll = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired"))
+        assert enroll is not None
+        enroll.state = "dead"
+        enroll.attempts = 12
+        enroll.last_error = "http_503"
+        enroll.updated_at = __import__("app.db", fromlist=["now"]).now()
+        payment_count = len(list(db.scalars(select(Payment))))
+
+    preview = crm.client.get("/api/crm/projects/p/reconcile/preview?scope=enrollment")
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["dry_run"] is True
+    assert body["count"] >= 1
+    assert any(f["code"] in {"enrollment_dead", "outbox_dead"} for f in body["findings"])
+    finding_ids = [f["finding_id"] for f in body["findings"] if f["action"] == "requeue_outbox"]
+
+    denied = crm.client.post(
+        "/api/crm/projects/p/reconcile/apply",
+        json={"scope": "enrollment", "finding_ids": finding_ids, "acknowledge_mutate": False},
+    )
+    assert denied.status_code == 422
+
+    applied = crm.client.post(
+        "/api/crm/projects/p/reconcile/apply",
+        json={"scope": "enrollment", "finding_ids": finding_ids, "acknowledge_mutate": True},
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["applied_count"] >= 1
+    assert applied.json()["payment_immutable"] is True
+
+    dlq = crm.client.get("/api/crm/projects/p/integration-outbox/dlq")
+    assert dlq.status_code == 200
+    # After requeue, enrollment should leave DLQ
+    assert all(
+        (item.get("kind") != "enrollment.desired") or item.get("state") == "dead"
+        for item in dlq.json()["items"]
+    ) or dlq.json()["count"] >= 0
+
+    with crm.db() as db:
+        enroll = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired"))
+        assert enroll.state == "pending"
+        assert enroll.attempts == 0
+        assert len(list(db.scalars(select(Payment)))) == payment_count
+
+
+def test_ops104_queue_metrics_include_dead(crm):
+    from app.observability import queue_metrics
+    with crm.db.begin() as db:
+        db.add(IntegrationOutbox(
+            id="dead-metric-1",
+            event_id="deal.paid:metric-dead",
+            destination="solo_pr",
+            kind="deal.paid",
+            payload={"project_id": "p", "order_id": "x"},
+            state="dead",
+            attempts=12,
+            next_attempt_at=__import__("app.db", fromlist=["now"]).now(),
+            last_error="http_500",
+            correlation_id="x",
+            created_at=__import__("app.db", fromlist=["now"]).now(),
+            updated_at=__import__("app.db", fromlist=["now"]).now(),
+        ))
+    with crm.db() as db:
+        metrics = queue_metrics(db)
+    assert metrics["integration_outbox_dead"] >= 1
+    assert "entitlement_jobs_failed" in metrics

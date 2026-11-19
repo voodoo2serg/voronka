@@ -31,6 +31,8 @@ DEFAULT_SCOPES = (
     "consent:write",
     # PDialog P0 — Signal publish façade → Voronka Version SoR
     "scenario:*",
+    # OPS-104 → OPS-105 aggregated integration/DLQ status (read-only)
+    "integrations:status:read",
 )
 
 CAMPAIGN_STAR = {

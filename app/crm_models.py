@@ -220,6 +220,7 @@ class EntitlementJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str] = mapped_column(String(200), default="")
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+    correlation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -237,6 +238,7 @@ class IntegrationOutbox(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_error: Mapped[str] = mapped_column(String(200), default="")
+    correlation_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -252,6 +254,7 @@ class IntegrationInbox(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     state: Mapped[str] = mapped_column(String(30), default="applied")
     profile_id: Mapped[str | None] = mapped_column(ForeignKey("crm_profiles.id"), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

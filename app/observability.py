@@ -47,8 +47,14 @@ def queue_metrics(db=None) -> dict:
         integ_pending = session.scalar(
             select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "pending")
         ) or 0
+        integ_dead = session.scalar(
+            select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "dead")
+        ) or 0
         entitlement_pending = session.scalar(
             select(func.count()).select_from(EntitlementJob).where(EntitlementJob.state.in_(["pending", "waiting_grant"]))
+        ) or 0
+        entitlement_failed = session.scalar(
+            select(func.count()).select_from(EntitlementJob).where(EntitlementJob.state == "failed")
         ) or 0
     finally:
         if own:
@@ -64,7 +70,9 @@ def queue_metrics(db=None) -> dict:
         "outbox_unknown": unknown,
         "outbox_oldest_pending_age_seconds": oldest_age,
         "integration_outbox_pending": integ_pending,
+        "integration_outbox_dead": integ_dead,
         "entitlement_jobs_pending": entitlement_pending,
+        "entitlement_jobs_failed": entitlement_failed,
         "worker_heartbeat_age_seconds": None if age is None else int(age),
         "worker_stale": stale,
         "media_free_bytes": disk.free,

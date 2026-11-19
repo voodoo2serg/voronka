@@ -143,10 +143,25 @@ def _dual_event_fields(kind: str, event_id: str) -> dict[str, str]:
     }
 
 
-def enqueue_event(db, *, destination: str, kind: str, event_id: str, payload: dict[str, Any]) -> IntegrationOutbox | None:
+def enqueue_event(
+    db,
+    *,
+    destination: str,
+    kind: str,
+    event_id: str,
+    payload: dict[str, Any],
+    correlation_id: str | None = None,
+) -> IntegrationOutbox | None:
     prior = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.event_id == event_id))
     if prior:
+        # Backfill correlation_id on idempotent hit without mutating delivery state.
+        if correlation_id and not prior.correlation_id:
+            prior.correlation_id = correlation_id
+            prior.updated_at = now()
         return prior
+    corr = correlation_id or str(payload.get("correlation_id") or payload.get("order_id") or "") or None
+    if corr and "correlation_id" not in payload:
+        payload = {**payload, "correlation_id": corr}
     row = IntegrationOutbox(
         id=uid(),
         event_id=event_id,
@@ -157,6 +172,7 @@ def enqueue_event(db, *, destination: str, kind: str, event_id: str, payload: di
         attempts=0,
         next_attempt_at=now(),
         last_error="",
+        correlation_id=corr,
         created_at=now(),
         updated_at=now(),
     )
@@ -173,6 +189,7 @@ def enqueue_deal_paid(db, *, payment_id: str, order, profile, financial: dict) -
         destination=DEST_SOLO,
         kind="deal.paid",
         event_id=event_id,
+        correlation_id=order.id,
         payload={
             **_dual_event_fields("deal.paid", event_id),
             "order_id": order.id,
@@ -188,6 +205,7 @@ def enqueue_deal_paid(db, *, payment_id: str, order, profile, financial: dict) -
             "fully_paid": financial.get("fully_paid"),
             "currency": order.snapshot.get("currency", "RUB") if isinstance(order.snapshot, dict) else "RUB",
             "source": "voronka",
+            "correlation_id": order.id,
             **hints,
         },
     )
@@ -205,6 +223,7 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
         destination=DEST_SOLO,
         kind=kind,
         event_id=event_id,
+        correlation_id=order.id,
         payload={
             **_dual_event_fields(kind, event_id),
             "grant_id": grant.id,
@@ -219,6 +238,7 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
             "min_paid_percent": grant.min_paid_percent,
             "financial": financial or {},
             "source": "voronka",
+            "correlation_id": order.id,
             **hints,
         },
     )
@@ -242,6 +262,7 @@ def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | No
         destination=DEST_SIGNAL,
         kind="course.access_granted",
         event_id=event_id,
+        correlation_id=order.id,
         payload={
             "event_id": event_id,
             "event_type": "course.access_granted",
@@ -249,7 +270,9 @@ def enqueue_signal_access_granted(db, *, grant, order, profile, hints: dict | No
             "service": service[:120],
             "grant_id": grant.id,
             "order_id": order.id,
+            "project_id": order.project_id,
             "source": "voronka",
+            "correlation_id": order.id,
         },
     )
 
@@ -281,9 +304,16 @@ def _record_access_interaction(db, *, grant, order, profile, hints: dict | None 
     )
 
 
+def enrollment_event_id(grant_id: str, *, revoke: bool = False) -> str:
+    """Stable idempotency key — revision stays in payload, not event_id (OPS-104)."""
+    kind = "enrollment.revoked" if revoke else "enrollment.desired"
+    return f"{kind}:{grant_id}"
+
+
 def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool = False) -> None:
     kind = "enrollment.revoked" if revoke else "enrollment.desired"
-    event_id = f"{kind}:{grant.id}:r{revision}"
+    # Stable event_id so ×3 reconcile / worker retries do not spawn new LMS facts.
+    event_id = enrollment_event_id(grant.id, revoke=revoke)
     hints = _product_hints(order)
     course_id = hints.get("course_id") or grant.resource or ""
     commerce_product_id = hints.get("commerce_product_id") or order.product_id
@@ -306,6 +336,7 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         # Internal / dual-read fields LMS may ignore
         "grant_id": grant.id,
         "order_id": order.id,
+        "project_id": order.project_id,
         "name": profile.name,
         "resource": grant.resource,
         "min_paid_percent": grant.min_paid_percent,
@@ -313,6 +344,7 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         "revision": revision,
         "revoke": revoke,
         "source": "voronka",
+        "correlation_id": order.id,
     }
     if keycloak_sub:
         payload["keycloak_sub"] = keycloak_sub
@@ -323,6 +355,7 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         destination=DEST_LMS,
         kind=kind,
         event_id=event_id,
+        correlation_id=order.id,
         payload=payload,
     )
 
