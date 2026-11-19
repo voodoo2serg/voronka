@@ -2097,6 +2097,47 @@ export default function Workspace() {
             )}
             <h3>Последний контакт</h3>
             <p>{detail.activities[0]?.outcome || 'Результат ещё не зафиксирован'}</p>
+            {detail.person_id && (
+              <>
+                <h3>Медиа Signal (soft-ref)</h3>
+                <p className="fine">
+                  Только Registry <code>asset_id</code> — без второй медиатеки CRM. Байты по запросу через
+                  fetch-by-asset_id.
+                </p>
+                <div className="row">
+                  <button
+                    onClick={() =>
+                      setForm({
+                        title: 'Привязать media asset_id',
+                        fields: [
+                          {
+                            key: 'signal_asset_id',
+                            label: 'Signal / Registry asset_id',
+                            required: true,
+                          },
+                          { key: 'name', label: 'Подпись (опц.)' },
+                        ],
+                        save: async (v) => {
+                          await api(
+                            `/projects/${pid}/persons/${detail.person_id}/media-refs`,
+                            'POST',
+                            {
+                              signal_asset_id: v.signal_asset_id,
+                              name: v.name || null,
+                              ensure_delivery: false,
+                            },
+                          );
+                          setNotice('Soft-ref сохранён. Файлы в CRM не загружаются.');
+                          await refreshDetail();
+                        },
+                      })
+                    }
+                  >
+                    + Soft-ref asset_id
+                  </button>
+                </div>
+              </>
+            )}
             <div className="row">
               <button
                 onClick={() =>

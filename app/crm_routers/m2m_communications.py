@@ -52,6 +52,25 @@ class AssetImportBody(Body):
     content_base64: str
     sha256: str = Field(min_length=64, max_length=64)
     content_type: str | None = None
+    # Wave B: Signal/Registry canonical id — bank is delivery cache only.
+    signal_asset_id: str | None = Field(default=None, max_length=80)
+
+
+class AssetEnsureFromSignalBody(Body):
+    signal_asset_id: str = Field(min_length=8, max_length=80)
+    connection_ids: list[str] = Field(min_length=1)
+    name: str | None = Field(default=None, max_length=160)
+    kind: str | None = None
+    communication_ref: str | None = Field(default=None, max_length=200)
+
+
+class SoftMediaAttachBody(Body):
+    signal_asset_id: str = Field(min_length=8, max_length=80)
+    role: str = Field(default="attachment", max_length=40)
+    communication_id: str | None = None
+    name: str | None = Field(default=None, max_length=160)
+    ensure_delivery: bool = False
+    connection_ids: list[str] = Field(default_factory=list)
 
 
 class M2MSegmentExport(Body):
@@ -226,6 +245,7 @@ async def m2m_media_assets(
             blocker = None
             if not asset.local_path and not asset.telegram_refs:
                 blocker = "Нет локального файла и file_id — рассылка невозможна"
+            meta = asset.metadata_json or {}
             items.append(
                 {
                     "id": asset.id,
@@ -235,7 +255,8 @@ async def m2m_media_assets(
                     "has_local_file": bool(asset.local_path),
                     "connection_ids": overlap,
                     "blocker": blocker,
-                    "sha256": (asset.metadata_json or {}).get("sha256"),
+                    "sha256": meta.get("sha256"),
+                    "signal_asset_id": meta.get("signal_asset_id"),
                     "created_at": asset.created_at,
                     # intentionally omit telegram_refs / file_id maps
                 }
@@ -249,6 +270,8 @@ async def m2m_asset_import(
     request: Request,
     auth_ctx=Depends(make_m2m_dep("asset:import")),
 ):
+    from app import media_bridge
+
     body_raw, principal = auth_ctx
     assert_project_allowed(pid)
     try:
@@ -279,71 +302,98 @@ async def m2m_asset_import(
             connection = db.get(Connection, cid)
             if not connection or connection.project_id != pid:
                 raise HTTPException(404, "Подключение недоступно")
-        # Idempotent import by sha256 within project connections
-        for asset in db.scalars(select(Asset).order_by(Asset.created_at.desc()).limit(500)):
-            meta = asset.metadata_json or {}
-            if meta.get("sha256") == digest and meta.get("signal_import"):
-                overlap = set(asset.connection_ids or []) & set(payload.connection_ids)
-                if overlap or not asset.connection_ids:
-                    return {
-                        "id": asset.id,
-                        "name": asset.name,
-                        "kind": asset.kind,
-                        "mime": asset.mime,
-                        "duplicate": True,
-                        "sha256": digest,
-                    }
-
-        media_mod.ROOT.mkdir(parents=True, exist_ok=True)
-        if shutil.disk_usage(media_mod.ROOT).free < media_mod.MIN_FREE:
-            raise HTTPException(507, "Недостаточно места на диске")
-        asset_id = uid()
-        extension = {
-            "video": ".mp4",
-            "video_note": ".mp4",
-            "photo": ".img",
-            "voice": ".audio",
-            "document": ".pdf",
-        }[payload.kind]
-        path = media_mod.ROOT / (asset_id + extension)
         try:
-            path.write_bytes(raw)
-            mime, metadata = media_mod.inspect_file(path, payload.kind)
-            real_extension = {
-                "image/png": ".png",
-                "image/jpeg": ".jpg",
-                "audio/ogg": ".ogg",
-                "audio/mpeg": ".mp3",
-                "audio/mp4": ".m4a",
-            }.get(mime, extension)
-            if path.suffix != real_extension:
-                updated = path.with_suffix(real_extension)
-                path.rename(updated)
-                path = updated
-            asset = Asset(
-                id=asset_id,
+            asset, duplicate = media_bridge.import_bytes_to_bank(
+                db,
                 name=payload.name,
                 kind=payload.kind,
-                mime=mime,
-                local_path=path.name,
                 connection_ids=list(payload.connection_ids),
-                telegram_refs={},
-                metadata_json={**metadata, "size": len(raw), "sha256": digest, "signal_import": True},
+                raw=raw,
+                sha256=digest,
+                signal_asset_id=payload.signal_asset_id,
+                content_type=payload.content_type,
             )
-            db.add(asset)
-            db.flush()
-            _m2m_audit(db, principal, "asset.imported", asset_id=asset.id, sha256=digest, project_id=pid)
-            return {
-                "id": asset.id,
-                "name": asset.name,
-                "kind": asset.kind,
-                "mime": asset.mime,
-                "duplicate": False,
-                "sha256": digest,
-            }
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
+        except media_bridge.MediaBridgeError as exc:
+            raise media_bridge.bridge_http_error(exc) from exc
+        meta = asset.metadata_json or {}
+        if not duplicate:
+            _m2m_audit(
+                db,
+                principal,
+                "asset.imported",
+                asset_id=asset.id,
+                sha256=digest,
+                project_id=pid,
+                signal_asset_id=payload.signal_asset_id,
+            )
+        return {
+            "id": asset.id,
+            "name": asset.name,
+            "kind": asset.kind,
+            "mime": asset.mime,
+            "duplicate": duplicate,
+            "sha256": meta.get("sha256") or digest,
+            "signal_asset_id": meta.get("signal_asset_id") or payload.signal_asset_id,
+        }
+
+
+@router.post("/projects/{pid}/assets/ensure-from-signal")
+async def m2m_asset_ensure_from_signal(
+    pid: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("asset:import")),
+):
+    """Wave B: fetch Registry/Signal bytes by asset_id → Voronka bank (idempotent)."""
+    from app import media_bridge
+
+    body_raw, principal = auth_ctx
+    assert_project_allowed(pid)
+    try:
+        payload = AssetEnsureFromSignalBody.model_validate_json(body_raw)
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    with Session.begin() as db:
+        from app.db import Project
+
+        if not db.get(Project, pid):
+            raise HTTPException(404, "Проект не найден")
+        for cid in payload.connection_ids:
+            connection = db.get(Connection, cid)
+            if not connection or connection.project_id != pid:
+                raise HTTPException(404, "Подключение недоступно")
+        try:
+            asset, already = media_bridge.ensure_voronka_asset_from_signal(
+                db,
+                signal_asset_id=payload.signal_asset_id,
+                connection_ids=list(payload.connection_ids),
+                name=payload.name,
+                kind=payload.kind,
+                communication_ref=payload.communication_ref
+                or f"voronka:project:{pid}:asset:{payload.signal_asset_id}",
+            )
+        except media_bridge.MediaBridgeError as exc:
+            raise media_bridge.bridge_http_error(exc) from exc
+        meta = asset.metadata_json or {}
+        _m2m_audit(
+            db,
+            principal,
+            "asset.ensured_from_signal",
+            asset_id=asset.id,
+            signal_asset_id=payload.signal_asset_id,
+            project_id=pid,
+            already=already,
+        )
+        return {
+            "id": asset.id,
+            "name": asset.name,
+            "kind": asset.kind,
+            "mime": asset.mime,
+            "duplicate": already,
+            "sha256": meta.get("sha256"),
+            "signal_asset_id": meta.get("signal_asset_id") or payload.signal_asset_id,
+            "source": "signal_registry",
+        }
 
 
 @router.get("/projects/{pid}/contacts")
@@ -631,12 +681,19 @@ async def m2m_preflight(
     request: Request,
     auth_ctx=Depends(make_m2m_dep("campaign:preflight")),
 ):
+    from app import media_bridge
+
     _body, _principal = auth_ctx
-    with Session() as db:
+    with Session.begin() as db:
         campaign = must(db.get(Campaign, cid))
         assert_project_allowed(campaign.project_id)
         connection = must(db.get(Connection, campaign.connection_id))
-        blocker = _asset_blocker(db, connection, campaign.asset_id)
+        resolved_id, ensure_blocker, rewritten = media_bridge.ensure_campaign_asset(
+            db, connection, campaign.asset_id
+        )
+        if rewritten and resolved_id:
+            campaign.asset_id = resolved_id
+        blocker = ensure_blocker or _asset_blocker(db, connection, campaign.asset_id)
         media_mod.ROOT.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(media_mod.ROOT).free
         recipients = []
@@ -659,6 +716,8 @@ async def m2m_preflight(
             "credentials_present": connection.platform == "email"
             or bool(os.environ.get(connection.token_env)),
             "asset_blocker": blocker,
+            "asset_id": campaign.asset_id,
+            "asset_rewritten": rewritten,
             "media_free_bytes": free,
             "capabilities": platform_capabilities(connection.platform),
             "rate_limit_per_second": int(os.getenv("BOT_MESSAGES_PER_SECOND", "20")),
@@ -675,6 +734,8 @@ async def m2m_launch(
     request: Request,
     auth_ctx=Depends(make_m2m_dep("campaign:launch")),
 ):
+    from app import media_bridge
+
     _body, principal = auth_ctx
     with Session.begin() as db:
         campaign = must(db.scalar(select(Campaign).where(Campaign.id == cid).with_for_update()))
@@ -684,7 +745,12 @@ async def m2m_launch(
         connection = must(db.get(Connection, campaign.connection_id))
         if not connection.active:
             raise HTTPException(409, "Подключение выключено")
-        blocker = _asset_blocker(db, connection, campaign.asset_id)
+        resolved_id, ensure_blocker, rewritten = media_bridge.ensure_campaign_asset(
+            db, connection, campaign.asset_id
+        )
+        if rewritten and resolved_id:
+            campaign.asset_id = resolved_id
+        blocker = ensure_blocker or _asset_blocker(db, connection, campaign.asset_id)
         if blocker:
             raise HTTPException(409, blocker)
         asset = db.get(Asset, campaign.asset_id) if campaign.asset_id else None
@@ -865,6 +931,161 @@ def m2m_timeline(
             items.append({"type": "agreement", **encode(ag)})
         _m2m_audit(db, principal, "timeline.read", person_id=person_id, project_id=pid)
         return {"person_id": person_id, "project_id": pid, "items": items[:limit]}
+
+
+@router.get("/projects/{pid}/persons/{person_id}/media-refs")
+def m2m_list_media_refs(
+    pid: str,
+    person_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("timeline:read")),
+):
+    """Wave B: soft Registry asset_id refs on Person timeline (no blob library)."""
+    from app import media_bridge
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    with Session() as db:
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person_id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        items = media_bridge.list_soft_refs(db, person_id, project_id=pid)
+        _m2m_audit(db, principal, "media_refs.list", person_id=person_id, project_id=pid)
+        return {"person_id": person_id, "project_id": pid, "items": items}
+
+
+@router.post("/projects/{pid}/persons/{person_id}/media-refs")
+async def m2m_attach_media_ref(
+    pid: str,
+    person_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("timeline:write")),
+):
+    """Wave B: soft-attach Signal/Registry asset_id to Person (Interaction only)."""
+    from app import media_bridge
+    from app import person_graph as graph
+
+    body_raw, principal = auth_ctx
+    assert_project_allowed(pid)
+    try:
+        payload = SoftMediaAttachBody.model_validate_json(body_raw)
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    with Session.begin() as db:
+        profiles = list(
+            db.scalars(select(Profile).where(Profile.person_id == person_id, Profile.project_id == pid))
+        )
+        if not profiles:
+            raise HTTPException(404, "Person не в проекте")
+        voronka_id = None
+        if payload.ensure_delivery:
+            if not payload.connection_ids:
+                raise HTTPException(422, "connection_ids required when ensure_delivery=true")
+            for cid in payload.connection_ids:
+                connection = db.get(Connection, cid)
+                if not connection or connection.project_id != pid:
+                    raise HTTPException(404, "Подключение недоступно")
+            try:
+                asset, _ = media_bridge.ensure_voronka_asset_from_signal(
+                    db,
+                    signal_asset_id=payload.signal_asset_id,
+                    connection_ids=list(payload.connection_ids),
+                    name=payload.name,
+                    communication_ref=f"voronka:person:{person_id}:{payload.signal_asset_id}",
+                )
+                voronka_id = asset.id
+            except media_bridge.MediaBridgeError as exc:
+                raise media_bridge.bridge_http_error(exc) from exc
+        else:
+            from app import signal_media
+
+            signal_media.link_communication_asset(
+                asset_id=payload.signal_asset_id,
+                communication_ref=f"voronka:person:{person_id}:{payload.signal_asset_id}",
+                role=payload.role,
+            )
+
+        row, dup = graph.record_interaction(
+            db,
+            person_id=person_id,
+            project_id=pid,
+            kind=media_bridge.SOFT_REF_KIND,
+            direction="system",
+            channel="media",
+            communication_id=payload.communication_id,
+            source_service="voronka",
+            external_event_key=media_bridge.soft_ref_event_key(person_id, payload.signal_asset_id),
+            payload=media_bridge.soft_ref_payload(
+                signal_asset_id=payload.signal_asset_id,
+                role=payload.role,
+                voronka_asset_id=voronka_id,
+                name=payload.name,
+                communication_id=payload.communication_id,
+            ),
+            evidence_status="recorded",
+        )
+        _m2m_audit(
+            db,
+            principal,
+            "media_refs.attach",
+            person_id=person_id,
+            project_id=pid,
+            signal_asset_id=payload.signal_asset_id,
+            duplicate=dup,
+        )
+        return {
+            "id": row.id,
+            "duplicate": dup,
+            "signal_asset_id": payload.signal_asset_id,
+            "voronka_asset_id": voronka_id,
+            "library": False,
+        }
+
+
+@router.get("/projects/{pid}/media/signal/{signal_asset_id}/content")
+def m2m_signal_media_content(
+    pid: str,
+    signal_asset_id: str,
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("asset:read")),
+):
+    """Wave B: fetch-by-asset_id proxy for CRM/M2M — raw bytes, never file_id."""
+    from fastapi.responses import Response
+
+    from app import signal_media
+
+    _body, principal = auth_ctx
+    assert_project_allowed(pid)
+    try:
+        fetched = signal_media.fetch_asset_bytes(signal_asset_id)
+    except signal_media.SignalMediaError as exc:
+        from app import media_bridge
+
+        raise media_bridge.bridge_http_error(
+            media_bridge.MediaBridgeError(exc.code, exc.message, details=exc.body)
+        ) from exc
+    with Session.begin() as db:
+        _m2m_audit(
+            db,
+            principal,
+            "media_refs.content",
+            project_id=pid,
+            signal_asset_id=signal_asset_id,
+            source=fetched.source,
+        )
+    return Response(
+        content=fetched.data,
+        media_type=fetched.content_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Media-Source": fetched.source,
+            "X-Media-Asset-Id": fetched.asset_id,
+        },
+    )
 
 
 class M2MSendPolicyCheck(Body):

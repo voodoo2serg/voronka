@@ -99,13 +99,20 @@ def add_campaign(pid: str, body: CampaignBody, admin=Depends(crm_actor)):
 
 @router.post("/campaigns/{cid}/preflight")
 def preflight_campaign(cid: str, admin=Depends(crm_actor)):
-    with Session() as db:
+    from app import media_bridge
+    from app import media as media_mod
+    import shutil
+
+    with Session.begin() as db:
         campaign = must(db.get(Campaign, cid))
         project_access(db, admin, campaign.project_id)
         connection = must(db.get(Connection, campaign.connection_id))
-        blocker = _asset_blocker(db, connection, campaign.asset_id)
-        from app import media as media_mod
-        import shutil
+        resolved_id, ensure_blocker, rewritten = media_bridge.ensure_campaign_asset(
+            db, connection, campaign.asset_id
+        )
+        if rewritten and resolved_id:
+            campaign.asset_id = resolved_id
+        blocker = ensure_blocker or _asset_blocker(db, connection, campaign.asset_id)
         media_mod.ROOT.mkdir(parents=True, exist_ok=True)
         free = shutil.disk_usage(media_mod.ROOT).free
         recipients = []
@@ -126,6 +133,8 @@ def preflight_campaign(cid: str, admin=Depends(crm_actor)):
             "connection_alive": bool(connection.active),
             "credentials_present": connection.platform == "email" or bool(os.environ.get(connection.token_env)),
             "asset_blocker": blocker,
+            "asset_id": campaign.asset_id,
+            "asset_rewritten": rewritten,
             "media_free_bytes": free,
             "capabilities": platform_capabilities(connection.platform),
             "rate_limit_per_second": int(os.getenv("BOT_MESSAGES_PER_SECOND", "20")),
@@ -136,6 +145,8 @@ def preflight_campaign(cid: str, admin=Depends(crm_actor)):
 
 @router.post("/campaigns/{cid}/launch")
 def launch_campaign(cid: str, admin=Depends(crm_actor)):
+    from app import media_bridge
+
     with Session.begin() as db:
         campaign = must(db.scalar(select(Campaign).where(Campaign.id == cid).with_for_update()))
         project_access(db, admin, campaign.project_id)
@@ -146,7 +157,12 @@ def launch_campaign(cid: str, admin=Depends(crm_actor)):
         connection = must(db.get(Connection, campaign.connection_id))
         if not connection.active:
             raise HTTPException(409, "Подключение выключено")
-        blocker = _asset_blocker(db, connection, campaign.asset_id)
+        resolved_id, ensure_blocker, rewritten = media_bridge.ensure_campaign_asset(
+            db, connection, campaign.asset_id
+        )
+        if rewritten and resolved_id:
+            campaign.asset_id = resolved_id
+        blocker = ensure_blocker or _asset_blocker(db, connection, campaign.asset_id)
         if blocker:
             raise HTTPException(409, blocker)
         asset = db.get(Asset, campaign.asset_id) if campaign.asset_id else None
