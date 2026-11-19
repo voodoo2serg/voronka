@@ -52,6 +52,24 @@ class AssetImportBody(Body):
     content_type: str | None = None
 
 
+class M2MSegmentExport(Body):
+    """CAMP-101: paginated sendable Person/ContactPoint export for Signal mass campaigns.
+
+    When only_sendable=true (default), each candidate must pass send_allowed with
+    missing_policy=deny for the requested purpose (marketing for mass email).
+
+    Defined above the route that uses it — FastAPI resolves annotations at import.
+    """
+
+    channel: str = Field(default="email", min_length=1, max_length=30)
+    purpose: str = Field(default="marketing", max_length=40)
+    tag: str | None = Field(default=None, max_length=80)
+    missing_policy: str = Field(default="deny", max_length=20)
+    only_sendable: bool = True
+    limit: int = Field(default=100, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+
+
 def _m2m_audit(db, principal: SignalM2MPrincipal, kind: str, **payload: Any) -> None:
     db.add(
         Event(
@@ -839,22 +857,6 @@ class M2MSendPolicyCheck(Body):
     missing_policy: str = Field(default="deny", max_length=20)
     # Signal transactional path often only has the mailbox address.
     email: str | None = Field(default=None, max_length=250)
-
-
-class M2MSegmentExport(Body):
-    """CAMP-101: paginated sendable Person/ContactPoint export for Signal mass campaigns.
-
-    When only_sendable=true (default), each candidate must pass send_allowed with
-    missing_policy=deny for the requested purpose (marketing for mass email).
-    """
-
-    channel: str = Field(default="email", min_length=1, max_length=30)
-    purpose: str = Field(default="marketing", max_length=40)
-    tag: str | None = Field(default=None, max_length=80)
-    missing_policy: str = Field(default="deny", max_length=20)
-    only_sendable: bool = True
-    limit: int = Field(default=100, ge=1, le=500)
-    offset: int = Field(default=0, ge=0)
 
 
 class M2MCommunicationIngest(Body):
