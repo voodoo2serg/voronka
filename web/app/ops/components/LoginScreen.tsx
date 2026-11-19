@@ -33,17 +33,28 @@ export function LoginScreen({
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [cutover, setCutover] = useState(false);
+  const [showLocal, setShowLocal] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     // Same-origin status (shared backend); login navigates to CRM origin.
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then((result: { enabled?: boolean }) => {
-        if (!cancelled) setSsoEnabled(result.enabled === true);
+      .then((result: { enabled?: boolean; cutover?: boolean }) => {
+        if (cancelled) return;
+        const enabled = result.enabled === true;
+        const nextCutover = result.cutover === true;
+        setSsoEnabled(enabled);
+        setCutover(nextCutover);
+        setShowLocal(!enabled || !nextCutover);
       })
       .catch(() => {
-        if (!cancelled) setSsoEnabled(false);
+        if (!cancelled) {
+          setSsoEnabled(false);
+          setCutover(false);
+          setShowLocal(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -62,37 +73,48 @@ export function LoginScreen({
             <a className="primary full" href={CRM_OIDC_LOGIN}>
               Войти через единый аккаунт SIGNAL
             </a>
-            <p className="fine">Если учётная запись ещё не привязана, используйте прежний вход.</p>
+            <p className="fine">
+              {cutover
+                ? 'Штатный вход — через Keycloak. Локальный пароль только для аварии.'
+                : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
+            </p>
           </div>
         )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void onBusy(async () => {
-              // Stub login reuses staff Account (same as CRM); zone = voronka UI.
-              const r = await api('/api/crm/login', 'POST', { login, password });
-              onToken(r.token);
-            });
-          }}
-        >
-          <label>
-            Логин
-            <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
-          </label>
-          <label>
-            Пароль
-            <input
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <button className="primary full" disabled={busy}>
-            Войти в ops
+        {cutover && ssoEnabled && !showLocal && (
+          <button className="link" type="button" onClick={() => setShowLocal(true)}>
+            Аварийный вход по локальному паролю
           </button>
-        </form>
+        )}
+        {showLocal && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onBusy(async () => {
+                // Stub login reuses staff Account (same as CRM); zone = voronka UI.
+                const r = await api('/api/crm/login', 'POST', { login, password });
+                onToken(r.token);
+              });
+            }}
+          >
+            <label>
+              Логин
+              <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
+            </label>
+            <label>
+              Пароль
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <button className="primary full" disabled={busy}>
+              {cutover ? 'Аварийный вход в ops' : 'Войти в ops'}
+            </button>
+          </form>
+        )}
         {error && <p role="alert" className="error">{error}</p>}
         {notice && <p role="status" className="notice">{notice}</p>}
         <p className="fine">Менеджеры продаж работают в CRM; ops — owner/editor.</p>

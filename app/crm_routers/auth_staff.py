@@ -14,6 +14,7 @@ from sqlalchemy import select, func
 from app import auth
 from app.crm_deps import Body, Session, crm_actor, encode, must, set_session_cookie, clear_session_cookie, staff_owner, throttle
 from app.crm_models import Account, Membership, Recovery
+from app.crm_oidc_cutover import UNUSABLE_PASSWORD_HASH, cutover_enabled
 from app.crm_service import uid, KINDS, STAGES, password_hash, password_ok, project_ids, project_access, audit, normalize_email
 from app.db import Admin, Project, Connection, now
 
@@ -28,7 +29,7 @@ class Login(Body):
 @router.post("/login")
 def login(body: Login, request: Request, response: Response):
     throttle(request, "login")
-    with Session() as db:
+    with Session.begin() as db:
         account = db.scalar(select(Account).where(Account.login == body.login.strip().lower()))
         # Use the same expensive KDF for missing users, to avoid a fast username oracle.
         dummy = "scrypt$00000000000000000000000000000000$" + "0" * 128
@@ -36,6 +37,9 @@ def login(body: Login, request: Request, response: Response):
         admin = db.get(Admin, account.admin_id) if account else None
         if not valid or not admin or not admin.active:
             raise HTTPException(401, "Неверный логин или пароль")
+        if cutover_enabled():
+            # Local password remains as audited emergency access after OIDC cutover.
+            audit(db, admin, "auth.local_login_break_glass", account_id=account.id)
         token = auth.issue_session(admin.telegram_id)
         set_session_cookie(response, token)
         return {"token": token, "role": admin.role}
@@ -59,10 +63,12 @@ def me(admin=Depends(crm_actor)):
 
 class StaffBody(Body):
     login: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=12, max_length=200)
+    # After AUTH-203 cutover, omit password (OIDC link) or pass break_glass=true for emergency.
+    password: str = Field(default="", max_length=200)
     email: str = Field(default="", max_length=250)
     role: Literal["editor", "manager"] = "manager"
     project_ids: list[str] = Field(default_factory=list, max_length=100)
+    break_glass: bool = False
 
 
 @router.get("/staff")
@@ -82,6 +88,19 @@ def add_staff(body: StaffBody, admin=Depends(crm_actor)):
     staff_owner(admin)
     if body.role == "owner":
         raise HTTPException(422, "Владельца создаёт только create_crm_owner / OWNER_TELEGRAM_ID")
+    cutover = cutover_enabled()
+    # Keep raw password (incl. intentional whitespace) — /login verifies the raw value.
+    password = body.password or ""
+    if cutover:
+        if password and not body.break_glass:
+            raise HTTPException(
+                403,
+                "После cutover локальный пароль сотрудника — только аварийный (break_glass) режим",
+            )
+        if not password and body.break_glass:
+            raise HTTPException(422, "Для break_glass укажите пароль")
+    elif not password or len(password) < 12:
+        raise HTTPException(422, "Пароль: от 12 до 200 символов")
     with Session.begin() as db:
         if db.scalar(select(func.count()).select_from(Admin).where(Admin.active.is_(True))) >= 12:
             raise HTTPException(409, "Первая версия: до 12 активных сотрудников")
@@ -98,12 +117,18 @@ def add_staff(body: StaffBody, admin=Depends(crm_actor)):
             email = normalize_email(body.email)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-        account = Account(id=uid(), admin_id=aid, login=login_name, password_hash=password_hash(body.password), email=email)
+        if password:
+            digest = password_hash(password)
+        else:
+            digest = UNUSABLE_PASSWORD_HASH
+        account = Account(id=uid(), admin_id=aid, login=login_name, password_hash=digest, email=email)
         db.add(account)
         for pid in set(body.project_ids):
             db.add(Membership(id=uid(), admin_id=aid, project_id=pid))
-        audit(db, admin, "staff.created", admin_id=aid)
-        return {"id": aid}
+        audit(db, admin, "staff.created", admin_id=aid, oidc_only=not bool(password))
+        if cutover and password and body.break_glass:
+            audit(db, admin, "staff.password_break_glass", admin_id=aid, account_id=account.id)
+        return {"id": aid, "account_id": account.id, "oidc_only": not bool(password)}
 
 
 @router.post("/staff/{aid}/disable")
@@ -179,6 +204,11 @@ def recovery_finish(body: RecoveryFinish, request: Request):
         else:
             if not account.email_verified:
                 raise HTTPException(400, "Email не подтверждён")
+            if cutover_enabled():
+                # Password reset stays emergency-only after OIDC; Keycloak owns routine recovery.
+                admin = db.get(Admin, account.admin_id)
+                if admin:
+                    audit(db, admin, "auth.password_reset_break_glass", account_id=account.id)
             account.password_hash = password_hash(body.password)
             auth.revoke_sessions(account.admin_id)
     return {"ok": True}
