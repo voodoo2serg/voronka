@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — CJ-108 SIGNAL_M2M_SCOPES (env allowlist)
+
+- `.env.example` `SIGNAL_M2M_SCOPES` now includes `timeline:write` (already in `DEFAULT_SCOPES`; explicit env on VPS was missing it → ingest 403).
+
 ## Unreleased — CRM-102 / MAIL-101 send-policy (v5.2)
 
 - **CRM-102:** `POST /api/crm/projects/{pid}/send-policy/check` (staff) and M2M twin under `/api/crm/m2m/...` — contact+channel+purpose → `{allowed, reason}`; Voronka remains consent SoR; **no listmonk**.
@@ -31,8 +35,8 @@ Signal v5.1 overnight Wave C in Voronka. Owner constraints A–G: no listmonk; H
 ### M2M (stable for Signal Wave D)
 
 - Existing HMAC campaign/asset/hub routes and scopes **unchanged**.
-- Additive scopes: `person:read`, `timeline:read`, `consent:write`.
-- Additive routes: M2M person + timeline under `/api/crm/m2m/projects/{pid}/persons/...`.
+- Additive scopes: `person:read`, `timeline:read`, `timeline:write`, `consent:write`.
+- Additive routes: M2M person + timeline under `/api/crm/m2m/projects/{pid}/persons/...`; CJ-108 `POST …/communications/ingest`.
 
 ### Deferred
 
