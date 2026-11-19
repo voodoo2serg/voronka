@@ -490,6 +490,11 @@ def test_m2m_communications_ingest_idempotent_and_no_html(crm, monkeypatch):
     assert "ce:voronka:evt-1:queued" in keys
     assert "ce:voronka:evt-1:accepted" in keys
     assert any(c["id"] == cid for c in body.get("person_communications") or [])
+    assert all(ix.get("project_id") == "p" for ix in body["person_interactions"])
+    assert all(c.get("project_id") == "p" for c in body["person_communications"])
+    # Communications are those referenced by returned interactions (aligned sets).
+    linked = {ix.get("communication_id") for ix in body["person_interactions"] if ix.get("communication_id")}
+    assert linked == {c["id"] for c in body["person_communications"]}
 
     # Cross-project deny via allowlist
     monkeypatch.setenv("SIGNAL_M2M_PROJECT_ALLOWLIST", "other")
@@ -501,3 +506,94 @@ def test_m2m_communications_ingest_idempotent_and_no_html(crm, monkeypatch):
         }
     )
     assert denied.status_code == 403, denied.text
+
+
+def test_contact_detail_person_history_scoped_to_project(crm):
+    """CJ-108: contact drawer must not leak other-project Person interactions/comms."""
+    from app import person_graph as graph
+    from app.crm_models import Profile
+    from app.crm_service import uid
+    from app.db import Contact
+
+    person = contact(crm, email="cj108-scope@example.ru")
+    person_id = person["person_id"]
+
+    with crm.db.begin() as db:
+        # Same Person linked to a Profile in project "secret".
+        secret_contact = Contact(id=uid(), person_id=person_id)
+        db.add(secret_contact)
+        db.flush()
+        db.add(
+            Profile(
+                id=uid(),
+                project_id="secret",
+                contact_id=secret_contact.id,
+                person_id=person_id,
+                name="Secret twin",
+                email="cj108-scope@example.ru",
+                revision=1,
+            )
+        )
+        other_comm = graph.create_communication(
+            db,
+            person_id=person_id,
+            purpose="transactional",
+            channel="email",
+            project_id="secret",
+            body_preview="SECRET other-project preview",
+            status="accepted",
+        )
+        graph.record_interaction(
+            db,
+            person_id=person_id,
+            kind="course.access_granted",
+            direction="outbound",
+            channel="email",
+            project_id="secret",
+            communication_id=other_comm.id,
+            source_service="signal",
+            external_event_key="ce:secret:leak:accepted",
+            payload={"status": "accepted"},
+        )
+        # Many project-p communications; an older linked one must still resolve for preview.
+        linked_comm = None
+        for i in range(25):
+            comm = graph.create_communication(
+                db,
+                person_id=person_id,
+                purpose="transactional",
+                channel="email",
+                project_id="p",
+                body_preview=f"p-preview-{i}",
+                status="accepted",
+            )
+            if i == 0:
+                linked_comm = comm
+        assert linked_comm is not None
+        linked_comm_id = linked_comm.id
+        graph.record_interaction(
+            db,
+            person_id=person_id,
+            kind="course.access_granted",
+            direction="outbound",
+            channel="email",
+            project_id="p",
+            communication_id=linked_comm_id,
+            source_service="signal",
+            external_event_key="ce:p:old-linked:accepted",
+            payload={"status": "accepted"},
+        )
+
+    detail = crm.client.get(f"/api/crm/contacts/{person['id']}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    keys = {ix["external_event_key"] for ix in body.get("person_interactions") or []}
+    assert "ce:secret:leak:accepted" not in keys
+    assert "ce:p:old-linked:accepted" in keys
+    assert all(ix.get("project_id") == "p" for ix in body["person_interactions"])
+    assert all(c.get("project_id") == "p" for c in body["person_communications"])
+    assert not any("SECRET" in (c.get("body_preview") or "") for c in body["person_communications"])
+    # Referenced (older) communication is included even when >20 newer unlinked comms exist.
+    assert any(c["id"] == linked_comm_id and c["body_preview"] == "p-preview-0" for c in body["person_communications"])
+    linked = {ix.get("communication_id") for ix in body["person_interactions"] if ix.get("communication_id")}
+    assert linked <= {c["id"] for c in body["person_communications"]}

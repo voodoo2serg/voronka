@@ -202,27 +202,35 @@ def contact_detail(profile_id: str, admin=Depends(crm_actor)):
             ).order_by(LlmReplyAudit.created_at.desc()).limit(20)
         ))
         # CJ-108: Person timeline writeback (Signal CE → interactions/communications).
+        # Scope to this Profile's project — same Person may exist in other projects.
         person_interactions: list[dict] = []
         person_communications: list[dict] = []
         if row.person_id:
-            person_interactions = [
-                encode(x)
-                for x in db.scalars(
+            ix_rows = list(
+                db.scalars(
                     select(Interaction)
-                    .where(Interaction.person_id == row.person_id)
+                    .where(
+                        Interaction.person_id == row.person_id,
+                        Interaction.project_id == row.project_id,
+                    )
                     .order_by(Interaction.occurred_at.desc())
                     .limit(50)
                 )
-            ]
-            person_communications = [
-                encode(x)
-                for x in db.scalars(
-                    select(Communication)
-                    .where(Communication.person_id == row.person_id)
-                    .order_by(Communication.created_at.desc())
-                    .limit(20)
-                )
-            ]
+            )
+            person_interactions = [encode(x) for x in ix_rows]
+            # Align communications to the returned interactions (not a shorter independent slice).
+            comm_ids = {x.communication_id for x in ix_rows if x.communication_id}
+            if comm_ids:
+                person_communications = [
+                    encode(x)
+                    for x in db.scalars(
+                        select(Communication).where(
+                            Communication.id.in_(comm_ids),
+                            Communication.person_id == row.person_id,
+                            Communication.project_id == row.project_id,
+                        )
+                    )
+                ]
         return {
             **encode(row),
             "is_purchaser": is_purchaser,
