@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import type { ApiFn } from '../types';
 
+const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
+
 export function LoginScreen({
   api,
   busy,
@@ -30,18 +32,24 @@ export function LoginScreen({
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
+  const [recoveryPath, setRecoveryPath] = useState('/api/crm/oidc/login?recover=1');
 
   useEffect(() => {
     let cancelled = false;
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then((result: { enabled?: boolean; cutover?: boolean }) => {
+      .then((result: { enabled?: boolean; cutover?: boolean; recovery_path?: string | null }) => {
         if (cancelled) return;
         const enabled = result.enabled === true;
         const nextCutover = result.cutover === true;
         setSsoEnabled(enabled);
         setCutover(nextCutover);
         setShowLocal(!enabled || !nextCutover);
+        if (result.recovery_path) setRecoveryPath(result.recovery_path);
+        if (enabled) {
+          setRecover(false);
+          setCode('');
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -55,15 +63,16 @@ export function LoginScreen({
     };
   }, []);
 
+  const localRecover = !ssoEnabled && recover;
 
   return (
     <main className="login-screen">
       <section className="login-card">
         <div className="brandmark">С</div>
         <p className="eyebrow">СОЛО-PR / CRM</p>
-        <h1>{recover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
+        <h1>{localRecover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
         <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
-        {ssoEnabled && !recover && (
+        {ssoEnabled && !localRecover && (
           <div>
             <a className="primary full" href="/api/crm/oidc/login">
               Войти через единый аккаунт SIGNAL
@@ -73,19 +82,26 @@ export function LoginScreen({
                 ? 'Штатный вход — через Keycloak. Локальный пароль только для аварии.'
                 : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
             </p>
+            <a className="link" href={recoveryPath}>
+              Забыли пароль?
+            </a>
+            <p className="fine">
+              Восстановление только через единый аккаунт SIGNAL. После запроса:{' '}
+              «{IDP_MAIL_COPY}»
+            </p>
           </div>
         )}
-        {cutover && ssoEnabled && !recover && !showLocal && (
+        {cutover && ssoEnabled && !showLocal && (
           <button className="link" type="button" onClick={() => setShowLocal(true)}>
             Аварийный вход по локальному паролю
           </button>
         )}
-        {(showLocal || recover) && (
+        {(showLocal || localRecover) && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void onBusy(async () => {
-                if (recover) {
+                if (localRecover) {
                   if (code) {
                     await api('/recovery/finish', 'POST', { login, purpose, code, password });
                     onNotice('Операция выполнена. Можно войти.');
@@ -107,7 +123,7 @@ export function LoginScreen({
               Логин
               <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
             </label>
-            {recover && (
+            {localRecover && (
               <>
                 <label>
                   Операция
@@ -122,12 +138,12 @@ export function LoginScreen({
                 </label>
               </>
             )}
-            {(!recover || (purpose === 'reset' && code)) && (
+            {(!localRecover || (purpose === 'reset' && code)) && (
               <label>
-                {recover ? 'Новый пароль' : 'Пароль'}
+                {localRecover ? 'Новый пароль' : 'Пароль'}
                 <input
                   type="password"
-                  autoComplete={recover ? 'new-password' : 'current-password'}
+                  autoComplete={localRecover ? 'new-password' : 'current-password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -135,11 +151,17 @@ export function LoginScreen({
               </label>
             )}
             <button className="primary full" disabled={busy}>
-              {recover ? (code ? 'Подтвердить' : 'Получить код') : cutover ? 'Аварийный вход' : 'Войти в кабинет'}
+              {localRecover
+                ? code
+                  ? 'Подтвердить'
+                  : 'Получить код'
+                : cutover
+                  ? 'Аварийный вход'
+                  : 'Войти в кабинет'}
             </button>
           </form>
         )}
-        {(showLocal || recover) && (
+        {!ssoEnabled && (showLocal || recover) && (
           <button
             className="link"
             onClick={() => {

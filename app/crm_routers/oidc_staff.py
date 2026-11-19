@@ -31,6 +31,9 @@ router = APIRouter(prefix="/oidc", tags=["CRM OIDC"])
 
 _STATE_COOKIE = "crm_oidc_state"
 _STATE_TTL = 600
+# Keycloak default actionTokenGeneratedByUserLifespan for reset is 12h — keep
+# PKCE verifier + state cookie alive through email delivery and link click.
+_RECOVER_STATE_TTL = 12 * 60 * 60
 _ALLOWED_RETURN_TO = frozenset({"/crm/", "/ops/"})
 
 
@@ -75,6 +78,13 @@ def _pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
 
 
+def _forgot_credentials_endpoint(authorization_endpoint: str) -> str:
+    """Keycloak OIDC sibling of /auth — keeps client context (not login-actions)."""
+    if authorization_endpoint.endswith("/auth"):
+        return authorization_endpoint[:-5] + "/forgot-credentials"
+    return authorization_endpoint.rstrip("/") + "/forgot-credentials"
+
+
 @router.get("/status")
 def status():
     try:
@@ -86,20 +96,23 @@ def status():
 
 
 @router.get("/login")
-def login(return_to: str = "/crm/"):
+def login(return_to: str = "/crm/", recover: int = 0):
     issuer, client_id, _, redirect_uri = _config()
     info = _discovery(issuer)
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
+    do_recover = bool(recover)
+    ttl = _RECOVER_STATE_TTL if do_recover else _STATE_TTL
     # One-time server-side PKCE verifier + nonce. No OAuth tokens in JS or cookies.
     auth.cache.setex(
         "crm:oidc:" + state,
-        _STATE_TTL,
+        ttl,
         json.dumps({
             "verifier": verifier,
             "nonce": nonce,
             "return_to": _safe_return_to(return_to),
+            "recover": do_recover,
         }),
     )
     params = {
@@ -112,9 +125,12 @@ def login(return_to: str = "/crm/"):
         "code_challenge": _pkce_challenge(verifier),
         "code_challenge_method": "S256",
     }
-    response = RedirectResponse(info["authorization_endpoint"] + "?" + urlencode(params), status_code=302)
+    endpoint = info["authorization_endpoint"]
+    if do_recover:
+        endpoint = _forgot_credentials_endpoint(endpoint)
+    response = RedirectResponse(endpoint + "?" + urlencode(params), status_code=302)
     response.set_cookie(
-        _STATE_COOKIE, state, max_age=_STATE_TTL, secure=True,
+        _STATE_COOKIE, state, max_age=ttl, secure=True,
         httponly=True, samesite="lax", path="/api/crm/oidc",
     )
     return response

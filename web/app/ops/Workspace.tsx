@@ -212,7 +212,7 @@ export default function Workspace() {
       </aside>
       <div className="main-area">
         <div className="topbar">
-          <SignalLauncher/>
+          <SignalLauncher role={typeof me?.role === 'string' ? me.role : undefined}/>
           <span>{sectionHints[section]}</span>
           <span>
             <b>·</b> voronka.solo-pr.ru/ops
