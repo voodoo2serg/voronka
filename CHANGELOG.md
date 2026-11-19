@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — CAMP-101 segment export (M2M)
+
+- **CAMP-101:** `POST /api/crm/m2m/projects/{pid}/segments/export` — paginated sendable
+  Person + ContactPoint export for Signal mass campaigns (`contact:segment:read`).
+  Default `only_sendable=true` filters via `send_allowed` (`purpose=marketing`,
+  `missing_policy=deny`). Profile-only `GET …/contacts` remains unchanged.
+
 ## Unreleased — CJ-108 SIGNAL_M2M_SCOPES (env allowlist)
 
 - `.env.example` `SIGNAL_M2M_SCOPES` now includes `timeline:write` (already in `DEFAULT_SCOPES`; explicit env on VPS was missing it → ingest 403).

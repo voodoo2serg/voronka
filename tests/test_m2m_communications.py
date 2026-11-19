@@ -257,6 +257,66 @@ def test_contacts_segment_limited(m2m):
     assert "bot-test" not in raw
 
 
+def test_segment_export_only_sendable_marketing(m2m):
+    """CAMP-101: export returns sendable email ContactPoints; missing marketing consent excluded."""
+    from app.crm_models import ContactPoint
+
+    allowed = contact(m2m, name="Ok", email="ok-seg@example.ru", tags=["vip"])
+    denied = contact(m2m, name="No", email="no-seg@example.ru", tags=["vip"])
+    with m2m.db.begin() as db:
+        ok_cp = db.scalar(
+            select(ContactPoint).where(
+                ContactPoint.person_id == allowed["person_id"], ContactPoint.channel == "email"
+            )
+        )
+        assert ok_cp is not None
+        from app import person_graph
+
+        person_graph.set_consent(
+            db, ok_cp.id, purpose="marketing", status="granted", evidence="import"
+        )
+        # denied person: no marketing consent → excluded when only_sendable
+
+    payload = {
+        "channel": "email",
+        "purpose": "marketing",
+        "tag": "vip",
+        "only_sendable": True,
+        "missing_policy": "deny",
+        "limit": 50,
+        "offset": 0,
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    r = m2m.client.post(
+        "/api/crm/m2m/projects/p/segments/export",
+        content=body,
+        headers=_headers(body, scopes="contact:segment:read"),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["sor"] == "voronka"
+    assert data["only_sendable"] is True
+    addresses = {i["address"] for i in data["items"]}
+    assert "ok-seg@example.ru" in addresses
+    assert "no-seg@example.ru" not in addresses
+    ok_row = next(i for i in data["items"] if i["address"] == "ok-seg@example.ru")
+    assert ok_row["person_id"] == allowed["person_id"]
+    assert ok_row["contact_point_id"]
+    assert ok_row["send_allowed"] is True
+    assert denied["person_id"] not in {i["person_id"] for i in data["items"]}
+    assert data["excluded"] >= 1
+
+
+def test_segment_export_wrong_scope_403(m2m):
+    body = json.dumps({"channel": "email", "purpose": "marketing"}).encode()
+    r = m2m.client.post(
+        "/api/crm/m2m/projects/p/segments/export",
+        content=body,
+        headers=_headers(body, scopes="person:read"),
+    )
+    assert r.status_code == 403
+
+
 def test_crm_session_routes_still_work(m2m):
     """Regression: existing CRM UI auth path unchanged."""
     assert m2m.client.get("/api/crm/me").status_code == 200
