@@ -8,6 +8,12 @@ const types={text:"Текст",video:"Видео",video_note:"Кружок",voic
 const roles={bot:"Бот, который отвечает",seller:"Продающий аккаунт",chat:"Чат",channel:"Канал"};
 function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function status(message){$("status").textContent=message;}
+function showBrowserOpsHandoff(){
+ const box=$("status");
+ box.replaceChildren();
+ const lead=node("p");lead.append(node("strong","Браузерный ops: "),(()=>{const a=node("a","https://voronka.solo-pr.ru/ops/");a.href="/ops/";return a;})(),document.createTextNode(" — боты, сценарии, рассылки, поддержка."));
+ box.append(lead,node("p","Mini App (редактор воронок) открывается только из Telegram: кнопка «Воронки» в чате бота. Не путайте с ops в браузере.","muted"));
+}
 function selectedValues(id){return [...$(id).selectedOptions].map(o=>o.value);}
 function options(select,values,chosen){select.replaceChildren();for(const [value,label] of values){const o=node("option",label);o.value=value;o.selected=Array.isArray(chosen)?chosen.includes(value):chosen===value;select.append(o);}}
 function button(text,action,cls){const b=node("button",text,cls);b.onclick=async()=>{b.disabled=true;try{await action();}catch(e){status(e.message);}finally{b.disabled=false;}};return b;}
@@ -322,10 +328,15 @@ window.addEventListener("beforeunload",e=>{if(dirty){e.preventDefault();e.return
  options($("newType"),Object.entries(types).filter(([k])=>k!=="finish"));
  options($("assetKind"),["video","video_note","voice","photo","document"].map(k=>[k,types[k]]));
  for(const [id,label] of [["projects","Проекты"],["accounts","Подключения"],["funnels","Сценарии"],["media","Медиабанк"],["contacts","Контакты"],["publications","Публикации"],["delivery","Доставка"],["access","Совместный доступ"]])$("nav").append(button(label,async()=>{switchPage(id);if(["contacts","delivery"].includes(id))await refreshOperations();}));
- const tg=window.Telegram?.WebApp;if(!tg?.initData)throw Error("Кнопка «Воронки» в чате бота не передала вход. Закройте это окно и нажмите её ещё раз — не открывайте ссылку в браузере.");
+ const tg=window.Telegram?.WebApp;
+ if(!tg?.initData){showBrowserOpsHandoff();return;}
  tg.ready();const response=await fetch("/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({init_data:tg.initData})});
  const data=await response.json();if(!response.ok)throw Error(JSON.stringify(data.detail));
  token=data.token;role=data.role;$("testChat").value=String(tg.initDataUnsafe?.user?.id||"");
  await refresh();document.querySelector("main").hidden=false;status("Вход выполнен · "+role);
- }catch(e){status(e.message);}
+ }catch(e){
+  // Browser (or broken TG session): never leave staff with only «закройте окно».
+  if(!window.Telegram?.WebApp?.initData)showBrowserOpsHandoff();
+  else status(e.message);
+ }
 })();

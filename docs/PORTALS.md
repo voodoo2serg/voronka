@@ -17,7 +17,8 @@
 ## Поведение Voronka-хоста (этап 3)
 
 - `Host: voronka.solo-pr.ru` + `/` → **Mini App** `admin.html` (Telegram WebApp; sslip URL совместимы).
-- Browser staff UI: **`/ops/`** (Next static export, stub login owner/editor).
+  In a normal browser (no Telegram `initData`) the apex page shows an explicit handoff to **`/ops/`** plus a short note that Mini App = Telegram only — not «закройте окно».
+- Browser staff UI: **`/ops/`** (Next static export; Keycloak SSO when cutover on; break-glass local form only via hidden brandmark gesture).
 - `/health` ok; `/hooks/{cid}` проксируется (меньший body limit в nginx).
 - Язык chrome: Боты · Сценарии · Рассылки · Поддержка · AI (без «продажи и обучение»).
 - Deep-link «Открыть CRM» → `crm.solo-pr.ru`.

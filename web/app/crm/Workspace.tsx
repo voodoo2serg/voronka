@@ -7,7 +7,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
-import { CONTACT_SOURCE_FILTERS, voronkaOpsHref } from './portals';
+import { CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } from './portals';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { PaymentsSection } from './sections/PaymentsSection';
@@ -188,6 +188,22 @@ export default function Workspace() {
       void act(() => load());
     }
   }, [pid, me, offset, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Portals/chrome without a project — linked managers must still see a useful world.
+  useEffect(() => {
+    if (!me || pid) return;
+    let cancelled = false;
+    void api('/portals')
+      .then((portalsRes: Row) => {
+        if (!cancelled) setPortalLinks(portalsRes?.links || []);
+      })
+      .catch(() => {
+        if (!cancelled) setPortalLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [me, pid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function showContact(id: string) {
     setDetail(await api('/contacts/' + id));
@@ -692,30 +708,64 @@ export default function Workspace() {
           )}
           {!pid ? (
             <section className="empty">
-              <h2>Начните с проекта</h2>
-              <p>Объедините клиентов, продукты и подключения в одном проекте.</p>
-              {me.role === 'owner' && (
-                <button
-                  className="primary"
-                  onClick={() =>
-                    setForm({
-                      title: 'Новый проект',
-                      fields: [
-                        { key: 'name', label: 'Название', required: true },
-                        { key: 'goal', label: 'Задача проекта' },
-                      ],
-                      save: async (v) => {
-                        const p = await api('/api/projects', 'POST', v);
-                        const m = await api('/me');
-                        setMe(m);
-                        setPid(p.id);
-                      },
-                    })
-                  }
-                >
-                  Создать проект
-                </button>
+              {me.role === 'owner' ? (
+                <>
+                  <h2>Проект ещё не создан</h2>
+                  <p className="muted">
+                    Клиенты и сделки живут в проекте. Пока можно открыть соседние сервисы SIGNAL — CRM-данные появятся после создания.
+                  </p>
+                  <button
+                    className="primary"
+                    onClick={() =>
+                      setForm({
+                        title: 'Новый проект',
+                        fields: [
+                          { key: 'name', label: 'Название', required: true },
+                          { key: 'goal', label: 'Задача проекта' },
+                        ],
+                        save: async (v) => {
+                          const p = await api('/api/projects', 'POST', v);
+                          const m = await api('/me');
+                          setMe(m);
+                          setPid(p.id);
+                        },
+                      })
+                    }
+                  >
+                    Создать проект
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>Аккаунт привязан</h2>
+                  <p className="muted">
+                    Владелец ещё не назначил вам проект. Вы уже в CRM — откройте соседние сервисы ниже; клиенты и сделки появятся после назначения.
+                  </p>
+                </>
               )}
+              <div className="empty-world" aria-label="Сервисы SIGNAL">
+                {(portalLinks.length
+                  ? portalLinks
+                  : [
+                      { id: 'cms', label: 'CMS', url: PORTAL_URLS.cms + '/admin' },
+                      { id: 'lms', label: 'LMS', url: PORTAL_URLS.lms + '/' },
+                      ...(me.role === 'manager'
+                        ? []
+                        : [{ id: 'voronka', label: 'Voronka ops', url: voronkaOpsHref() }]),
+                    ]
+                )
+                  .filter((link: Row) => link.id !== 'crm')
+                  .map((link: Row) => (
+                    <a key={String(link.id)} href={String(link.url)} target="_blank" rel="noreferrer">
+                      {String(link.label)} ↗
+                    </a>
+                  ))}
+                {me.role !== 'manager' && !portalLinks.some((l: Row) => l.id === 'voronka') && (
+                  <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
+                    Voronka ops ↗
+                  </a>
+                )}
+              </div>
             </section>
           ) : (
             <>
