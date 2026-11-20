@@ -1,12 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { ACCESS_REQUEST } from '../portals';
 import type { ApiFn } from '../types';
 
 const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
 /** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
 const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
+
+const ACCESS_HINTS: Record<string, string> = {
+  need_staff: 'SSO прошёл, но сотрудник CRM ещё не выдан. Запросите доступ ниже.',
+  need_link: 'Аккаунт SIGNAL есть, привязка к CRM отсутствует. Запросите staff-доступ.',
+  denied: 'Доступ к CRM не разрешён. Запросите выдачу в CMS или SIGNAL.',
+};
 
 export function LoginScreen({
   api,
@@ -36,6 +43,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState('/api/crm/oidc/login?recover=1');
+  const [accessHint, setAccessHint] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
   useEffect(() => {
@@ -68,6 +76,19 @@ export function LoginScreen({
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const codeKey = params.get('crm_access') || '';
+    if (codeKey && ACCESS_HINTS[codeKey]) {
+      setAccessHint(ACCESS_HINTS[codeKey]);
+      params.delete('crm_access');
+      const next = params.toString();
+      const url = window.location.pathname + (next ? `?${next}` : '') + window.location.hash;
+      window.history.replaceState({}, '', url);
+    }
+  }, []);
+
   function onBrandmarkGesture() {
     if (!(cutover && ssoEnabled) || showLocal) return;
     const now = Date.now();
@@ -98,6 +119,11 @@ export function LoginScreen({
         <p className="eyebrow">СОЛО-PR / CRM</p>
         <h1>{localRecover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
         <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
+        {accessHint && (
+          <p role="status" className="notice">
+            {accessHint}
+          </p>
+        )}
         {ssoEnabled && !localRecover && (
           <div>
             <a className="primary full" href="/api/crm/oidc/login">
@@ -196,7 +222,19 @@ export function LoginScreen({
         )}
         {error && <p role="alert" className="error">{error}</p>}
         {notice && <p role="status" className="notice">{notice}</p>}
-        <p className="fine">Нет аккаунта? Обратитесь к владельцу проекта.</p>
+        <div className="access-request fine">
+          <p>Нет доступа в CRM?</p>
+          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
+            {ACCESS_REQUEST.label} в SIGNAL
+          </a>
+          <p>
+            Администратор выдаёт staff в{' '}
+            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
+              CMS → Администраторы
+            </a>
+            {' '}(provision CRM + Signal).
+          </p>
+        </div>
       </section>
     </main>
   );

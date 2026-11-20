@@ -1,4 +1,4 @@
-"""VR-256: cutover paint is Keycloak-only — no peer «Аварийный вход» CTA."""
+"""VR-256 / VR-273: cutover paint + CRM help (no project wall, access path, today CTA)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,8 +21,32 @@ def test_no_peer_emergency_button_label_in_jsx():
         assert "Штатный вход — через единый аккаунт SIGNAL (Keycloak)." in src
 
 
-def test_crm_empty_state_not_project_only_for_managers():
+def test_crm_login_has_access_request_not_dead_owner_text():
+    login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    portals = (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
+    assert "Обратитесь к владельцу проекта" not in login
+    assert "ACCESS_REQUEST" in login
+    assert "crm_access" in login
+    assert "Запросить доступ" in portals
+    assert "cmsStaff" in portals and "PORTAL_URLS.cms" in portals
+    assert "view=access" in portals
+
+
+def test_crm_empty_state_not_project_wall():
     src = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
-    assert "Аккаунт привязан" in src
     assert "Начните с проекта" not in src
+    # Linked staff keep section shell; project is optional filter/banner only.
+    assert "project-optional" in src
     assert "empty-world" in src
+    assert "Работа сегодня" in src
+    assert "goToday" in src
+    assert "Запросить доступ" in src or "ACCESS_REQUEST" in src
+    # Must not gate the whole main area on create-project only.
+    assert "{!pid ? (" not in src
+    assert "ПРОЕКТ · фильтр" in src
+
+
+def test_ops_has_work_today_cta():
+    src = (ROOT / "web" / "app" / "ops" / "Workspace.tsx").read_text(encoding="utf-8")
+    assert "Работа сегодня" in src
+    assert "crmTodayHref" in src

@@ -6,7 +6,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
-import { crmHref, miniAppHref } from './portals';
+import { crmHref, crmTodayHref, miniAppHref } from './portals';
 import { AiSection } from './sections/AiSection';
 import { AutomationsSection } from './sections/AutomationsSection';
 import { BotsSection } from './sections/BotsSection';
@@ -156,8 +156,9 @@ export default function Workspace() {
           </div>
         )}
         <label className="project-label">
-          ПРОЕКТ
+          ПРОЕКТ · фильтр
           <select aria-label="Проект" value={pid} onChange={(e) => setPid(e.target.value)}>
+            {!me.projects.length && <option value="">Все / без проекта</option>}
             {me.projects.map((p: Row) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -165,22 +166,28 @@ export default function Workspace() {
             ))}
           </select>
         </label>
-        <nav>
-          {sections.map(([id, label]) => (
-            <button
-              key={id}
-              className={section === id ? 'nav active' : 'nav'}
-              onClick={() => {
-                setSection(id);
-                setError('');
-              }}
-            >
-              <span className="nav-icon">
-                <Icon name={id} />
-              </span>
-              {label}
-            </button>
-          ))}
+        <a className="work-today" href={crmTodayHref()} target="_blank" rel="noreferrer">
+          Работа сегодня
+        </a>
+        <nav aria-label="Разделы ops">
+          {sections.map(([id, label]) => {
+            const secondary = ['automations', 'media', 'ai'].includes(id);
+            return (
+              <button
+                key={id}
+                className={`${section === id ? 'nav active' : 'nav'}${secondary ? ' nav-secondary' : ''}`}
+                onClick={() => {
+                  setSection(id);
+                  setError('');
+                }}
+              >
+                <span className="nav-icon">
+                  <Icon name={id} />
+                </span>
+                {label}
+              </button>
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
           <a href={crmHref()} target="_blank" rel="noreferrer">

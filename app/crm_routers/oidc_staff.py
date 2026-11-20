@@ -227,7 +227,7 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
                 )
                 gate.raise_for_status()
                 if gate.json().get("allowed") is not True:
-                    raise HTTPException(403, "Доступ к CRM не разрешён в SIGNAL")
+                    return _access_denied_redirect(return_to, "denied")
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(503, "Не удалось проверить разрешение CRM") from exc
     with Session.begin() as db:
@@ -235,11 +235,11 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
             OidcLink.issuer == issuer, OidcLink.subject == sub,
             OidcLink.provisioning_status == "linked"))
         if not link or not link.account_id:
-            raise HTTPException(403, "Аккаунт ещё не привязан к сотруднику CRM")
+            return _access_denied_redirect(return_to, "need_link")
         account = db.get(Account, link.account_id)
         admin = db.get(Admin, account.admin_id) if account else None
         if not admin or not admin.active or admin.role not in {"owner", "editor", "manager"}:
-            raise HTTPException(403, "Доступ к CRM не предоставлен")
+            return _access_denied_redirect(return_to, "need_staff")
         # Email claim never elevates role or creates a second owner.
         audit(
             db, admin, "oidc.login",
@@ -248,5 +248,14 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         session = auth.issue_session(admin.telegram_id)
     response = RedirectResponse(return_to, status_code=303)
     set_session_cookie(response, session)
+    response.delete_cookie(_STATE_COOKIE, path="/api/crm/oidc")
+    return response
+
+
+def _access_denied_redirect(return_to: str, reason: str) -> RedirectResponse:
+    """Send SSO-ok but CRM-not-provisioned users to login with a useful next step."""
+    sep = "&" if "?" in return_to else "?"
+    target = f"{return_to}{sep}crm_access={reason}"
+    response = RedirectResponse(target, status_code=303)
     response.delete_cookie(_STATE_COOKIE, path="/api/crm/oidc")
     return response

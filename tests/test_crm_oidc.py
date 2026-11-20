@@ -347,8 +347,10 @@ def test_callback_rejects_unlinked_subject(crm, monkeypatch):
         "issuer": iss,
     })
     monkeypatch.setattr(oidc_staff.httpx, "Client", UnlinkedClient)
-    response = crm.client.get("/api/crm/oidc/callback?code=demo&state=" + state)
-    assert response.status_code == 403
+    response = crm.client.get("/api/crm/oidc/callback?code=demo&state=" + state, follow_redirects=False)
+    # VR-273: useful path instead of bare 403 — login shows request-access CTAs.
+    assert response.status_code == 303
+    assert response.headers["location"] == "/crm/?crm_access=need_link"
 
 
 def test_oidc_link_revoke_revokes_sessions(crm, monkeypatch):
