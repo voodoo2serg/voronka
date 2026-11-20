@@ -7,7 +7,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
-import { CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } from './portals';
+import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } from './portals';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { PaymentsSection } from './sections/PaymentsSection';
@@ -165,7 +165,11 @@ export default function Workspace() {
       try {
         const m = await api('/me');
         setMe(m);
+        // Project is an optional filter: keep current if still allowed, else first project, else ''.
         setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : m.projects[0]?.id || ''));
+        if (typeof window !== 'undefined' && window.location.hash === '#today') {
+          setSection('tasks');
+        }
       } catch {
         setMe(null);
         setToken('');
@@ -176,22 +180,20 @@ export default function Workspace() {
   }, [ready, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (me && pid) {
-      setDetail(null);
-      setSelected([]);
-      setPreview(null);
-      setContacts([]);
-      setDeals([]);
-      setOrders([]);
-      setTasks([]);
-      setInbox([]);
+    if (!me) return;
+    setDetail(null);
+    setSelected([]);
+    setPreview(null);
+    setContacts([]);
+    setDeals([]);
+    setOrders([]);
+    setTasks([]);
+    setInbox([]);
+    if (pid) {
       void act(() => load());
+      return;
     }
-  }, [pid, me, offset, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Portals/chrome without a project — linked managers must still see a useful world.
-  useEffect(() => {
-    if (!me || pid) return;
+    // Linked staff without a project: keep chrome + portals; do not wall the world.
     let cancelled = false;
     void api('/portals')
       .then((portalsRes: Row) => {
@@ -203,7 +205,32 @@ export default function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [me, pid]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pid, me, offset, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function openCreateProject() {
+    setForm({
+      title: 'Новый проект',
+      fields: [
+        { key: 'name', label: 'Название', required: true },
+        { key: 'goal', label: 'Задача проекта' },
+      ],
+      save: async (v) => {
+        const p = await api('/api/projects', 'POST', v);
+        const m = await api('/me');
+        setMe(m);
+        setPid(p.id);
+      },
+    });
+  }
+
+  function goToday() {
+    setSection('tasks');
+    setDetail(null);
+    setError('');
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
+    }
+  }
 
   async function showContact(id: string) {
     setDetail(await api('/contacts/' + id));
@@ -591,7 +618,7 @@ export default function Workspace() {
           </div>
         )}
         <label className="project-label">
-          ПРОЕКТ
+          ПРОЕКТ · фильтр
           <select
             aria-label="Проект"
             value={pid}
@@ -600,6 +627,7 @@ export default function Workspace() {
               setPid(e.target.value);
             }}
           >
+            {!me.projects.length && <option value="">Все / без проекта</option>}
             {me.projects.map((p: Row) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -607,25 +635,32 @@ export default function Workspace() {
             ))}
           </select>
         </label>
-        <nav>
-          {sections.map(([id, label]) => (
-            <button
-              key={id}
-              className={section === id ? 'nav active' : 'nav'}
-              onClick={() => {
-                setSection(id);
-                setDetail(null);
-                setError('');
-              }}
-            >
-              <span className="nav-icon">
-                <Icon name={id} />
-              </span>
-              {label}
-              {id === 'contacts' && <small>{total}</small>}
-              {id === 'inbox' && <small>{inbox.length}</small>}
-            </button>
-          ))}
+        <button type="button" className="work-today" onClick={goToday}>
+          Работа сегодня
+        </button>
+        <nav aria-label="Разделы CRM">
+          {sections.map(([id, label]) => {
+            const secondary = ['campaigns', 'analytics', 'outreach', 'imports', 'settings'].includes(id);
+            return (
+              <button
+                key={id}
+                className={`${section === id ? 'nav active' : 'nav'}${secondary ? ' nav-secondary' : ''}`}
+                onClick={() => {
+                  setSection(id);
+                  setDetail(null);
+                  setError('');
+                }}
+              >
+                <span className="nav-icon">
+                  <Icon name={id} />
+                </span>
+                {label}
+                {id === 'contacts' && <small>{total}</small>}
+                {id === 'inbox' && <small>{inbox.length}</small>}
+                {id === 'tasks' && <small>{tasks.filter((t) => t.state === 'open').length || ''}</small>}
+              </button>
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
           <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
@@ -659,7 +694,7 @@ export default function Workspace() {
           <span>
             CRM <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
           </span>
-          <button disabled={busy} onClick={() => void act(() => load())}>
+          <button disabled={busy || !pid} onClick={() => void act(() => load())}>
             {busy ? 'Обновление…' : 'Обновить'}
           </button>
         </header>
@@ -671,27 +706,27 @@ export default function Workspace() {
               <p className="muted">{sectionHints[section]}</p>
             </div>
             {section === 'contacts' && (
-              <button className="primary" onClick={() => contactForm()}>
+              <button className="primary" disabled={!pid} onClick={() => contactForm()}>
                 + Новый клиент
               </button>
             )}
             {section === 'deals' && (
-              <button className="primary" disabled={!contacts.length} onClick={() => dealForm()}>
+              <button className="primary" disabled={!pid || !contacts.length} onClick={() => dealForm()}>
                 + Сделка
               </button>
             )}
             {section === 'products' && me.role === 'owner' && (
-              <button className="primary" onClick={() => productForm()}>
+              <button className="primary" disabled={!pid} onClick={() => productForm()}>
                 + Продукт
               </button>
             )}
             {section === 'tasks' && (
-              <button className="primary" disabled={!contacts.length} onClick={() => taskForm()}>
+              <button className="primary" disabled={!pid || !contacts.length} onClick={() => taskForm()}>
                 + Работа
               </button>
             )}
             {section === 'orders' && (
-              <button className="primary" disabled={!productOptions.length || !contacts.length} onClick={() => orderForm()}>
+              <button className="primary" disabled={!pid || !productOptions.length || !contacts.length} onClick={() => orderForm()}>
                 + Заказ
               </button>
             )}
@@ -706,41 +741,30 @@ export default function Workspace() {
               {notice}
             </div>
           )}
-          {!pid ? (
-            <section className="empty">
+          {!pid && (
+            <div className="notice banner project-optional" role="status">
               {me.role === 'owner' ? (
                 <>
-                  <h2>Проект ещё не создан</h2>
-                  <p className="muted">
-                    Клиенты и сделки живут в проекте. Пока можно открыть соседние сервисы SIGNAL — CRM-данные появятся после создания.
+                  <p>
+                    Проект — необязательный фильтр. Клиенты и сделки можно открыть сразу; создать проект — когда понадобится разделение.
                   </p>
-                  <button
-                    className="primary"
-                    onClick={() =>
-                      setForm({
-                        title: 'Новый проект',
-                        fields: [
-                          { key: 'name', label: 'Название', required: true },
-                          { key: 'goal', label: 'Задача проекта' },
-                        ],
-                        save: async (v) => {
-                          const p = await api('/api/projects', 'POST', v);
-                          const m = await api('/me');
-                          setMe(m);
-                          setPid(p.id);
-                        },
-                      })
-                    }
-                  >
+                  <button type="button" className="primary" onClick={openCreateProject}>
                     Создать проект
                   </button>
                 </>
               ) : (
                 <>
-                  <h2>Аккаунт привязан</h2>
-                  <p className="muted">
-                    Владелец ещё не назначил вам проект. Вы уже в CRM — откройте соседние сервисы ниже; клиенты и сделки появятся после назначения.
+                  <p>
+                    Аккаунт привязан. Проект ещё не назначен — разделы CRM уже открыты (пока пустые). Запросите назначение проекта или staff у администратора.
                   </p>
+                  <div className="access-actions">
+                    <a className="primary" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
+                      {ACCESS_REQUEST.label} в SIGNAL
+                    </a>
+                    <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
+                      CMS → выдать staff
+                    </a>
+                  </div>
                 </>
               )}
               <div className="empty-world" aria-label="Сервисы SIGNAL">
@@ -749,6 +773,7 @@ export default function Workspace() {
                   : [
                       { id: 'cms', label: 'CMS', url: PORTAL_URLS.cms + '/admin' },
                       { id: 'lms', label: 'LMS', url: PORTAL_URLS.lms + '/' },
+                      { id: 'signal', label: 'SIGNAL', url: PORTAL_URLS.signal + '/' },
                       ...(me.role === 'manager'
                         ? []
                         : [{ id: 'voronka', label: 'Voronka ops', url: voronkaOpsHref() }]),
@@ -760,15 +785,10 @@ export default function Workspace() {
                       {String(link.label)} ↗
                     </a>
                   ))}
-                {me.role !== 'manager' && !portalLinks.some((l: Row) => l.id === 'voronka') && (
-                  <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
-                    Voronka ops ↗
-                  </a>
-                )}
               </div>
-            </section>
-          ) : (
-            <>
+            </div>
+          )}
+          <>
               {section === 'overview' && (
                 <>
                   <div className="metrics">
@@ -787,8 +807,10 @@ export default function Workspace() {
                   <div className="two-column">
                     <section className="panel">
                       <div className="panel-title">
-                        <h2>Следующие действия</h2>
-                        <button onClick={() => setSection('tasks')}>Все задачи →</button>
+                        <h2>Работа сегодня</h2>
+                        <button type="button" className="primary" onClick={goToday}>
+                          Открыть →
+                        </button>
                       </div>
                       {tasks
                         .filter((t) => t.state === 'open')
@@ -2079,8 +2101,7 @@ export default function Workspace() {
                   </section>
                 </div>
               )}
-            </>
-          )}
+          </>
         </main>
       </div>
       {detail && (

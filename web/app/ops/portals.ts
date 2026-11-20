@@ -6,6 +6,7 @@ export const PORTAL_URLS = {
   crm: 'https://crm.solo-pr.ru',
   voronka: 'https://voronka.solo-pr.ru',
   lms: 'https://lms.solo-pr.ru',
+  signal: 'https://signal.vodopetov.ru',
 } as const;
 
 export function isVoronkaHost(host = typeof window !== 'undefined' ? window.location.host : ''): boolean {
@@ -19,6 +20,11 @@ export function crmHref(): string {
   if (typeof window === 'undefined') return PORTAL_URLS.crm + '/';
   if (isVoronkaHost()) return PORTAL_URLS.crm + '/';
   return '/crm/';
+}
+
+/** CRM «работа сегодня» landing (tasks) for ops chrome CTA. */
+export function crmTodayHref(): string {
+  return crmHref().replace(/\/?$/, '/') + '#today';
 }
 
 export function miniAppHref(): string {
