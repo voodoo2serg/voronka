@@ -154,6 +154,57 @@ def test_lead_created_idempotent(crm, monkeypatch):
         assert allowed, reason
 
 
+def test_raga_lead_creates_person_via_generic_path(crm, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-other-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "raga-lead-7",
+        "idempotency_key": "raga-lead-7",
+        "source": "raga_site",
+        "email": "raga.lead@example.ru",
+        "name": "RAGA Lead",
+        "promo_code": "ZIMA2027",
+        "consent": False,
+        "ads_consent": False,
+        "project_id": "p",
+    }
+    raw = json.dumps(payload).encode()
+    headers = _auth_headers("inbound-secret", raw)
+    r = crm.client.post("/api/crm/integrations/leads", content=raw, headers=headers)
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    person_id = r.json().get("person_id")
+    assert person_id
+    r2 = crm.client.post("/api/crm/integrations/leads", content=raw, headers=headers)
+    assert r2.status_code == 200 and r2.json()["duplicate"] is True
+    assert r2.json().get("person_id") == person_id
+    with crm.db() as db:
+        from app.crm_models import Profile
+
+        profile = db.scalar(select(Profile).where(Profile.email == "raga.lead@example.ru"))
+        assert profile and profile.source == "raga_site" and profile.person_id == person_id
+        inbox = db.scalar(select(IntegrationInbox).where(IntegrationInbox.event_key == "raga-lead-7"))
+        assert inbox and inbox.source == "raga_site"
+
+
+def test_solo_destination_missing_stays_pending(crm, monkeypatch):
+    monkeypatch.delenv("SOLO_PR_EVENTS_URL", raising=False)
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-secret")
+    o = order(crm)
+    assert crm.client.post(
+        f"/api/crm/orders/{o['id']}/payments",
+        json={"amount_minor": 100000, "external_id": "manual-solo-pending", "evidence": "Выписка"},
+    ).status_code == 200
+    with crm.db.begin() as db:
+        assert process_pending(db) >= 1
+        drain_outbox(db)
+        rows = list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.destination == "solo_pr")))
+        assert rows
+        assert all(r.state == "pending" and r.last_error == "destination_not_configured" for r in rows)
+
+
 def test_learning_completed_marks_academic(crm, monkeypatch):
     monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
     person = contact(crm, email="student@example.ru")
@@ -453,6 +504,28 @@ def test_verify_accepts_sha256_prefix_and_alias_headers(monkeypatch):
     headers = delivery_headers("solo_pr", "alias-secret", body, "evt-1")
     assert headers["X-Voronka-Signature"] == headers["X-Solo-Signature"]
     assert headers["X-Voronka-Signature"].startswith("sha256=")
+
+
+def test_verify_hmac_accepts_inbound_token_when_solo_secret_also_set(monkeypatch):
+    """RAGA signs with INTEGRATION_INBOUND_TOKEN; Solo secret must not shadow it."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "raga-inbound")
+    monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-outbound")
+    from app.db import now
+
+    body = b'{"type":"lead.created"}'
+    ts = str(int(now().timestamp()))
+    dig = sign_payload("raga-inbound", body, ts)
+    assert verify_bearer_or_hmac(
+        {"x-voronka-timestamp": ts, "x-voronka-signature": format_signature(dig)},
+        body,
+    )
+    assert verify_bearer_or_hmac({"Authorization": "Bearer raga-inbound"}, body)
+    # Solo secret still works for its own signatures.
+    solo_dig = sign_payload("solo-outbound", body, ts)
+    assert verify_bearer_or_hmac(
+        {"x-solo-timestamp": ts, "x-solo-signature": format_signature(solo_dig)},
+        body,
+    )
 
 
 def test_ops104_stable_enrollment_event_id_and_triple_replay(crm):

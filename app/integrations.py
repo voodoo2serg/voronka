@@ -95,13 +95,37 @@ def verify_signed_request(secret: str, body: bytes, timestamp: str, signature: s
     return hmac.compare_digest(expected.lower(), actual.lower())
 
 
+def _inbound_auth_secrets() -> list[str]:
+    """All inbound M2M secrets producers may sign with (order = preference for Bearer).
+
+    HMAC must try every configured secret: RAGA signs with INTEGRATION_INBOUND_TOKEN while
+    SOLO_PR_WEBHOOK_SECRET is also set for solo_pr — preferring only Solo would 401 RAGA.
+    """
+    ordered = [
+        os.getenv("INTEGRATION_INBOUND_TOKEN", ""),
+        os.getenv("LMS_M2M_TOKEN", ""),
+        os.getenv("SOLO_PR_WEBHOOK_SECRET", ""),
+        os.getenv("LMS_END_WEBHOOK_SECRET", ""),
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in ordered:
+        secret = (value or "").strip()
+        if secret and secret not in seen:
+            seen.add(secret)
+            out.append(secret)
+    return out
+
+
 def verify_bearer_or_hmac(request_headers: dict, body: bytes) -> bool:
     """Accept Bearer shared secret or timestamp HMAC under Voronka/Solo/LMS header names."""
-    token = os.getenv("INTEGRATION_INBOUND_TOKEN") or os.getenv("LMS_M2M_TOKEN") or os.getenv("SOLO_PR_WEBHOOK_SECRET")
+    secrets = _inbound_auth_secrets()
     auth = _header_ci(request_headers, "authorization")
-    if token and auth.startswith("Bearer ") and hmac.compare_digest(auth[7:], token):
-        return True
-    secret = os.getenv("SOLO_PR_WEBHOOK_SECRET") or os.getenv("LMS_END_WEBHOOK_SECRET") or token or ""
+    if auth.startswith("Bearer "):
+        presented = auth[7:]
+        for secret in secrets:
+            if hmac.compare_digest(presented, secret):
+                return True
     ts = _header_ci(
         request_headers,
         "x-voronka-timestamp",
@@ -114,7 +138,10 @@ def verify_bearer_or_hmac(request_headers: dict, body: bytes) -> bool:
         "x-solo-signature",
         "x-lms-signature",
     )
-    return verify_signed_request(secret, body, ts, sig)
+    for secret in secrets:
+        if verify_signed_request(secret, body, ts, sig):
+            return True
+    return False
 
 
 def _product_hints(order) -> dict[str, Any]:
@@ -569,9 +596,9 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
     url = _url(row.destination)
     secret = _secret(row.destination)
     if not url or not secret:
-        # CJ-107: Signal CE may be configured after grants land — keep pending/retryable
-        # instead of permanently failing durable access notifications.
-        if row.destination == DEST_SIGNAL:
+        # Keep neighbor money/access/CE events retryable when env is filled later
+        # (solo_pr URL historically missing → permanent failed was wrong).
+        if row.destination in {DEST_SIGNAL, DEST_SOLO, DEST_LMS}:
             row.state = "pending"
             row.last_error = "destination_not_configured"
             row.updated_at = now()

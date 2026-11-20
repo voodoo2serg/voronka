@@ -29,7 +29,7 @@ Legacy dotted outbox/Interaction keys `course.access_granted:{grant_id}` are **a
 
 | Направление | Поля | Auth |
 |---|---|---|
-| solo_pr → voronka `lead.created` | `type`\|`kind`, `idempotency_key`\|`event_id`, nested `data` или flat | Bearer **или** HMAC `X-Voronka-*` / `X-Solo-*` (`sha256=<hex>`, base `{ts}.{body}`, skew ≤300s) |
+| solo_pr / RAGA → voronka `lead.created` | `type`\|`kind`, `idempotency_key`\|`event_id`, nested `data` или flat; `source=solo_pr\|raga\|raga_site` | Bearer **или** HMAC `X-Voronka-*` / `X-Solo-*` (`sha256=<hex>`, base `{ts}.{body}`, skew ≤300s). Paths: `/integrations/leads` и legacy `/integrations/solo_pr/leads` |
 | voronka → solo_pr `deal.paid` / `access.*` | emit `type` **и** `kind`, `event_id` **и** `idempotency_key`; product + optional `course_id`/`club`/`commerce_product_id`/`external_id` | `X-Voronka-*` **и** `X-Solo-*` + Bearer |
 | voronka → lms_end enrollment | LMS `EnrollmentBody`: `schema_version`, `action` grant\|revoke, `keycloak_sub`/email/`voronka_profile_id`, `course_id`\|`commerce_product_id`, `capability=course.view` (+ internal `resource`/`revoke`/`kind`) | Bearer + `X-Voronka-*` (+ `X-Lms-*` aliases) |
 | lms_end → voronka completion | accept `course_id`/`commerce_product_id`/`resource`, email/`voronka_profile_id`/`keycloak_sub` | Bearer **или** `X-Voronka-*` / `X-Lms-*` |
