@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ApiFn } from '../types';
 import { PORTAL_URLS } from '../portals';
 
@@ -15,6 +15,9 @@ const CRM_OIDC_RECOVER =
   '/api/crm/oidc/login?recover=1&return_to=' +
   encodeURIComponent('/ops/');
 const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
+/** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
+const BREAK_GLASS_CLICKS = 5;
+const BREAK_GLASS_WINDOW_MS = 2800;
 
 function opsRecoveryHref(recoveryPath: string): string {
   const absolute = recoveryPath.startsWith('http')
@@ -55,6 +58,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState(CRM_OIDC_RECOVER);
+  const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -86,10 +90,31 @@ export function LoginScreen({
     };
   }, []);
 
+  function onBrandmarkGesture() {
+    if (!(cutover && ssoEnabled) || showLocal) return;
+    const now = Date.now();
+    if (now - glassClicks.current.t > BREAK_GLASS_WINDOW_MS) glassClicks.current = { n: 0, t: now };
+    glassClicks.current.n += 1;
+    glassClicks.current.t = now;
+    if (glassClicks.current.n >= BREAK_GLASS_CLICKS) {
+      glassClicks.current = { n: 0, t: 0 };
+      setShowLocal(true);
+    }
+  }
+
   return (
     <main className="login-screen">
       <section className="login-card">
-        <div className="brandmark">В</div>
+        <div
+          className="brandmark"
+          onClick={onBrandmarkGesture}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') onBrandmarkGesture();
+          }}
+          role="presentation"
+        >
+          В
+        </div>
         <p className="eyebrow">СОЛО-PR / VORONKA</p>
         <h1>Вход в ops</h1>
         <p className="muted">Боты · Сценарии · Рассылки · Поддержка · AI. Клиенты и платежи — в CRM.</p>
@@ -100,7 +125,7 @@ export function LoginScreen({
             </a>
             <p className="fine">
               {cutover
-                ? 'Штатный вход — через Keycloak. Локальный пароль только для аварии.'
+                ? 'Штатный вход — через единый аккаунт SIGNAL (Keycloak).'
                 : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
             </p>
             <a className="link" href={recoveryPath}>
@@ -111,11 +136,6 @@ export function LoginScreen({
               «{IDP_MAIL_COPY}»
             </p>
           </div>
-        )}
-        {cutover && ssoEnabled && !showLocal && (
-          <button className="link" type="button" onClick={() => setShowLocal(true)}>
-            Аварийный вход
-          </button>
         )}
         {showLocal && (
           <form

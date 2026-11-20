@@ -15,4 +15,4 @@
 .signal-service-grid a{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0;border-radius:10px;padding:10px 3px;font-size:12px;text-align:center}
 .signal-service-grid a:hover,.signal-service-grid a:focus-visible{background:#f1f1ef;text-decoration:none;outline-offset:2px}
 .signal-service-grid b{display:grid;place-items:center;width:42px;height:42px;border-radius:11px;background:#f1f1ef;border:1px solid #e1e1de;font-size:13px}
-.signal-service-popover small{margin-top:10px}
+.signal-service-popover small{margin-top:10px}.empty-world{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:24px}.empty-world a{padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}.empty-world a:hover{background:var(--surface);text-decoration:none}
