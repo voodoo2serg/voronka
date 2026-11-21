@@ -223,6 +223,18 @@ def record_money(oid: str, body: MoneyBody, admin=Depends(crm_actor)):
             if body.kind == "payment":
                 ledger.allocate_payment(db, payment, order)
                 queue_for_payment(db, payment)
+                # FUNC-M2: History shows sandbox pay immediately (not only after worker/outbox).
+                profile = db.get(Profile, order.profile_id)
+                if profile is not None:
+                    integrations.record_payment_interaction(
+                        db,
+                        payment_id=payment.id,
+                        order=order,
+                        profile=profile,
+                        financial=balance(db, order),
+                        provider="manual",
+                        evidence=body.evidence,
+                    )
             else:
                 ledger.record_refund_ledger(db, payment, order, reason=body.evidence)
             audit(db, admin, "money.recorded", order_id=oid, amount_minor=body.amount_minor, payment_kind=body.kind)

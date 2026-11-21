@@ -63,3 +63,13 @@ a.contour-chip:hover{text-decoration:none;background:#efefed}
 .signal-launch-row a.primary{display:inline-block;padding:7px 11px;border-radius:6px;background:var(--accent);color:#fff;border:1px solid var(--accent);font-weight:600;font-size:11px;text-decoration:none}
 .signal-launch-row a.primary:hover{background:#444;text-decoration:none}
 
+.auth-ctas{display:flex;flex-direction:column;gap:10px;margin:18px 0 8px}
+a.auth-secondary{display:block;text-align:center;border:1px solid #dededb;border-radius:6px;padding:9px 11px;background:#fff;text-decoration:none}
+a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
+.history-timeline{margin-top:8px}
+.history-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.history-stage{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid #e5e5e0;background:#f5f5f2;color:#6a6a63;font-weight:600}
+.history-stage.stage-pay{background:#edf4ed;border-color:#b7ceb9;color:#4f6b55}
+.history-stage.stage-mail{background:#eef2f7;border-color:#b7c3d4;color:#3f5678}
+.history-stage.stage-access{background:#f7f0e4;border-color:#e0c89a;color:#8a6a32}
+.history-item.is-letter{background:#fafbfd}

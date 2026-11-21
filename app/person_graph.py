@@ -267,18 +267,31 @@ def ensure_oidc_person(
 
 
 def oidc_person_coverage(db) -> dict:
-    """Metric for ARCH-L2 DoD: persons_with_oidc grows as SSO links attach Person."""
+    """Metric for ARCH-L2/M2: persons_with_oidc grows as SSO links attach Person.
+
+    Staff = OidcLink with account_id (CRM Account). Learners/solo = issuer+sub without
+    Account — coverage growth path for product handoff (ARCH-M2).
+    """
     from app.crm_models import OidcLink
 
     linked = list(
         db.scalars(select(OidcLink).where(OidcLink.provisioning_status == "linked"))
     )
     with_person = [row for row in linked if row.person_id]
+    staff = [row for row in with_person if row.account_id]
+    learners = [row for row in with_person if not row.account_id]
     return {
         "oidc_links_linked": len(linked),
         "links_with_person": len(with_person),
         "links_missing_person": len(linked) - len(with_person),
         "persons_with_oidc": len({row.person_id for row in with_person}),
+        "staff_with_person": len({row.person_id for row in staff}),
+        "learners_with_person": len({row.person_id for row in learners}),
+        "handoff": {
+            "m2m_oidc_person": "POST /api/crm/m2m/oidc-person",
+            "solo_lead_keycloak_sub": "POST /api/crm/integrations/leads (+ keycloak_sub)",
+            "lms_completion_keycloak_sub": "POST /api/crm/integrations/lms_end/completions (+ keycloak_sub)",
+        },
     }
 
 

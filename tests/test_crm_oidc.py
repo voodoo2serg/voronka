@@ -148,7 +148,26 @@ def test_status_reports_cutover_mode(system, monkeypatch):
     assert status["local_login"] == "break-glass-audited"
     assert status["password_create"] == "break-glass-audited"
     assert status["recovery_path"] == "/api/crm/oidc/login?recover=1"
+    assert status["register_path"] == "/api/crm/oidc/login?register=1"
     assert cutover_enabled() is True
+
+
+def test_register_login_sends_kc_action_register(system, monkeypatch):
+    configure(monkeypatch)
+    monkeypatch.setattr(oidc_staff, "_discovery", lambda issuer: {
+        "authorization_endpoint": issuer + "/protocol/openid-connect/auth",
+    })
+    response = system.client.get("/api/crm/oidc/login?register=1", follow_redirects=False)
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert "/protocol/openid-connect/auth?" in location
+    params = parse_qs(urlparse(location).query)
+    assert params["kc_action"] == ["REGISTER"]
+    assert params["client_id"] == ["voronka-crm"]
+    state = params["state"][0]
+    payload = json.loads(system.cache.get("crm:oidc:" + state))
+    assert payload["register"] is True
+    assert payload["recover"] is False
 
 
 def test_recover_login_uses_forgot_credentials_endpoint(system, monkeypatch):

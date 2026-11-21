@@ -270,7 +270,7 @@ def work_today_for_project(db, admin, pid: str, *, limit: int = 40) -> dict:
         },
         "honesty": {
             "can_enable_live_from_ui": False,
-            "policy": "Q6: sandbox only — live money / production marketing off",
+            "policy": "Q11=C: production mail live; Robokassa sandbox — mass marketing off",
         },
         "secrets_exposed": False,
     }

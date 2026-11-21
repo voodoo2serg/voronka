@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Lift 8→10 AUTH-M2 / FUNC-M2 / ARCH-M2 / Q11=C runbook
+
+- AUTH-M2: CRM/ops guest card = RU login / register / forgot only; `register=1` → Keycloak `kc_action=REGISTER`.
+- FUNC-M2: sandbox Payment writes Person Interaction; HistoryTimeline paints «Оплата» / «Письмо» stages in CRM drawer.
+- ARCH-M2: coverage staff vs learners; solo lead + LMS completion `keycloak_sub` → Person/issuer+sub (no Account).
+- Q11=C runbook: production mail gate (SMTP) vs Robokassa sandbox; mass marketing still off; no live money flip.
+- Tests: `test_func_m2_history_pay.py`, `test_arch_m2_learner_handoff.py`, login/runbook paint updates.
+
 ## Unreleased — ARCH-L4 history writeback ensure-on-ingest
 
 - CJ-108 `POST …/communications/ingest` creates a thin Person+Profile+ContactPoint

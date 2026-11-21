@@ -93,6 +93,8 @@ def _coverage_or_empty() -> dict:
         "links_with_person": 0,
         "links_missing_person": 0,
         "persons_with_oidc": 0,
+        "staff_with_person": 0,
+        "learners_with_person": 0,
     }
     try:
         with Session() as db:
@@ -120,13 +122,15 @@ def coverage():
 
 
 @router.get("/login")
-def login(return_to: str = "/crm/", recover: int = 0):
+def login(return_to: str = "/crm/", recover: int = 0, register: int = 0):
     issuer, client_id, _, redirect_uri = _config()
     info = _discovery(issuer)
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
     do_recover = bool(recover)
+    # AUTH-M2: register takes precedence over recover when both are set.
+    do_register = bool(register) and not do_recover
     ttl = _RECOVER_STATE_TTL if do_recover else _STATE_TTL
     # One-time server-side PKCE verifier + nonce. No OAuth tokens in JS or cookies.
     auth.cache.setex(
@@ -137,6 +141,7 @@ def login(return_to: str = "/crm/", recover: int = 0):
             "nonce": nonce,
             "return_to": _safe_return_to(return_to),
             "recover": do_recover,
+            "register": do_register,
         }),
     )
     params = {
@@ -152,6 +157,9 @@ def login(return_to: str = "/crm/", recover: int = 0):
     endpoint = info["authorization_endpoint"]
     if do_recover:
         endpoint = _forgot_credentials_endpoint(endpoint)
+    elif do_register:
+        # Keycloak: open register.ftl (AUTH-M1 companion); client context preserved.
+        params["kc_action"] = "REGISTER"
     response = RedirectResponse(endpoint + "?" + urlencode(params), status_code=302)
     response.set_cookie(
         _STATE_COOKIE, state, max_age=ttl, secure=True,

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ACCESS_REQUEST } from '../portals';
 import type { ApiFn } from '../types';
 
-const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
+const IDP_MAIL_COPY = 'Отправили письмо! Проверьте почту!';
 /** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
 const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
@@ -43,6 +43,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState('/api/crm/oidc/login?recover=1');
+  const [registerPath, setRegisterPath] = useState('/api/crm/oidc/login?register=1');
   const [accessReason, setAccessReason] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
@@ -50,20 +51,28 @@ export function LoginScreen({
     let cancelled = false;
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then((result: { enabled?: boolean; cutover?: boolean; recovery_path?: string | null }) => {
-        if (cancelled) return;
-        const enabled = result.enabled === true;
-        const nextCutover = result.cutover === true;
-        setSsoEnabled(enabled);
-        setCutover(nextCutover);
-        // Keycloak-only paint when cutover: hide local form until hidden gesture.
-        setShowLocal(!enabled || !nextCutover);
-        if (result.recovery_path) setRecoveryPath(result.recovery_path);
-        if (enabled) {
-          setRecover(false);
-          setCode('');
-        }
-      })
+      .then(
+        (result: {
+          enabled?: boolean;
+          cutover?: boolean;
+          recovery_path?: string | null;
+          register_path?: string | null;
+        }) => {
+          if (cancelled) return;
+          const enabled = result.enabled === true;
+          const nextCutover = result.cutover === true;
+          setSsoEnabled(enabled);
+          setCutover(nextCutover);
+          // Keycloak-only paint when cutover: hide local form until hidden gesture.
+          setShowLocal(!enabled || !nextCutover);
+          if (result.recovery_path) setRecoveryPath(result.recovery_path);
+          if (result.register_path) setRegisterPath(result.register_path);
+          if (enabled) {
+            setRecover(false);
+            setCode('');
+          }
+        },
+      )
       .catch(() => {
         if (!cancelled) {
           setSsoEnabled(false);
@@ -139,16 +148,17 @@ export function LoginScreen({
             Вернуться ко входу
           </button>
           <a className="link" href="/api/crm/oidc/login">
-            Повторить вход через SIGNAL
+            Войти
           </a>
         </section>
       </main>
     );
   }
 
+  // AUTH-M2: guest card = prefs RU — only login / register / forgot (≤3 CTA), no platform essay.
   return (
     <main className="login-screen">
-      <section className="login-card">
+      <section className="login-card" aria-labelledby="crm-login-title">
         <div
           className="brandmark"
           onClick={onBrandmarkGesture}
@@ -160,25 +170,18 @@ export function LoginScreen({
           С
         </div>
         <p className="eyebrow">СОЛО-PR / CRM</p>
-        <h1>{localRecover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
-        <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
+        <h1 id="crm-login-title">{localRecover ? 'Восстановление' : 'Вход'}</h1>
         {ssoEnabled && !localRecover && (
-          <div>
+          <div className="auth-ctas">
             <a className="primary full" href="/api/crm/oidc/login">
-              Войти через единый аккаунт SIGNAL
+              Войти
             </a>
-            <p className="fine">
-              {cutover
-                ? 'Штатный вход — через единый аккаунт SIGNAL (Keycloak).'
-                : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
-            </p>
+            <a className="full auth-secondary" href={registerPath}>
+              Регистрация
+            </a>
             <a className="link" href={recoveryPath}>
               Забыли пароль?
             </a>
-            <p className="fine">
-              Восстановление только через единый аккаунт SIGNAL. После запроса:{' '}
-              «{IDP_MAIL_COPY}»
-            </p>
           </div>
         )}
         {(showLocal || localRecover) && (
@@ -189,12 +192,12 @@ export function LoginScreen({
                 if (localRecover) {
                   if (code) {
                     await api('/recovery/finish', 'POST', { login, purpose, code, password });
-                    onNotice('Операция выполнена. Можно войти.');
+                    onNotice(IDP_MAIL_COPY);
                     setRecover(false);
                     setCode('');
                   } else {
                     await api('/recovery/start', 'POST', { login, purpose });
-                    onNotice('Если аккаунт подходит для операции, код отправлен.');
+                    onNotice(IDP_MAIL_COPY);
                   }
                 } else {
                   const r = await api('/login', 'POST', { login, password });
@@ -219,7 +222,12 @@ export function LoginScreen({
                 </label>
                 <label>
                   Код из письма
-                  <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Для получения кода оставьте пустым" />
+                  <input
+                    inputMode="numeric"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder="Для получения кода оставьте пустым"
+                  />
                 </label>
               </>
             )}
@@ -236,13 +244,7 @@ export function LoginScreen({
               </label>
             )}
             <button className="primary full" disabled={busy}>
-              {localRecover
-                ? code
-                  ? 'Подтвердить'
-                  : 'Получить код'
-                : cutover
-                  ? 'Аварийный вход'
-                  : 'Войти в кабинет'}
+              {localRecover ? (code ? 'Подтвердить' : 'Получить код') : cutover ? 'Аварийный вход' : 'Войти'}
             </button>
           </form>
         )}
@@ -255,24 +257,15 @@ export function LoginScreen({
               onNotice('');
             }}
           >
-            {recover ? 'Вернуться ко входу' : 'Забыли пароль или нужно подтвердить почту?'}
+            {recover ? 'Вернуться ко входу' : 'Забыли пароль?'}
           </button>
         )}
         {error && <p role="alert" className="error">{error}</p>}
-        {notice && <p role="status" className="notice">{notice}</p>}
-        <div className="access-request fine">
-          <p>Нет доступа в CRM?</p>
-          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
-            {ACCESS_REQUEST.label}
-          </a>
-          <p>
-            Администратор выдаёт staff в{' '}
-            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
-              CMS → Администраторы
-            </a>
-            {' '}(provision CRM + Signal).
+        {notice && (
+          <p role="status" className="notice">
+            {notice}
           </p>
-        </div>
+        )}
       </section>
     </main>
   );

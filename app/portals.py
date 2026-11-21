@@ -224,18 +224,22 @@ def mail_status() -> dict:
 
 
 def sales_runbook() -> dict:
-    """Honest sandbox vs live gates for CRM HQ (FUNC-L2). Never a flip control.
+    """Honest sandbox vs live gates for CRM HQ (FUNC-L2 + Q11=C). Never a flip control.
 
-    Q6 = B: Robokassa live and production marketing stay OFF; UI only reports.
+    Q11=C: production mail may be live; Robokassa stays sandbox. Mass marketing still OFF.
+    UI only reports — never sets ROBOKASSA_LIVE_READY or Signal mass-send flags.
     """
     rk = robokassa_status()
+    mail = mail_status()
     test_mode = rk["mode"] == "test"
     live_ready = bool(rk["live_ready"])
-    # Company defaults + Signal production path are intentionally never flipped here.
+    # Company defaults + Signal mass-marketing path are intentionally never flipped here.
     production_marketing_on = False
+    # Q11=C: transactional/consented mail may use production SMTP (Mailu) when configured.
+    production_mail_on = bool(mail.get("smtp_configured"))
     signal_url = signal_public_base()
     return {
-        "policy": "Q6: sandbox only — live money / production marketing off",
+        "policy": "Q11=C: production mail live; Robokassa sandbox — mass marketing still off",
         "can_enable_live_from_ui": False,
         "gates": {
             "robokassa_live": {
@@ -247,14 +251,24 @@ def sales_runbook() -> dict:
                 "summary": (
                     "Боевой режим Robokassa (LIVE_READY=1)"
                     if live_ready and not test_mode
-                    else "Robokassa live OFF — sandbox/test; LIVE_READY не включён из UI"
+                    else "Robokassa live OFF — sandbox/test; LIVE_READY не включён из UI (Q11=C)"
+                ),
+            },
+            "production_mail": {
+                "id": "production_mail",
+                "on": production_mail_on,
+                "flag": "SMTP_HOST / SMTP_FROM (Mailu)",
+                "summary": (
+                    "Production mail ON — SMTP/Mailu настроен; consented/transactional send path live (Q11=C)"
+                    if production_mail_on
+                    else "Production mail — SMTP ещё не настроен (SMTP_HOST/FROM)"
                 ),
             },
             "production_marketing": {
                 "id": "production_marketing",
                 "on": production_marketing_on,
                 "flag": "SIGNAL_ALLOW_PRODUCTION_SEND / allow_production_send",
-                "summary": "Production marketing OFF — dry-run / consent-only; массовая отправка не включается",
+                "summary": "Mass production marketing OFF — не путать с live transactional mail (Q11=C)",
             },
             "sandbox_payments": {
                 "id": "sandbox_payments",
@@ -267,8 +281,8 @@ def sales_runbook() -> dict:
             },
         },
         "next_steps": [
-            "Sandbox: заказ → Payment → AccessGrant → LMS / Signal course.access_granted.",
-            "Письма и наборы — в SIGNAL (dry-run); production send не включать без owner window.",
+            "Sandbox pay: заказ → Payment → AccessGrant → LMS / Signal course.access_granted.",
+            "Mail live (Q11=C): transactional / consented письма через Mailu/SMTP — не массовый marketing flip.",
             "Курс ученика — LMS / OpenOlat; касса в LMS отсутствует намеренно.",
             "Live Robokassa — только после фискализации + staging + письменного решения владельца (не из этого UI).",
         ],
@@ -280,6 +294,7 @@ def sales_runbook() -> dict:
             "lms": lms_open_course_href(),
             "ops": voronka_public_base() + "/ops/",
             "today": PORTAL_URLS["crm"] + "/crm/#today",
+            "webmail": MAILU_WEBMAIL_URL,
         },
         "secrets_exposed": False,
     }

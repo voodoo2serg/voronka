@@ -3,7 +3,7 @@
 import { PORTAL_URLS } from '../portals';
 import type { Row } from '../types';
 
-/** Honest sandbox vs live gates — never a flip control for live money / marketing. */
+/** Honest sandbox vs live gates — never a flip control for live money / mass marketing. */
 export function SalesRunbookPanel({
   data,
   compact = false,
@@ -21,6 +21,7 @@ export function SalesRunbookPanel({
 
   const gates = (data.gates || {}) as Row;
   const rk = (gates.robokassa_live || {}) as Row;
+  const mail = (gates.production_mail || {}) as Row;
   const mkt = (gates.production_marketing || {}) as Row;
   const sandbox = (gates.sandbox_payments || {}) as Row;
   const links = (data.links || {}) as Row;
@@ -29,11 +30,12 @@ export function SalesRunbookPanel({
   return (
     <section className={`panel sales-runbook${compact ? ' compact-runbook' : ''}`} aria-label="Sales runbook">
       <div className="panel-title">
-        <h2>Sales runbook · sandbox vs live</h2>
-        <span className="badge">{data.policy || 'Q6: sandbox only'}</span>
+        <h2>Sales runbook · mail live / pay sandbox</h2>
+        <span className="badge">{data.policy || 'Q11=C: mail live; Robokassa sandbox'}</span>
       </div>
       <p className="muted">
-        Честные ворота продаж. Live-деньги и production-маркетинг из UI не включаются.
+        Честные ворота: mail может быть live (Q11=C), Robokassa — sandbox. Live-деньги и mass marketing из UI не
+        включаются.
       </p>
       <ul className="checklist runbook-gates">
         <li>
@@ -44,9 +46,16 @@ export function SalesRunbookPanel({
           </div>
         </li>
         <li>
+          <span className={mail.on ? 'badge good' : 'badge'}>{mail.on ? 'ON' : 'OFF'}</span>
+          <div>
+            <b>Production mail</b>
+            <small>{String(mail.summary || 'SMTP/Mailu transactional path')}</small>
+          </div>
+        </li>
+        <li>
           <span className={mkt.on ? 'badge warn' : 'badge good'}>{mkt.on ? 'ON' : 'OFF'}</span>
           <div>
-            <b>Production marketing</b>
+            <b>Mass marketing</b>
             <small>{String(mkt.summary || 'Массовая production-отправка выключена')}</small>
           </div>
         </li>
@@ -83,7 +92,8 @@ export function SalesRunbookPanel({
         </a>
       </div>
       <p className="fine">
-        UI не выставляет <code>ROBOKASSA_LIVE_READY</code> и не включает production marketing.
+        UI не выставляет <code>ROBOKASSA_LIVE_READY</code> и не включает mass production marketing. Mail live ≠ live
+        money.
       </p>
     </section>
   );
