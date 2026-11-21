@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — ARCH-L4 history writeback ensure-on-ingest
+
+- CJ-108 `POST …/communications/ingest` creates a thin Person+Profile+ContactPoint
+  (`source=signal_ce`) when email is unknown in the project — stops Signal
+  `voronka_history_jobs` `ingest_failed` (HTTP 404) on welcome / sandbox CE.
+- Docs: `DATA_BOUNDARIES.md`, `M2M_COMMUNICATIONS_OPENAPI.yaml`.
+- Tests: missing-email ensure path in `tests/test_wave_c_customer_graph.py`.
+
 ## Unreleased — Lift-to-8 W3 ARCH-L2 Person↔OIDC
 
 - Staff SSO callback attaches `crm_oidc_links.person_id` + `PersonLink(keycloak, sub)` on first green login (no empty Person).

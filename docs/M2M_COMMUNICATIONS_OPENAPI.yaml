@@ -94,6 +94,8 @@ paths:
         Upserts Communication (by communication_key), DeliveryEvent + Interaction
         (by external_event_key). body_preview ≤500 plain text only — no HTML/email bodies.
         Resolve person via person_id or project-scoped email (ambiguous → 422).
+        Missing email creates a thin Person+Profile+ContactPoint (source=signal_ce)
+        so welcome writeback does not 404 (ARCH-L4).
       x-required-scopes: [timeline:write]
   /api/crm/m2m/projects/{pid}/send-policy/check:
     post:

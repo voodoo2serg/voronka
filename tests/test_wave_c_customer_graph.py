@@ -437,6 +437,39 @@ def test_m2m_communications_ingest_idempotent_and_no_html(crm, monkeypatch):
     assert body["person_id"] == person["person_id"]
     cid = body["communication_id"]
 
+    # ARCH-L4: unknown email must ensure thin Person (not 404 ingest_failed).
+    ensured = post(
+        {
+            "email": "cj108-new@example.ru",
+            "status": "queued",
+            "external_event_key": "ce:voronka:evt-ensure:queued",
+            "body_preview": "Welcome ensure",
+            "kind": "identity.email_verified",
+            "purpose": "transactional",
+        }
+    )
+    assert ensured.status_code == 200, ensured.text
+    ensured_body = ensured.json()
+    assert ensured_body["duplicate"] is False
+    assert ensured_body["person_id"]
+    assert ensured_body["person_id"] != person["person_id"]
+    with crm.db() as db:
+        from app.crm_models import Person, Profile
+
+        new_person = db.get(Person, ensured_body["person_id"])
+        assert new_person is not None
+        profiles = list(
+            db.scalars(
+                select(Profile).where(
+                    Profile.person_id == ensured_body["person_id"],
+                    Profile.project_id == "p",
+                )
+            )
+        )
+        assert len(profiles) == 1
+        assert profiles[0].source == "signal_ce"
+        assert profiles[0].email == "cj108-new@example.ru"
+
     replay = post(
         {
             "email": "cj108@example.ru",
