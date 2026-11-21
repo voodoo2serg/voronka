@@ -38,7 +38,8 @@ def test_browser_login_create_contact_deal_and_import(crm,width):
         page.goto('http://crm.test/crm/')
         page.get_by_label('Логин',exact=True).fill('owner')
         page.get_by_label('Пароль',exact=True).fill('owner-password-123')
-        page.get_by_role('button',name='Войти в кабинет',exact=True).click()
+        # AUTH-M2: guest CTA is short «Войти» (prefs RU login/register/forgot).
+        page.get_by_role('button',name='Войти',exact=True).click()
         expect(page.get_by_role('heading',name='Обзор',exact=True)).to_be_visible()
         # On mobile the sidebar labels are visually compact but remain accessible.
         page.get_by_role('button',name='Клиенты',exact=False).first.click()
