@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from app import auth
+from app import person_graph
 from app.crm_deps import Session, set_session_cookie
 from app.crm_models import Account, OidcLink
 from app.crm_oidc_cutover import cutover_enabled, status_payload
@@ -85,6 +86,21 @@ def _forgot_credentials_endpoint(authorization_endpoint: str) -> str:
     return authorization_endpoint.rstrip("/") + "/forgot-credentials"
 
 
+def _coverage_or_empty() -> dict:
+    """Status must stay 200 even in empty/test DBs without Wave C tables."""
+    empty = {
+        "oidc_links_linked": 0,
+        "links_with_person": 0,
+        "links_missing_person": 0,
+        "persons_with_oidc": 0,
+    }
+    try:
+        with Session() as db:
+            return person_graph.oidc_person_coverage(db)
+    except Exception:
+        return empty
+
+
 @router.get("/status")
 def status():
     try:
@@ -92,7 +108,15 @@ def status():
         enabled = True
     except HTTPException:
         enabled = False
-    return status_payload(enabled)
+    payload = status_payload(enabled)
+    payload["coverage"] = _coverage_or_empty()
+    return payload
+
+
+@router.get("/coverage")
+def coverage():
+    """ARCH-L2 metric: issuer+sub links that already have a Person."""
+    return _coverage_or_empty()
 
 
 @router.get("/login")
@@ -230,6 +254,10 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
                     return _access_denied_redirect(return_to, "denied")
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(503, "Не удалось проверить разрешение CRM") from exc
+    email_claim = identity.get("email")
+    email_hint = email_claim if isinstance(email_claim, str) else ""
+    name_claim = identity.get("name") or identity.get("preferred_username")
+    display_name = name_claim if isinstance(name_claim, str) else ""
     with Session.begin() as db:
         link = db.scalar(select(OidcLink).where(
             OidcLink.issuer == issuer, OidcLink.subject == sub,
@@ -240,11 +268,23 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
         admin = db.get(Admin, account.admin_id) if account else None
         if not admin or not admin.active or admin.role not in {"owner", "editor", "manager"}:
             return _access_denied_redirect(return_to, "need_staff")
-        # Email claim never elevates role or creates a second owner.
+        # ARCH-L2: green SSO must attach Person (issuer+sub). Email never elevates ACL.
+        person, attached = person_graph.ensure_person_for_oidc_link(
+            db,
+            link,
+            display_name=display_name or account.login or "",
+            email_hint=email_hint or account.email or "",
+        )
         audit(
             db, admin, "oidc.login",
-            issuer=issuer, subject=sub, account_id=account.id, cutover=cutover_enabled(),
+            issuer=issuer, subject=sub, account_id=account.id,
+            person_id=person.id, person_attached=attached, cutover=cutover_enabled(),
         )
+        if attached:
+            audit(
+                db, admin, "oidc.person_ensured",
+                issuer=issuer, subject=sub, account_id=account.id, person_id=person.id,
+            )
         session = auth.issue_session(admin.telegram_id)
     response = RedirectResponse(return_to, status_code=303)
     set_session_cookie(response, session)

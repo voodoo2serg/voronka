@@ -26,6 +26,7 @@ DEFAULT_SCOPES = (
     "connection:hub:read",
     # Wave C additive (Signal Wave D may request these; existing scopes unchanged)
     "person:read",
+    "person:write",  # ARCH-L2: ensure Person↔OIDC on first learner/product SSO
     "timeline:read",
     "timeline:write",  # CJ-108: Signal CE → Voronka Communication/DeliveryEvent ingest
     "consent:write",

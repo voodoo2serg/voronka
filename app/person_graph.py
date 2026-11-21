@@ -44,13 +44,29 @@ def resolve_person(person: Person | None) -> Person | None:
     return person
 
 
+KEYCLOAK_PERSON_LINK_SERVICE = "keycloak"
+
+
+def resolve_merged_person(db, person: Person | None) -> Person | None:
+    """Follow merged_into_id chain; stop on missing/cycle."""
+    if person is None:
+        return None
+    seen: set[str] = set()
+    while person.merged_into_id and person.id not in seen:
+        seen.add(person.id)
+        nxt = db.get(Person, person.merged_into_id)
+        if nxt is None:
+            break
+        person = nxt
+    return person
+
+
 def ensure_person_for_contact(db, contact: Contact, display_name: str = "") -> Person:
     """Create or return Person bound to a funnel Contact (CRM-001)."""
     if contact.person_id:
         person = db.get(Person, contact.person_id)
         if person:
-            if person.merged_into_id:
-                person = db.get(Person, person.merged_into_id) or person
+            person = resolve_merged_person(db, person) or person
             return person
     person = Person(
         id=uid(),
@@ -74,6 +90,196 @@ def ensure_person_for_contact(db, contact: Contact, display_name: str = "") -> P
     db.add(link)
     db.flush()
     return person
+
+
+def _ensure_keycloak_person_link(db, person: Person, subject: str) -> PersonLink:
+    """Bind Person ↔ Keycloak sub via PersonLink. Never steals another Person's sub."""
+    row = db.scalar(
+        select(PersonLink).where(
+            PersonLink.service == KEYCLOAK_PERSON_LINK_SERVICE,
+            PersonLink.native_id == subject,
+        )
+    )
+    if row:
+        return row
+    row = PersonLink(
+        id=uid(),
+        person_id=person.id,
+        service=KEYCLOAK_PERSON_LINK_SERVICE,
+        native_id=subject,
+        verified_by="oidc",
+        created_at=now(),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def ensure_person_for_oidc_link(
+    db,
+    link,
+    *,
+    display_name: str = "",
+    email_hint: str = "",
+) -> tuple[Person, bool]:
+    """Attach Person to crm_oidc_links on first successful SSO (ARCH-L2).
+
+    Returns (person, attached_now). Never creates Account/Admin. Email is ContactPoint
+    hint only — never merges Persons or elevates ACL by email match.
+    """
+    attached_now = False
+    person: Person | None = None
+
+    if link.person_id:
+        person = resolve_merged_person(db, db.get(Person, link.person_id))
+        if person and person.id != link.person_id:
+            link.person_id = person.id
+            link.updated_at = now()
+            attached_now = True
+
+    if person is None and link.profile_id:
+        profile = db.get(Profile, link.profile_id)
+        if profile is not None:
+            person = ensure_person_for_profile(db, profile)
+            attached_now = True
+
+    if person is None and link.contact_id:
+        contact = db.get(Contact, link.contact_id)
+        if contact is not None:
+            person = ensure_person_for_contact(db, contact, display_name)
+            attached_now = True
+
+    if person is None:
+        existing_pl = db.scalar(
+            select(PersonLink).where(
+                PersonLink.service == KEYCLOAK_PERSON_LINK_SERVICE,
+                PersonLink.native_id == link.subject,
+            )
+        )
+        if existing_pl:
+            person = resolve_merged_person(db, db.get(Person, existing_pl.person_id))
+
+    if person is None:
+        person = Person(
+            id=uid(),
+            display_name=(display_name or "").strip(),
+            lifecycle_stage="active",
+            extra={"oidc_issuer": link.issuer},
+            created_at=now(),
+            updated_at=now(),
+        )
+        db.add(person)
+        db.flush()
+        attached_now = True
+
+    if display_name and not person.display_name:
+        person.display_name = display_name.strip()
+        person.updated_at = now()
+
+    if link.person_id != person.id:
+        link.person_id = person.id
+        link.updated_at = now()
+        attached_now = True
+    if email_hint and not link.email_hint:
+        link.email_hint = email_hint
+        link.updated_at = now()
+
+    pl = _ensure_keycloak_person_link(db, person, link.subject)
+    # Prefer Person already claimed by this Keycloak sub (unique PersonLink).
+    if pl.person_id != person.id:
+        claimed = resolve_merged_person(db, db.get(Person, pl.person_id))
+        if claimed is not None:
+            person = claimed
+            link.person_id = person.id
+            link.updated_at = now()
+
+    if email_hint:
+        upsert_contact_point(db, person, channel="email", value=email_hint, verified=False)
+
+    db.flush()
+    return person, attached_now
+
+
+def ensure_oidc_person(
+    db,
+    *,
+    issuer: str,
+    subject: str,
+    display_name: str = "",
+    email_hint: str = "",
+    account_id: str | None = None,
+    contact_id: str | None = None,
+    profile_id: str | None = None,
+):
+    """Find/create OidcLink and ensure Person (staff callback + learner M2M).
+
+    Never creates Account. May attach account_id only when the link has none yet.
+    """
+    from app.crm_models import OidcLink
+
+    issuer = (issuer or "").rstrip("/")
+    subject = (subject or "").strip()
+    if not issuer.endswith("/realms/solo-pr"):
+        raise HTTPException(422, "issuer must be solo-pr realm")
+    if not subject or "@" in subject or len(subject) > 250:
+        raise HTTPException(422, "subject must be Keycloak user id, not email")
+
+    link = db.scalar(select(OidcLink).where(OidcLink.issuer == issuer, OidcLink.subject == subject))
+    link_created = False
+    if link is None:
+        link = OidcLink(
+            id=uid(),
+            issuer=issuer,
+            subject=subject,
+            account_id=account_id,
+            contact_id=contact_id,
+            profile_id=profile_id,
+            provisioning_status="linked",
+            email_hint=email_hint or "",
+            created_at=now(),
+            updated_at=now(),
+        )
+        db.add(link)
+        db.flush()
+        link_created = True
+    else:
+        if link.provisioning_status == "conflict":
+            raise HTTPException(409, "OIDC subject в состоянии conflict")
+        if link.provisioning_status == "revoked":
+            link.provisioning_status = "linked"
+            link.updated_at = now()
+        if account_id and link.account_id and link.account_id != account_id:
+            raise HTTPException(409, "OIDC subject уже привязан к другому account")
+        if account_id and not link.account_id:
+            link.account_id = account_id
+        if contact_id and not link.contact_id:
+            link.contact_id = contact_id
+        if profile_id and not link.profile_id:
+            link.profile_id = profile_id
+
+    person, attached = ensure_person_for_oidc_link(
+        db,
+        link,
+        display_name=display_name,
+        email_hint=email_hint or link.email_hint or "",
+    )
+    return link, person, link_created or attached
+
+
+def oidc_person_coverage(db) -> dict:
+    """Metric for ARCH-L2 DoD: persons_with_oidc grows as SSO links attach Person."""
+    from app.crm_models import OidcLink
+
+    linked = list(
+        db.scalars(select(OidcLink).where(OidcLink.provisioning_status == "linked"))
+    )
+    with_person = [row for row in linked if row.person_id]
+    return {
+        "oidc_links_linked": len(linked),
+        "links_with_person": len(with_person),
+        "links_missing_person": len(linked) - len(with_person),
+        "persons_with_oidc": len({row.person_id for row in with_person}),
+    }
 
 
 def ensure_person_for_profile(db, profile: Profile) -> Person:

@@ -12,6 +12,7 @@ import os
 from sqlalchemy import select
 
 from app import auth
+from app import person_graph
 from app.crm_models import Account, OidcLink
 from app.crm_service import uid
 from app.db import Admin, Session, now
@@ -101,22 +102,37 @@ def apply_link(args: argparse.Namespace) -> None:
             prior.email_hint = args.email_hint or prior.email_hint
             prior.provisioning_status = "linked"
             prior.updated_at = now()
-            print(f"apply_ok updated link_id={prior.id} role={admin.role}")
-            return
-        row = OidcLink(
-            id=uid(),
-            issuer=args.issuer,
-            subject=args.subject,
-            account_id=args.account_id,
-            person_id=args.person_id or None,
-            provisioning_status="linked",
-            email_hint=args.email_hint,
-            created_at=now(),
-            updated_at=now(),
+            row = prior
+        else:
+            row = OidcLink(
+                id=uid(),
+                issuer=args.issuer,
+                subject=args.subject,
+                account_id=args.account_id,
+                person_id=args.person_id or None,
+                provisioning_status="linked",
+                email_hint=args.email_hint,
+                created_at=now(),
+                updated_at=now(),
+            )
+            db.add(row)
+            db.flush()
+        # ARCH-L2: staff link always gets a Person (explicit --person-id or auto-ensure).
+        person, attached = person_graph.ensure_person_for_oidc_link(
+            db,
+            row,
+            display_name=account.login or "",
+            email_hint=args.email_hint or account.email or "",
         )
-        db.add(row)
-        db.flush()
-        print(f"apply_ok created link_id={row.id} role={admin.role}")
+        print(
+            f"apply_ok link_id={row.id} role={admin.role} "
+            f"person_id={person.id} person_attached={attached}"
+        )
+        cov = person_graph.oidc_person_coverage(db)
+        print(
+            f"coverage persons_with_oidc={cov['persons_with_oidc']} "
+            f"links_missing_person={cov['links_missing_person']}"
+        )
 
 
 def main() -> None:

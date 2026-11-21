@@ -22,3 +22,16 @@ Verified `issuer` + `sub` maps only through `crm_oidc_links` to an **existing** 
 - Exactly one CRM `owner`; never create a second via OIDC or email match.
 - Legacy `crm_session` cookies keep working (keyed by `telegram_id`); revoke on staff disable / OIDC link revoke.
 - MFA deferred to AUTH-210.
+
+## ARCH-L2 — Person on first SSO
+
+Green Keycloak SSO must leave a Voronka `Person` on `crm_oidc_links.person_id` (no empty Person after linked staff login).
+
+| Path | Behavior |
+|------|----------|
+| Staff callback `/api/crm/oidc/callback` | After verified linked Account, `ensure_person_for_oidc_link` attaches Person + `PersonLink(service=keycloak, native_id=sub)` |
+| Learner/product M2M `POST /api/crm/m2m/oidc-person` | Scope `person:write`; creates/ensures OidcLink+Person; **never** invents Account |
+| Ops backfill | `python -m scripts.backfill_oidc_persons` (dry-run) / `--apply` |
+| Metric | `GET /api/crm/oidc/coverage` and `coverage` on `/api/crm/oidc/status` → `persons_with_oidc` |
+
+Email claim / hint is ContactPoint only — never merges Persons or elevates ACL. Q5=C: RAGA billing stays out of Voronka.

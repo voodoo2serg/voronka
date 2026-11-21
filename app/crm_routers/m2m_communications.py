@@ -861,6 +861,69 @@ async def m2m_delivery(
 # --- Wave C additive M2M (existing campaign/asset/hub contracts unchanged) ---
 
 
+class OidcPersonEnsureBody(Body):
+    """ARCH-L2 learner/product path: verified issuer+sub → Person (no Account invent)."""
+
+    issuer: str = Field(min_length=8, max_length=250)
+    subject: str = Field(min_length=1, max_length=250)
+    display_name: str = Field(default="", max_length=200)
+    email_hint: str = Field(default="", max_length=250)
+    contact_id: str | None = None
+    profile_id: str | None = None
+
+
+@router.post("/oidc-person")
+def m2m_ensure_oidc_person(
+    request: Request,
+    auth_ctx=Depends(make_m2m_dep("person:write")),
+):
+    """Ensure Voronka Person for a Keycloak issuer+sub after green product SSO.
+
+    Creates crm_oidc_links + Person when missing. Never creates CRM Account/Admin
+    and never merges Persons by email (Q5=C / AUTH-203 invariants).
+    """
+    from app import person_graph as graph
+    from app.crm_models import OidcLink
+
+    body_raw, principal = auth_ctx
+    try:
+        payload = OidcPersonEnsureBody.model_validate_json(body_raw)
+    except Exception as exc:
+        raise HTTPException(422, "Некорректное тело oidc-person") from exc
+    with Session.begin() as db:
+        link, person, changed = graph.ensure_oidc_person(
+            db,
+            issuer=payload.issuer,
+            subject=payload.subject,
+            display_name=payload.display_name,
+            email_hint=payload.email_hint,
+            contact_id=payload.contact_id,
+            profile_id=payload.profile_id,
+        )
+        coverage = graph.oidc_person_coverage(db)
+        _m2m_audit(
+            db,
+            principal,
+            "oidc.person_ensured",
+            oidc_link_id=link.id,
+            person_id=person.id,
+            changed=changed,
+            issuer=link.issuer,
+            subject=link.subject,
+        )
+        return {
+            "person_id": person.id,
+            "oidc_link_id": link.id,
+            "issuer": link.issuer,
+            "subject": link.subject,
+            "account_id": link.account_id,
+            "changed": changed,
+            "provisioning_status": link.provisioning_status,
+            "coverage": coverage,
+            "link_table": OidcLink.__tablename__,
+        }
+
+
 @router.get("/projects/{pid}/persons/{person_id}")
 def m2m_person(
     pid: str,

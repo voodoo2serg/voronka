@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Lift-to-8 W3 ARCH-L2 Person↔OIDC
+
+- Staff SSO callback attaches `crm_oidc_links.person_id` + `PersonLink(keycloak, sub)` on first green login (no empty Person).
+- Learner/product M2M: `POST /api/crm/m2m/oidc-person` (`person:write`) ensures issuer+sub → Person without inventing Account.
+- Coverage metric: `GET /api/crm/oidc/coverage` (+ `coverage` on `/oidc/status`); backfill `scripts/backfill_oidc_persons.py`.
+- Email hint never merges Persons or elevates ACL. Q5=C: no RAGA billing merge.
+- Tests: `tests/test_person_oidc.py`.
+
 ## Unreleased — Lift-to-8 W2 CRM FUNC-L1 + FUNC-L3
 
 - FUNC-L1: `GET /api/crm/projects/{pid}/work-today` + overview «Работа сегодня» contour (lead → touch → pay → access → course → mail) with deep-links to Person / Signal / LMS.
