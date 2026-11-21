@@ -179,3 +179,63 @@ def mail_status() -> dict:
         "domain_note": "Mailu сейчас на vodopetov.ru; solo-pr.ru как Mailu-домен — отдельный ops-шаг, не блокер UI.",
         "secrets_exposed": False,
     }
+
+
+def sales_runbook() -> dict:
+    """Honest sandbox vs live gates for CRM HQ (FUNC-L2). Never a flip control.
+
+    Q6 = B: Robokassa live and production marketing stay OFF; UI only reports.
+    """
+    rk = robokassa_status()
+    test_mode = rk["mode"] == "test"
+    live_ready = bool(rk["live_ready"])
+    # Company defaults + Signal production path are intentionally never flipped here.
+    production_marketing_on = False
+    signal_url = os.getenv("SIGNAL_PUBLIC_URL", "https://signal.vodopetov.ru").rstrip("/")
+    return {
+        "policy": "Q6: sandbox only — live money / production marketing off",
+        "can_enable_live_from_ui": False,
+        "gates": {
+            "robokassa_live": {
+                "id": "robokassa_live",
+                "on": live_ready and not test_mode,
+                "flag": "ROBOKASSA_LIVE_READY",
+                "mode": rk["mode"],
+                "live_ready": live_ready,
+                "summary": (
+                    "Боевой режим Robokassa (LIVE_READY=1)"
+                    if live_ready and not test_mode
+                    else "Robokassa live OFF — sandbox/test; LIVE_READY не включён из UI"
+                ),
+            },
+            "production_marketing": {
+                "id": "production_marketing",
+                "on": production_marketing_on,
+                "flag": "SIGNAL_ALLOW_PRODUCTION_SEND / allow_production_send",
+                "summary": "Production marketing OFF — dry-run / consent-only; массовая отправка не включается",
+            },
+            "sandbox_payments": {
+                "id": "sandbox_payments",
+                "on": test_mode or rk["ready"],
+                "summary": (
+                    "Sandbox payments OK (ROBOKASSA_TEST=1 / тестовые пароли)"
+                    if test_mode
+                    else "Текущий режим Robokassa: live credentials path (флаг live всё равно gated)"
+                ),
+            },
+        },
+        "next_steps": [
+            "Sandbox: заказ → Payment → AccessGrant → LMS / Signal course.access_granted.",
+            "Письма и наборы — в SIGNAL (dry-run); production send не включать без owner window.",
+            "Курс ученика — LMS / OpenOlat; касса в LMS отсутствует намеренно.",
+            "Live Robokassa — только после фискализации + staging + письменного решения владельца (не из этого UI).",
+        ],
+        "links": {
+            "payments": PORTAL_URLS["crm"] + "/crm/#payments",
+            "signal": signal_url + "/",
+            "lms": PORTAL_URLS["lms"] + "/",
+            "ops": voronka_public_base() + "/ops/",
+            "today": PORTAL_URLS["crm"] + "/crm/#today",
+        },
+        "secrets_exposed": False,
+    }

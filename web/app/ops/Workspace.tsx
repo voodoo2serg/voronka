@@ -7,6 +7,7 @@ import { sections, sectionHints } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
 import { crmHref, crmTodayHref, miniAppHref } from './portals';
+import { SalesRunbookPanel } from '../crm/sections/SalesRunbookPanel';
 import { AiSection } from './sections/AiSection';
 import { AutomationsSection } from './sections/AutomationsSection';
 import { BotsSection } from './sections/BotsSection';
@@ -37,6 +38,7 @@ export default function Workspace() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [salesRunbook, setSalesRunbook] = useState<Row | null>(null);
 
   const api = createOpsApi(
     () => token,
@@ -112,6 +114,21 @@ export default function Workspace() {
   useEffect(() => {
     if (me && pid) void act(() => load());
   }, [pid, me]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!me) return;
+    let cancelled = false;
+    void api('/api/crm/sales-runbook')
+      .then((row: Row) => {
+        if (!cancelled) setSalesRunbook(row);
+      })
+      .catch(() => {
+        if (!cancelled) setSalesRunbook(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [me]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!ready || !sessionChecked) return <div className="loading">Загрузка…</div>;
   if (!me) {
@@ -236,6 +253,9 @@ export default function Workspace() {
               {notice}
             </p>
           )}
+          <div className="ops-runbook-wrap">
+            <SalesRunbookPanel data={salesRunbook} compact />
+          </div>
           {section === 'bots' && (
             <BotsSection
               hub={hub}

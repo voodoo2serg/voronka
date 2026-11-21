@@ -11,6 +11,7 @@ import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } f
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { PaymentsSection } from './sections/PaymentsSection';
+import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
 import type { FormConfig, Row } from './types';
 import { date, money, names, toMinor } from './utils';
 
@@ -60,6 +61,7 @@ export default function Workspace() {
   const [audiencePreview, setAudiencePreview] = useState<Row | null>(null);
   const [portalLinks, setPortalLinks] = useState<Row[]>([]);
   const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
+  const [salesRunbook, setSalesRunbook] = useState<Row | null>(null);
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
   const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
   const [analytics, setAnalytics] = useState<Row | null>(null);
@@ -167,8 +169,10 @@ export default function Workspace() {
         setMe(m);
         // Project is an optional filter: keep current if still allowed, else first project, else ''.
         setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : m.projects[0]?.id || ''));
-        if (typeof window !== 'undefined' && window.location.hash === '#today') {
-          setSection('tasks');
+        if (typeof window !== 'undefined') {
+          const hash = window.location.hash;
+          if (hash === '#today') setSection('tasks');
+          if (hash === '#payments') setSection('payments');
         }
       } catch {
         setMe(null);
@@ -178,6 +182,21 @@ export default function Workspace() {
       }
     });
   }, [ready, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!me) return;
+    let cancelled = false;
+    void api('/sales-runbook')
+      .then((row: Row) => {
+        if (!cancelled) setSalesRunbook(row);
+      })
+      .catch(() => {
+        if (!cancelled) setSalesRunbook(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [me]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!me) return;
@@ -829,19 +848,20 @@ export default function Workspace() {
                         <div className="empty compact">Нет открытых задач. Назначьте следующий шаг в карточке клиента.</div>
                       )}
                     </section>
-                    <section className="panel">
-                      <h2>Ваши направления</h2>
-                      {kinds.slice(0, 6).map(([kind, label]) => (
-                        <div key={kind} className="direction">
-                          <span>◇</span>
-                          <b>{label}</b>
-                          <small>{products.filter((p) => p.kind === kind).length} в каталоге</small>
-                        </div>
-                      ))}
-                      <button className="link" onClick={() => setSection('products')}>
-                        Перейти к продуктам →
-                      </button>
-                    </section>
+                    <SalesRunbookPanel data={salesRunbook} />
+                  </div>
+                  <div className="panel" style={{ marginTop: 22 }}>
+                    <h2>Ваши направления</h2>
+                    {kinds.slice(0, 6).map(([kind, label]) => (
+                      <div key={kind} className="direction">
+                        <span>◇</span>
+                        <b>{label}</b>
+                        <small>{products.filter((p) => p.kind === kind).length} в каталоге</small>
+                      </div>
+                    ))}
+                    <button className="link" onClick={() => setSection('products')}>
+                      Перейти к продуктам →
+                    </button>
                   </div>
                 </>
               )}

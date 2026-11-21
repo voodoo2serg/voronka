@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ApiFn } from '../types';
-import { PORTAL_URLS } from '../portals';
+import { ACCESS_REQUEST, PORTAL_URLS } from '../portals';
 
 /**
  * OIDC authorize + state cookie must start on the CRM callback host
@@ -18,6 +18,12 @@ const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьт�
 /** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
 const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
+
+const ACCESS_HINTS: Record<string, string> = {
+  need_staff: 'SSO прошёл, но роль ops/CRM ещё не выдана. Запросите доступ.',
+  need_link: 'Аккаунт SIGNAL есть, привязка к Voronka отсутствует. Запросите staff-доступ.',
+  denied: 'Доступ к ops не разрешён. Запросите выдачу в CMS или SIGNAL.',
+};
 
 function opsRecoveryHref(recoveryPath: string): string {
   const absolute = recoveryPath.startsWith('http')
@@ -58,6 +64,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState(CRM_OIDC_RECOVER);
+  const [accessReason, setAccessReason] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
   useEffect(() => {
@@ -90,6 +97,19 @@ export function LoginScreen({
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const codeKey = params.get('crm_access') || '';
+    if (codeKey && ACCESS_HINTS[codeKey]) {
+      setAccessReason(codeKey);
+      params.delete('crm_access');
+      const next = params.toString();
+      const url = window.location.pathname + (next ? `?${next}` : '') + window.location.hash;
+      window.history.replaceState({}, '', url);
+    }
+  }, []);
+
   function onBrandmarkGesture() {
     if (!(cutover && ssoEnabled) || showLocal) return;
     const now = Date.now();
@@ -100,6 +120,49 @@ export function LoginScreen({
       glassClicks.current = { n: 0, t: 0 };
       setShowLocal(true);
     }
+  }
+
+  const noAccess = Boolean(accessReason && ACCESS_HINTS[accessReason]);
+
+  if (noAccess) {
+    return (
+      <main className="login-screen">
+        <section className="login-card access-denied-card" aria-labelledby="ops-no-access-title">
+          <div className="brandmark" role="presentation">
+            В
+          </div>
+          <p className="eyebrow">СОЛО-PR / VORONKA</p>
+          <h1 id="ops-no-access-title">Нет доступа</h1>
+          <p className="muted" role="status">
+            {ACCESS_HINTS[accessReason]}
+          </p>
+          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
+            {ACCESS_REQUEST.label}
+          </a>
+          <p className="fine">
+            Администратор выдаёт staff в{' '}
+            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
+              CMS → Администраторы
+            </a>
+            . Ops — только owner/editor.
+          </p>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              setAccessReason('');
+              onError('');
+              onNotice('');
+            }}
+          >
+            Вернуться ко входу
+          </button>
+          <a className="link" href={CRM_OIDC_LOGIN}>
+            Повторить вход через SIGNAL
+          </a>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -168,8 +231,14 @@ export function LoginScreen({
           </form>
         )}
         {error && <p role="alert" className="error">{error}</p>}
-        {notice && <p role="status" className="notice">{notice}</p>}
-        <p className="fine">Менеджеры продаж работают в CRM; ops — owner/editor.</p>
+        {notice && <p role="status" className="notice banner">{notice}</p>}
+        <div className="access-request fine">
+          <p>Нет доступа в ops?</p>
+          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
+            {ACCESS_REQUEST.label}
+          </a>
+          <p className="fine">Менеджеры продаж работают в CRM; ops — owner/editor.</p>
+        </div>
       </section>
     </main>
   );
