@@ -53,6 +53,16 @@ def sales_runbook(admin=Depends(crm_actor)):
     return portals.sales_runbook()
 
 
+@router.get("/projects/{pid}/work-today")
+def work_today(pid: str, limit: int = 40, admin=Depends(crm_actor)):
+    """FUNC-L1: one sales contour for CRM HQ «Работа сегодня»."""
+    from app.work_today import work_today_for_project
+
+    with Session() as db:
+        project_access(db, admin, pid)
+        return work_today_for_project(db, admin, pid, limit=limit)
+
+
 @router.get("/projects/{pid}/payment-providers")
 def payment_providers(pid: str, request: Request, admin=Depends(crm_actor)):
     with Session() as db:

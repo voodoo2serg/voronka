@@ -29,7 +29,7 @@ export function crmHref(): string {
   return '/crm/';
 }
 
-/** CRM «работа сегодня» landing (tasks) for ops chrome CTA. */
+/** CRM «работа сегодня» landing (sales contour on overview) for ops chrome CTA. */
 export function crmTodayHref(): string {
   return crmHref().replace(/\/?$/, '/') + '#today';
 }

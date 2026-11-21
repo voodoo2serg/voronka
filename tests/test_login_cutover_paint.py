@@ -55,6 +55,9 @@ def test_crm_empty_state_not_project_wall():
     assert "empty-world" in src
     assert "Работа сегодня" in src
     assert "goToday" in src
+    assert "WorkTodayPanel" in src
+    assert "work-today" in src or "/work-today" in src
+    assert "SignalPersonActions" in src
     assert "Запросить доступ" in src or "ACCESS_REQUEST" in src
     assert "SalesRunbookPanel" in src
     assert "sales-runbook" in src or "/sales-runbook" in src

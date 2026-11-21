@@ -55,6 +55,39 @@ def voronka_public_base() -> str:
     return (os.getenv("VORONKA_PUBLIC_URL") or PORTAL_URLS["voronka"]).rstrip("/")
 
 
+def signal_public_base() -> str:
+    return (os.getenv("SIGNAL_PUBLIC_URL") or "https://signal.vodopetov.ru").rstrip("/")
+
+
+def signal_href(
+    *,
+    view: str | None = None,
+    doc: str | None = None,
+    person: str | None = None,
+    brand: str | None = None,
+    set_id: str | None = None,
+) -> str:
+    """Deep-link into Signal studio without pasting UUID into a form.
+
+    FUNC-L3: CRM opens CE (campaigns/регламенты) or message-sets with optional
+    person/brand/set query so operators never copy Person UUID by hand.
+    Signal may ignore unknown params until it reads them — view is always valid.
+    """
+    q: list[str] = []
+    if view:
+        q.append(f"view={view}")
+    if doc:
+        q.append(f"doc={doc}")
+    if person:
+        q.append(f"person={person}")
+    if brand:
+        q.append(f"brand={brand}")
+    if set_id:
+        q.append(f"set={set_id}")
+    base = signal_public_base() + "/"
+    return base + (("?" + "&".join(q)) if q else "")
+
+
 def portal_chrome(role: str | None = None) -> list[dict]:
     """Cross-links for CRM chrome. Zone ACL SoR is CMS; CRM shows links for staff with CRM access."""
     # Managers stay in CRM money/clients; still can open CMS matrix (read) and LMS RO when ready.
@@ -191,7 +224,7 @@ def sales_runbook() -> dict:
     live_ready = bool(rk["live_ready"])
     # Company defaults + Signal production path are intentionally never flipped here.
     production_marketing_on = False
-    signal_url = os.getenv("SIGNAL_PUBLIC_URL", "https://signal.vodopetov.ru").rstrip("/")
+    signal_url = signal_public_base()
     return {
         "policy": "Q6: sandbox only — live money / production marketing off",
         "can_enable_live_from_ui": False,
@@ -233,6 +266,8 @@ def sales_runbook() -> dict:
         "links": {
             "payments": PORTAL_URLS["crm"] + "/crm/#payments",
             "signal": signal_url + "/",
+            "signal_sets": signal_href(view="sets"),
+            "signal_campaigns": signal_href(view="campaigns"),
             "lms": PORTAL_URLS["lms"] + "/",
             "ops": voronka_public_base() + "/ops/",
             "today": PORTAL_URLS["crm"] + "/crm/#today",
