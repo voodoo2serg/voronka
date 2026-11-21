@@ -6,7 +6,8 @@ import secrets
 
 from sqlalchemy import select
 
-from test_crm_oidc import configure, crm, _FakeClient
+from test_operational import system  # noqa: F401 — fixture dependency for crm
+from test_crm_oidc import configure, crm, _FakeClient  # noqa: F401 — crm fixture
 from app.crm_models import Account, OidcLink, Person, PersonLink
 from app.crm_routers import oidc_staff
 from app.db import Event
