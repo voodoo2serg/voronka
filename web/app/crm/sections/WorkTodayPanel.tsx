@@ -1,6 +1,6 @@
 'use client';
 
-import { CONTOUR_STAGES, PORTAL_URLS, signalPersonLinks } from '../portals';
+import { CONTOUR_STAGES, lmsOpenCourseHref, signalPersonLinks } from '../portals';
 import type { Row } from '../types';
 
 type Props = {
@@ -139,15 +139,9 @@ export function WorkTodayPanel({ data, busy, onOpenPerson, onRefresh }: Props) {
               ) : (
                 <span className="fine">нет Person → SIGNAL</span>
               )}
-              {links.lms ? (
-                <a href={String(links.lms)} target="_blank" rel="noreferrer">
-                  LMS
-                </a>
-              ) : (
-                <a href={PORTAL_URLS.lms + '/'} target="_blank" rel="noreferrer">
-                  LMS
-                </a>
-              )}
+              <a href={typeof links.lms === 'string' ? String(links.lms) : lmsOpenCourseHref()} target="_blank" rel="noreferrer">
+                Открыть курс
+              </a>
             </div>
           </article>
         );

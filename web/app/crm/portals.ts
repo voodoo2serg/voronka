@@ -18,6 +18,11 @@ export const ACCESS_REQUEST = {
 
 export const MAILU_WEBMAIL = 'https://mail.vodopetov.ru/webmail/';
 
+/** FUNC-L4: post-grant open-course handoff (lms_end /open → MyCourses). */
+export function lmsOpenCourseHref(): string {
+  return PORTAL_URLS.lms + '/open';
+}
+
 /** FUNC-L1/L3 contour stage labels (lead → mail). */
 export const CONTOUR_STAGES: { id: string; label: string }[] = [
   { id: 'lead', label: 'Лид' },

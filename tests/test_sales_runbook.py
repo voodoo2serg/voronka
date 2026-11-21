@@ -17,6 +17,7 @@ def test_sales_runbook_reports_live_off_by_default(monkeypatch):
     assert book["gates"]["sandbox_payments"]["on"] is True
     assert "signal" in book["links"]
     assert "lms" in book["links"]
+    assert book["links"]["lms"].endswith("/open")
     assert book["secrets_exposed"] is False
 
 
@@ -32,3 +33,4 @@ def test_sales_runbook_endpoint(crm, monkeypatch):
     assert "Q6" in body["policy"] or "sandbox" in body["policy"].lower()
     assert body["links"]["signal"]
     assert body["links"]["lms"]
+    assert body["links"]["lms"].endswith("/open")

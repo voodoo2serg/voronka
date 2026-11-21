@@ -120,6 +120,8 @@ def test_work_today_contour_stages_and_links(crm):
     assert row["links"]["signal_ce"] and "person=" in row["links"]["signal_ce"]
     assert row["links"]["signal_sets"] and "view=sets" in row["links"]["signal_sets"]
     assert row["links"]["lms"]
+    assert row["links"]["lms"].endswith("/open")
+    assert body["links"]["lms"].endswith("/open")
 
 
 def test_work_today_paint_and_signal_actions():
@@ -138,3 +140,5 @@ def test_work_today_paint_and_signal_actions():
     assert "setSection('overview')" in ws
     assert "work-today-contour" in ws
     assert "ROBOKASSA_LIVE_READY" in panel
+    assert "Открыть курс" in panel
+    assert "lmsOpenCourseHref" in portals_ts or "/open" in portals_ts

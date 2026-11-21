@@ -55,6 +55,15 @@ def voronka_public_base() -> str:
     return (os.getenv("VORONKA_PUBLIC_URL") or PORTAL_URLS["voronka"]).rstrip("/")
 
 
+def lms_public_base() -> str:
+    return (os.getenv("LMS_PUBLIC_URL") or PORTAL_URLS["lms"]).rstrip("/")
+
+
+def lms_open_course_href() -> str:
+    """FUNC-L4: CRM → LMS portal handoff «открыть курс» (MyCourses after SSO)."""
+    return lms_public_base() + "/open"
+
+
 def signal_public_base() -> str:
     return (os.getenv("SIGNAL_PUBLIC_URL") or "https://signal.vodopetov.ru").rstrip("/")
 
@@ -95,7 +104,7 @@ def portal_chrome(role: str | None = None) -> list[dict]:
         {"id": "cms", "label": "CMS", "url": PORTAL_URLS["cms"] + "/admin", "zones": ["owner", "editor", "manager"]},
         {"id": "crm", "label": "CRM", "url": PORTAL_URLS["crm"] + "/", "zones": ["owner", "editor", "manager"]},
         {"id": "voronka", "label": "Voronka", "url": PORTAL_URLS["voronka"] + "/ops/", "zones": ["owner", "editor"]},
-        {"id": "lms", "label": "LMS", "url": PORTAL_URLS["lms"] + "/", "zones": ["owner", "editor", "manager"]},
+        {"id": "lms", "label": "Открыть курс", "url": lms_open_course_href(), "zones": ["owner", "editor", "manager"]},
     ]
     if role == "manager":
         return [i for i in items if role in i["zones"]]
@@ -268,7 +277,7 @@ def sales_runbook() -> dict:
             "signal": signal_url + "/",
             "signal_sets": signal_href(view="sets"),
             "signal_campaigns": signal_href(view="campaigns"),
-            "lms": PORTAL_URLS["lms"] + "/",
+            "lms": lms_open_course_href(),
             "ops": voronka_public_base() + "/ops/",
             "today": PORTAL_URLS["crm"] + "/crm/#today",
         },
