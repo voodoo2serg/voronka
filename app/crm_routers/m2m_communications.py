@@ -1208,11 +1208,16 @@ def _resolve_person_for_project(
     *,
     person_id: str | None,
     email: str | None,
+    ensure: bool = False,
 ) -> tuple[str, str | None]:
-    """Return (person_id, contact_point_id). Ambiguous email → 422."""
+    """Return (person_id, contact_point_id). Ambiguous email → 422.
+
+    When ensure=True (CJ-108 / ARCH-L4 ingest), missing email creates a thin
+    project Person+Profile+ContactPoint so welcome writeback is not 404.
+    """
     from app.crm_models import ContactPoint, Person
     from app import person_graph as graph
-    from app.crm_service import normalize_email
+    from app.crm_service import create_profile, normalize_email
 
     contact_point_id: str | None = None
     if person_id:
@@ -1252,7 +1257,28 @@ def _resolve_person_for_project(
     if len(unique_persons) > 1:
         raise HTTPException(422, "ambiguous_email")
     if len(project_matches) != 1:
-        raise HTTPException(404, "Person не найден по email в проекте")
+        if not ensure:
+            raise HTTPException(404, "Person не найден по email в проекте")
+        # Thin CRM row for CE writeback (source=signal_ce). No marketing consent.
+        profile = create_profile(
+            db,
+            pid,
+            {
+                "email": normalized,
+                "name": normalized,
+                "source": "signal_ce",
+                "extra": {"created_by": "communications.ingest"},
+            },
+        )
+        person = must(db.get(Person, profile.person_id))
+        cp = db.scalar(
+            select(ContactPoint).where(
+                ContactPoint.person_id == person.id,
+                ContactPoint.channel == "email",
+                ContactPoint.address_hash == digest,
+            )
+        )
+        return person.id, cp.id if cp else None
     cp = project_matches[0]
     person = must(db.get(Person, cp.person_id))
     if person.merged_into_id:
@@ -1292,7 +1318,7 @@ async def m2m_communications_ingest(
         if not db.get(Project, pid):
             raise HTTPException(404, "Проект не найден")
         person_id, contact_point_id = _resolve_person_for_project(
-            db, pid, person_id=body.person_id, email=body.email
+            db, pid, person_id=body.person_id, email=body.email, ensure=True
         )
 
         inbox_key = f"communication.ingest:{communication_key}"

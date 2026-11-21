@@ -19,7 +19,7 @@ Studio/orchestrator at `signal.vodopetov.ru` — **not** a second CRM/Outbox. Sc
 
 **Wave C:** Person/ContactPoint/timeline live in Voronka. Signal reads via additive M2M scopes `person:read` / `timeline:read` — must not invent Person tables. Existing campaign/asset/hub M2M paths remain stable for Signal Wave D.
 
-**CJ-108:** Signal CE may write timeline via `timeline:write` → `POST …/communications/ingest` (Communication + DeliveryEvent + Interaction). Payload may carry a short plain `body_preview` only — never full HTML/email bodies or secrets.
+**CJ-108 / ARCH-L4:** Signal CE may write timeline via `timeline:write` → `POST …/communications/ingest` (Communication + DeliveryEvent + Interaction). Missing project email creates a thin Person+Profile+ContactPoint (`source=signal_ce`) so welcome writeback is not 404. Payload may carry a short plain `body_preview` only — never full HTML/email bodies or secrets.
 
 **Media SoR Wave B:** originals stay in Signal Media Registry. Voronka may cache delivery bytes keyed by Registry `asset_id` (`signal_asset_id` in asset metadata) and soft-attach the same id on Person timeline — **no** parallel CRM originals library; **no** `file_id` over M2M.
 
