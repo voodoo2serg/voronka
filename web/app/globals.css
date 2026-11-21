@@ -27,4 +27,16 @@
 .access-request p{margin:0 0 10px}
 .access-cta{display:inline-flex;align-items:center;justify-content:center;margin:6px 0 12px;text-decoration:none}
 .access-cta:hover{text-decoration:none}
+.access-denied-card .access-cta{margin-top:8px;margin-bottom:16px}
+.access-denied-card .link{display:block;margin-top:10px}
+.badge.warn{background:#f7f0e4;color:#8a6a32}
+.sales-runbook .muted{margin-bottom:14px;font-size:13px}
+.sales-runbook .runbook-gates li{align-items:flex-start}
+.sales-runbook .runbook-gates b{display:block;font-size:12px;margin-bottom:2px}
+.sales-runbook .runbook-gates small{margin:0}
+.runbook-steps{margin:0 0 14px;padding-left:18px;font-size:12px;line-height:1.55;color:#555}
+.runbook-steps li{margin-bottom:6px}
+.runbook-links{justify-content:flex-start;margin-top:12px}
+.compact-runbook{margin-bottom:22px}
+.ops-runbook-wrap{margin-bottom:8px}
 

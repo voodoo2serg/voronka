@@ -9,6 +9,13 @@ export const PORTAL_URLS = {
   signal: 'https://signal.vodopetov.ru',
 } as const;
 
+/** Self-serve path when SSO works but staff/role is missing (AUTH-L2). */
+export const ACCESS_REQUEST = {
+  signal: PORTAL_URLS.signal + '/?view=access',
+  cmsStaff: PORTAL_URLS.cms + '/admin',
+  label: 'Запросить доступ',
+} as const;
+
 export function isVoronkaHost(host = typeof window !== 'undefined' ? window.location.host : ''): boolean {
   const h = String(host || '')
     .split(':')[0]

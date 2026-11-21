@@ -10,7 +10,7 @@ const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
 
 const ACCESS_HINTS: Record<string, string> = {
-  need_staff: 'SSO прошёл, но сотрудник CRM ещё не выдан. Запросите доступ ниже.',
+  need_staff: 'SSO прошёл, но роль CRM ещё не выдана. Запросите доступ — администратор привяжет staff.',
   need_link: 'Аккаунт SIGNAL есть, привязка к CRM отсутствует. Запросите staff-доступ.',
   denied: 'Доступ к CRM не разрешён. Запросите выдачу в CMS или SIGNAL.',
 };
@@ -43,7 +43,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState('/api/crm/oidc/login?recover=1');
-  const [accessHint, setAccessHint] = useState('');
+  const [accessReason, setAccessReason] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
   useEffect(() => {
@@ -81,7 +81,7 @@ export function LoginScreen({
     const params = new URLSearchParams(window.location.search);
     const codeKey = params.get('crm_access') || '';
     if (codeKey && ACCESS_HINTS[codeKey]) {
-      setAccessHint(ACCESS_HINTS[codeKey]);
+      setAccessReason(codeKey);
       params.delete('crm_access');
       const next = params.toString();
       const url = window.location.pathname + (next ? `?${next}` : '') + window.location.hash;
@@ -102,6 +102,49 @@ export function LoginScreen({
   }
 
   const localRecover = !ssoEnabled && recover;
+  const noAccess = Boolean(accessReason && ACCESS_HINTS[accessReason]);
+
+  // AUTH-L2: after green SSO without workspace/role — one empty-state, usable CTA.
+  if (noAccess) {
+    return (
+      <main className="login-screen">
+        <section className="login-card access-denied-card" aria-labelledby="crm-no-access-title">
+          <div className="brandmark" role="presentation">
+            С
+          </div>
+          <p className="eyebrow">СОЛО-PR / CRM</p>
+          <h1 id="crm-no-access-title">Нет доступа</h1>
+          <p className="muted" role="status">
+            {ACCESS_HINTS[accessReason]}
+          </p>
+          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
+            {ACCESS_REQUEST.label}
+          </a>
+          <p className="fine">
+            Администратор выдаёт staff в{' '}
+            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
+              CMS → Администраторы
+            </a>
+            {' '}(provision CRM + Signal).
+          </p>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              setAccessReason('');
+              onError('');
+              onNotice('');
+            }}
+          >
+            Вернуться ко входу
+          </button>
+          <a className="link" href="/api/crm/oidc/login">
+            Повторить вход через SIGNAL
+          </a>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="login-screen">
@@ -119,11 +162,6 @@ export function LoginScreen({
         <p className="eyebrow">СОЛО-PR / CRM</p>
         <h1>{localRecover ? 'Доступ к аккаунту' : 'Вход в CRM'}</h1>
         <p className="muted">Клиенты, сделки и платежи. Обучение — в LMS, боты — в Voronka.</p>
-        {accessHint && (
-          <p role="status" className="notice">
-            {accessHint}
-          </p>
-        )}
         {ssoEnabled && !localRecover && (
           <div>
             <a className="primary full" href="/api/crm/oidc/login">
@@ -225,7 +263,7 @@ export function LoginScreen({
         <div className="access-request fine">
           <p>Нет доступа в CRM?</p>
           <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
-            {ACCESS_REQUEST.label} в SIGNAL
+            {ACCESS_REQUEST.label}
           </a>
           <p>
             Администратор выдаёт staff в{' '}

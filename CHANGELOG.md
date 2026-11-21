@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Lift-to-8 W1 CRM AUTH-L2 + FUNC-L2
+
+- AUTH-L2: post-SSO without staff/link → dedicated empty-state «Нет доступа» + CTA «Запросить доступ» (CRM + ops), not dead owner text.
+- FUNC-L2: `GET /api/crm/sales-runbook` + Sales runbook panel on CRM overview / ops — honest Robokassa live OFF + production marketing OFF; deep-links Signal/LMS; no live money flip from UI.
+- Tests: `test_login_cutover_paint.py`, `test_sales_runbook.py`.
+
 ## Unreleased — CJ-108 Person timeline in CRM contact drawer (VR-186)
 
 - `GET /api/crm/contacts/{id}` includes `person_interactions` + `person_communications` when Profile is linked to a Person.

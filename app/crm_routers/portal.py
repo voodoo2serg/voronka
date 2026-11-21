@@ -47,6 +47,12 @@ def portals_chrome(admin=Depends(crm_actor)):
     }
 
 
+@router.get("/sales-runbook")
+def sales_runbook(admin=Depends(crm_actor)):
+    """FUNC-L2: honest sandbox vs live gates for CRM «Работа сегодня» / ops."""
+    return portals.sales_runbook()
+
+
 @router.get("/projects/{pid}/payment-providers")
 def payment_providers(pid: str, request: Request, admin=Depends(crm_actor)):
     with Session() as db:
