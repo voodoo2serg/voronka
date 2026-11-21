@@ -135,7 +135,7 @@ def work_today_for_project(db, admin, pid: str, *, limit: int = 40) -> dict:
             queue_ids.add(o.profile_id)
 
     signal_base = portals.signal_public_base()
-    lms_home = portals.PORTAL_URLS["lms"] + "/"
+    lms_home = portals.lms_open_course_href()
     crm_contact = portals.PORTAL_URLS["crm"] + "/crm/"
 
     items: list[dict] = []
