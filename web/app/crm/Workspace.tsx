@@ -12,6 +12,8 @@ import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { PaymentsSection } from './sections/PaymentsSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
+import { SignalPersonActions } from './sections/SignalPersonActions';
+import { WorkTodayPanel } from './sections/WorkTodayPanel';
 import type { FormConfig, Row } from './types';
 import { date, money, names, toMinor } from './utils';
 
@@ -62,6 +64,7 @@ export default function Workspace() {
   const [portalLinks, setPortalLinks] = useState<Row[]>([]);
   const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
   const [salesRunbook, setSalesRunbook] = useState<Row | null>(null);
+  const [workToday, setWorkToday] = useState<Row | null>(null);
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
   const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
   const [analytics, setAnalytics] = useState<Row | null>(null);
@@ -153,6 +156,7 @@ export default function Workspace() {
     setPaymentProviders(pay);
     setMailStatus(mail);
     setCmsMatrix(matrix);
+    void loadWorkToday(p);
   }
 
   async function loadAnalytics() {
@@ -170,9 +174,15 @@ export default function Workspace() {
         // Project is an optional filter: keep current if still allowed, else first project, else ''.
         setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : m.projects[0]?.id || ''));
         if (typeof window !== 'undefined') {
-          const hash = window.location.hash;
-          if (hash === '#today') setSection('tasks');
+          const hash = window.location.hash || '';
+          if (hash === '#today' || hash.startsWith('#today')) setSection('overview');
           if (hash === '#payments') setSection('payments');
+          const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
+          if (personMatch) {
+            void api('/contacts/' + personMatch[1])
+              .then((row: Row) => setDetail(row))
+              .catch(() => undefined);
+          }
         }
       } catch {
         setMe(null);
@@ -243,11 +253,26 @@ export default function Workspace() {
   }
 
   function goToday() {
-    setSection('tasks');
+    setSection('overview');
     setDetail(null);
     setError('');
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
+      window.requestAnimationFrame(() => {
+        document.getElementById('work-today-contour')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }
+
+  async function loadWorkToday(p = pid) {
+    if (!p) {
+      setWorkToday(null);
+      return;
+    }
+    try {
+      setWorkToday(await api(`/projects/${p}/work-today`));
+    } catch {
+      setWorkToday(null);
     }
   }
 
@@ -823,12 +848,21 @@ export default function Workspace() {
                       </article>
                     ))}
                   </div>
-                  <div className="two-column">
-                    <section className="panel">
+                  <div className="two-column work-today-layout">
+                    <WorkTodayPanel
+                      data={workToday}
+                      busy={busy}
+                      onOpenPerson={(id) => void act(() => showContact(id))}
+                      onRefresh={() => void act(() => loadWorkToday())}
+                    />
+                    <SalesRunbookPanel data={salesRunbook} />
+                  </div>
+                  {tasks.some((t) => t.state === 'open') && (
+                    <section className="panel" style={{ marginTop: 22 }}>
                       <div className="panel-title">
-                        <h2>Работа сегодня</h2>
-                        <button type="button" className="primary" onClick={goToday}>
-                          Открыть →
+                        <h2>Открытые задачи</h2>
+                        <button type="button" className="link" onClick={() => setSection('tasks')}>
+                          Все задачи →
                         </button>
                       </div>
                       {tasks
@@ -844,12 +878,8 @@ export default function Workspace() {
                             <time>{date(t.due_at)}</time>
                           </button>
                         ))}
-                      {!tasks.some((t) => t.state === 'open') && (
-                        <div className="empty compact">Нет открытых задач. Назначьте следующий шаг в карточке клиента.</div>
-                      )}
                     </section>
-                    <SalesRunbookPanel data={salesRunbook} />
-                  </div>
+                  )}
                   <div className="panel" style={{ marginTop: 22 }}>
                     <h2>Ваши направления</h2>
                     {kinds.slice(0, 6).map(([kind, label]) => (
@@ -1082,6 +1112,14 @@ export default function Workspace() {
                                 </button>
                                 <p className="next-action">{d.next_action || 'Следующий шаг не назначен'}</p>
                                 <time>{date(d.due_at)}</time>
+                                <SignalPersonActions
+                                  compact
+                                  personId={
+                                    (typeof d.person_id === 'string' && d.person_id) ||
+                                    contacts.find((c) => c.id === d.profile_id)?.person_id ||
+                                    null
+                                  }
+                                />
                                 <select
                                   aria-label={'Этап сделки ' + d.title}
                                   value={d.stage}
@@ -2147,6 +2185,7 @@ export default function Workspace() {
                 + Заказ
               </button>
             </div>
+            <SignalPersonActions personId={typeof detail.person_id === 'string' ? detail.person_id : null} />
             <dl>
               <dt>Email</dt>
               <dd>{detail.email || '—'}</dd>

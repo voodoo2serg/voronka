@@ -18,6 +18,50 @@ export const ACCESS_REQUEST = {
 
 export const MAILU_WEBMAIL = 'https://mail.vodopetov.ru/webmail/';
 
+/** FUNC-L1/L3 contour stage labels (lead → mail). */
+export const CONTOUR_STAGES: { id: string; label: string }[] = [
+  { id: 'lead', label: 'Лид' },
+  { id: 'touch', label: 'Касание' },
+  { id: 'pay', label: 'Оплата' },
+  { id: 'access', label: 'Доступ' },
+  { id: 'course', label: 'Курс' },
+  { id: 'mail', label: 'Письмо' },
+];
+
+/** Deep-link into Signal studio — no UUID paste into a form (FUNC-L3). */
+export function signalHref(opts: {
+  view?: string;
+  doc?: string;
+  person?: string | null;
+  brand?: string | null;
+  set?: string | null;
+} = {}): string {
+  const q = new URLSearchParams();
+  if (opts.view) q.set('view', opts.view);
+  if (opts.doc) q.set('doc', opts.doc);
+  if (opts.person) q.set('person', opts.person);
+  if (opts.brand) q.set('brand', opts.brand);
+  if (opts.set) q.set('set', opts.set);
+  const qs = q.toString();
+  return PORTAL_URLS.signal + '/' + (qs ? `?${qs}` : '');
+}
+
+/** Open Signal CE (регламенты / campaigns) or message-set for a Person. */
+export function signalPersonLinks(personId: string | null | undefined) {
+  if (!personId) {
+    return {
+      ce: signalHref({ view: 'campaigns' }),
+      sets: signalHref({ view: 'sets' }),
+      hasPerson: false as const,
+    };
+  }
+  return {
+    ce: signalHref({ view: 'campaigns', person: personId }),
+    sets: signalHref({ view: 'sets', person: personId }),
+    hasPerson: true as const,
+  };
+}
+
 export const CONTACT_SOURCE_FILTERS: [string, string][] = [
   ['', 'Все источники'],
   ['telegram', 'Telegram'],

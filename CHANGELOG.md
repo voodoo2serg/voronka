@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Lift-to-8 W2 CRM FUNC-L1 + FUNC-L3
+
+- FUNC-L1: `GET /api/crm/projects/{pid}/work-today` + overview «Работа сегодня» contour (lead → touch → pay → access → course → mail) with deep-links to Person / Signal / LMS.
+- FUNC-L3: Person/deal → Signal CE (`view=campaigns`) / message-set (`view=sets`) with `person=` in URL — no UUID paste.
+- `#today` lands on overview contour (not tasks-only). Q6 honesty gates unchanged (`can_enable_live_from_ui: false`).
+- Tests: `tests/test_work_today.py`; paint markers in `test_login_cutover_paint.py`.
+
 ## Unreleased — Lift-to-8 W1 CRM AUTH-L2 + FUNC-L2
 
 - AUTH-L2: post-SSO without staff/link → dedicated empty-state «Нет доступа» + CTA «Запросить доступ» (CRM + ops), not dead owner text.
