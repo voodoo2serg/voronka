@@ -236,6 +236,69 @@ def enqueue_deal_paid(db, *, payment_id: str, order, profile, financial: dict) -
             **hints,
         },
     )
+    # FUNC-M2: operator History shows sandbox/live pay as stage (idempotent with record_payment_interaction).
+    record_payment_interaction(
+        db,
+        payment_id=payment_id,
+        order=order,
+        profile=profile,
+        financial=financial,
+        provider=None,
+    )
+
+
+def record_payment_interaction(
+    db,
+    *,
+    payment_id: str,
+    order,
+    profile,
+    financial: dict | None = None,
+    provider: str | None = None,
+    evidence: str = "",
+) -> None:
+    """FUNC-M2: write Person Interaction for sandbox/manual pay so History UI shows «Оплата»."""
+    if profile is None:
+        return
+    from app import person_graph
+    from app.crm_models import Payment
+
+    if not getattr(profile, "person_id", None):
+        try:
+            person_graph.ensure_person_for_profile(db, profile)
+        except Exception:
+            return
+    person_id = getattr(profile, "person_id", None)
+    if not person_id:
+        return
+    payment = db.get(Payment, payment_id) if payment_id else None
+    provider_name = provider or (payment.provider if payment else "manual")
+    amount = (financial or {}).get("paid_minor")
+    if amount is None and payment is not None:
+        amount = payment.amount_minor
+    evidence_text = evidence or (payment.evidence if payment else "") or ""
+    sandbox = provider_name == "manual" or "sandbox" in evidence_text.lower() or "тест" in evidence_text.lower()
+    person_graph.record_interaction(
+        db,
+        person_id=person_id,
+        kind="deal.paid",
+        direction="system",
+        channel="payment",
+        project_id=order.project_id,
+        source_service="voronka",
+        external_event_key=f"deal.paid:{payment_id}",
+        payload={
+            "payment_id": payment_id,
+            "order_id": order.id,
+            "provider": provider_name,
+            "amount_minor": amount,
+            "sandbox": sandbox,
+            "evidence": evidence_text[:200],
+            "stage": "pay",
+            "stage_label": "Оплата",
+        },
+        evidence_status="recorded",
+    )
 
 
 def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dict | None = None) -> None:

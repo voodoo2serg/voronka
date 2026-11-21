@@ -10,11 +10,13 @@ import { ACCESS_REQUEST, PORTAL_URLS } from '../portals';
  */
 const CRM_OIDC_LOGIN =
   PORTAL_URLS.crm + '/api/crm/oidc/login?return_to=' + encodeURIComponent('/ops/');
+const CRM_OIDC_REGISTER =
+  PORTAL_URLS.crm + '/api/crm/oidc/login?register=1&return_to=' + encodeURIComponent('/ops/');
 const CRM_OIDC_RECOVER =
   PORTAL_URLS.crm +
   '/api/crm/oidc/login?recover=1&return_to=' +
   encodeURIComponent('/ops/');
-const IDP_MAIL_COPY = 'Отправили вам письмо! Проверьте вашу почту!';
+const IDP_MAIL_COPY = 'Отправили письмо! Проверьте почту!';
 /** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
 const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
@@ -36,6 +38,20 @@ function opsRecoveryHref(recoveryPath: string): string {
     return url.toString();
   } catch {
     return CRM_OIDC_RECOVER;
+  }
+}
+
+function opsRegisterHref(registerPath: string): string {
+  const absolute = registerPath.startsWith('http')
+    ? registerPath
+    : PORTAL_URLS.crm + registerPath;
+  try {
+    const url = new URL(absolute);
+    url.searchParams.set('register', '1');
+    url.searchParams.set('return_to', '/ops/');
+    return url.toString();
+  } catch {
+    return CRM_OIDC_REGISTER;
   }
 }
 
@@ -64,6 +80,7 @@ export function LoginScreen({
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [recoveryPath, setRecoveryPath] = useState(CRM_OIDC_RECOVER);
+  const [registerPath, setRegisterPath] = useState(CRM_OIDC_REGISTER);
   const [accessReason, setAccessReason] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
 
@@ -72,19 +89,27 @@ export function LoginScreen({
     // Same-origin status (shared backend); login/recover navigate to CRM origin.
     fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
       .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then((result: { enabled?: boolean; cutover?: boolean; recovery_path?: string | null }) => {
-        if (cancelled) return;
-        const enabled = result.enabled === true;
-        const nextCutover = result.cutover === true;
-        setSsoEnabled(enabled);
-        setCutover(nextCutover);
-        setShowLocal(!enabled || !nextCutover);
-        if (result.recovery_path) {
-          // Absolute CRM host so PKCE state cookie is set on the callback origin.
-          // Keep return_to=/ops/ so post-reset lands back in ops, not CRM.
-          setRecoveryPath(opsRecoveryHref(result.recovery_path));
-        }
-      })
+      .then(
+        (result: {
+          enabled?: boolean;
+          cutover?: boolean;
+          recovery_path?: string | null;
+          register_path?: string | null;
+        }) => {
+          if (cancelled) return;
+          const enabled = result.enabled === true;
+          const nextCutover = result.cutover === true;
+          setSsoEnabled(enabled);
+          setCutover(nextCutover);
+          setShowLocal(!enabled || !nextCutover);
+          if (result.recovery_path) {
+            setRecoveryPath(opsRecoveryHref(result.recovery_path));
+          }
+          if (result.register_path) {
+            setRegisterPath(opsRegisterHref(result.register_path));
+          }
+        },
+      )
       .catch(() => {
         if (!cancelled) {
           setSsoEnabled(false);
@@ -113,7 +138,7 @@ export function LoginScreen({
   function onBrandmarkGesture() {
     if (!(cutover && ssoEnabled) || showLocal) return;
     const now = Date.now();
-    if (now - glassClicks.current.t > BREAK_GLASS_WINDOW_MS) glassClicks.current = { n: 0, t: now };
+    if (now - glassClicks.current.t > BREAK_GLASS_WINDOW_MS) glassClicks.current = { n: 0, t: 0 };
     glassClicks.current.n += 1;
     glassClicks.current.t = now;
     if (glassClicks.current.n >= BREAK_GLASS_CLICKS) {
@@ -158,16 +183,17 @@ export function LoginScreen({
             Вернуться ко входу
           </button>
           <a className="link" href={CRM_OIDC_LOGIN}>
-            Повторить вход через SIGNAL
+            Войти
           </a>
         </section>
       </main>
     );
   }
 
+  // AUTH-M2: guest card = prefs RU — login / register / forgot only.
   return (
     <main className="login-screen">
-      <section className="login-card">
+      <section className="login-card" aria-labelledby="ops-login-title">
         <div
           className="brandmark"
           onClick={onBrandmarkGesture}
@@ -179,25 +205,18 @@ export function LoginScreen({
           В
         </div>
         <p className="eyebrow">СОЛО-PR / VORONKA</p>
-        <h1>Вход в ops</h1>
-        <p className="muted">Боты · Сценарии · Рассылки · Поддержка · AI. Клиенты и платежи — в CRM.</p>
+        <h1 id="ops-login-title">Вход</h1>
         {ssoEnabled && (
-          <div>
+          <div className="auth-ctas">
             <a className="primary full" href={CRM_OIDC_LOGIN}>
-              Войти через единый аккаунт SIGNAL
+              Войти
             </a>
-            <p className="fine">
-              {cutover
-                ? 'Штатный вход — через единый аккаунт SIGNAL (Keycloak).'
-                : 'Если учётная запись ещё не привязана, используйте прежний вход.'}
-            </p>
+            <a className="full auth-secondary" href={registerPath}>
+              Регистрация
+            </a>
             <a className="link" href={recoveryPath}>
               Забыли пароль?
             </a>
-            <p className="fine">
-              Восстановление только через единый аккаунт SIGNAL. После запроса:{' '}
-              «{IDP_MAIL_COPY}»
-            </p>
           </div>
         )}
         {showLocal && (
@@ -226,19 +245,16 @@ export function LoginScreen({
               />
             </label>
             <button className="primary full" disabled={busy}>
-              {cutover ? 'Аварийный вход в ops' : 'Войти в ops'}
+              {cutover ? 'Аварийный вход' : 'Войти'}
             </button>
           </form>
         )}
         {error && <p role="alert" className="error">{error}</p>}
-        {notice && <p role="status" className="notice banner">{notice}</p>}
-        <div className="access-request fine">
-          <p>Нет доступа в ops?</p>
-          <a className="primary full access-cta" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
-            {ACCESS_REQUEST.label}
-          </a>
-          <p className="fine">Менеджеры продаж работают в CRM; ops — owner/editor.</p>
-        </div>
+        {notice && (
+          <p role="status" className="notice banner">
+            {notice.includes('письм') ? notice : notice || IDP_MAIL_COPY}
+          </p>
+        )}
       </section>
     </main>
   );

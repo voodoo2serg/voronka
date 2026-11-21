@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createCrmApi } from './api';
 import { FormModal } from './components/FormModal';
+import { HistoryTimeline } from './components/HistoryTimeline';
 import { LoginScreen } from './components/LoginScreen';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
@@ -2424,41 +2425,10 @@ export default function Workspace() {
               </>
             )}
             <h3>История</h3>
-            {(detail.person_interactions || []).map((ix: Row) => (
-              <article className="timeline" key={'ix-' + ix.id}>
-                <small>
-                  {date(ix.occurred_at || ix.created_at)} · {ix.source_service || 'signal'} ·{' '}
-                  {ix.channel || 'email'} · {ix.direction || 'outbound'}
-                </small>
-                <b>
-                  {ix.kind}
-                  {ix.payload?.status ? ` · ${ix.payload.status}` : ''}
-                </b>
-                <p>
-                  {(detail.person_communications || []).find((c: Row) => c.id === ix.communication_id)
-                    ?.body_preview ||
-                    ix.external_event_key ||
-                    ''}
-                </p>
-              </article>
-            ))}
-            {detail.activities.map((a: Row) => (
-              <article className="timeline" key={a.id}>
-                <small>
-                  {date(a.created_at)} · {a.channel} {a.kind === 'ai_draft' ? '· Черновик ИИ' : ''}
-                </small>
-                <b>{a.outcome}</b>
-                <p>{a.body}</p>
-              </article>
-            ))}
-            {detail.events.map((e: Row) => (
-              <article className="timeline" key={e.id}>
-                <small>
-                  {date(e.created_at)} · {e.kind}
-                </small>
-                <p>{e.payload.text || e.payload.answer || ''}</p>
-              </article>
-            ))}
+            <p className="fine">
+              Стадии и письма цикла: sandbox-оплата и mail видны здесь без SSH (FUNC-M2).
+            </p>
+            <HistoryTimeline detail={detail} />
           </aside>
         </div>
       )}

@@ -147,7 +147,8 @@ export function WorkTodayPanel({ data, busy, onOpenPerson, onRefresh }: Props) {
         );
       })}
       <p className="fine">
-        Q6: sandbox only — UI не выставляет <code>ROBOKASSA_LIVE_READY</code> и не включает production marketing.
+        Q11=C: mail live / Robokassa sandbox — UI не выставляет <code>ROBOKASSA_LIVE_READY</code> и не включает mass
+        marketing.
       </p>
     </section>
   );

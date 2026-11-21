@@ -40,6 +40,9 @@ class LeadBody(Body):
     source: LEAD_SOURCES = "solo_pr"
     project_id: str | None = None
     promo_code: str = Field(default="", max_length=40)
+    # ARCH-M2: solo/learner handoff — optional verified Keycloak sub (not email).
+    keycloak_sub: str = Field(default="", max_length=200)
+    issuer: str = Field(default="", max_length=250)
 
 
 class CompletionBody(Body):
@@ -132,9 +135,51 @@ def normalize_lead_body(raw: dict[str, Any]) -> LeadBody:
             source=source,  # type: ignore[arg-type]
             project_id=merged.get("project_id"),
             promo_code=str(merged.get("promo_code") or merged.get("promo") or "")[:40],
+            keycloak_sub=str(merged.get("keycloak_sub") or merged.get("sub") or "")[:200],
+            issuer=str(merged.get("issuer") or "")[:250],
         )
     except ValidationError as exc:
         raise HTTPException(422, exc.errors()) from exc
+
+
+def _default_issuer() -> str:
+    return (os.getenv("KEYCLOAK_ISSUER") or "https://auth.solo-pr.ru/realms/solo-pr").rstrip("/")
+
+
+def _attach_learner_oidc(
+    db,
+    profile: Profile,
+    *,
+    keycloak_sub: str,
+    issuer: str = "",
+    email_hint: str = "",
+    display_name: str = "",
+) -> str | None:
+    """ARCH-M2: grow Person/issuer+sub coverage for solo/LMS learners (no Account)."""
+    sub = (keycloak_sub or "").strip()
+    if not sub or "@" in sub:
+        return None
+    from app import person_graph
+
+    iss = (issuer or "").rstrip("/") or _default_issuer()
+    if not profile.person_id:
+        person_graph.ensure_person_for_profile(db, profile)
+    link, person, _changed = person_graph.ensure_oidc_person(
+        db,
+        issuer=iss,
+        subject=sub,
+        display_name=display_name or profile.name or "",
+        email_hint=email_hint or profile.email or "",
+        contact_id=profile.contact_id,
+        profile_id=profile.id,
+    )
+    if profile.person_id != person.id:
+        profile.person_id = person.id
+    extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
+    extra["keycloak_sub"] = sub
+    extra["oidc_issuer"] = link.issuer
+    profile.extra = extra
+    return person.id
 
 
 def normalize_completion_body(raw: dict[str, Any]) -> CompletionBody:
@@ -301,6 +346,16 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
                 status="granted" if body.ads_consent else "denied",
                 evidence=evidence,
             )
+        # ARCH-M2: solo handoff with verified Keycloak sub → Person coverage (no staff Account).
+        if body.keycloak_sub:
+            _attach_learner_oidc(
+                db,
+                profile,
+                keycloak_sub=body.keycloak_sub,
+                issuer=body.issuer,
+                email_hint=email or "",
+                display_name=body.name or "",
+            )
         deal_title = body.service or ("RAGA signup" if source.startswith("raga") else "Заявка с сайта")
         if body.promo_code and source.startswith("raga"):
             deal_title = f"{deal_title} ({body.promo_code})"
@@ -385,6 +440,15 @@ async def inbound_completion(request: Request):
             profile = _find_profile_by_keycloak(db, body.keycloak_sub)
         if profile is None:
             raise HTTPException(404, "Профиль не найден")
+        # ARCH-M2: LMS learner sub → Person/issuer+sub (coverage growth; no Account invent).
+        if body.keycloak_sub:
+            _attach_learner_oidc(
+                db,
+                profile,
+                keycloak_sub=body.keycloak_sub,
+                email_hint=body.email or profile.email or "",
+                display_name=profile.name or "",
+            )
         # Mark open course orders academic_complete when resource/course markers match snapshot/product.
         orders = list(db.scalars(select(Order).where(Order.profile_id == profile.id, Order.state == "open")))
         updated = []
