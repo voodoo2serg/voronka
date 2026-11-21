@@ -680,25 +680,32 @@ def link_oidc(body: OidcLinkBody, admin=Depends(crm_actor)):
                     setattr(prior, key, value)
             prior.email_hint = body.email_hint or prior.email_hint
             prior.updated_at = now()
-            audit(db, admin, "oidc.linked", oidc_link_id=prior.id)
-            return encode(prior)
-        # Explicit link only — do NOT match by email_hint alone
-        row = OidcLink(
-            id=uid(),
-            issuer=body.issuer,
-            subject=body.subject,
-            account_id=body.account_id,
-            contact_id=body.contact_id,
-            person_id=body.person_id,
-            profile_id=body.profile_id,
-            provisioning_status="linked",
-            email_hint=body.email_hint,
-            created_at=now(),
-            updated_at=now(),
+            row = prior
+        else:
+            # Explicit link only — do NOT match by email_hint alone
+            row = OidcLink(
+                id=uid(),
+                issuer=body.issuer,
+                subject=body.subject,
+                account_id=body.account_id,
+                contact_id=body.contact_id,
+                person_id=body.person_id,
+                profile_id=body.profile_id,
+                provisioning_status="linked",
+                email_hint=body.email_hint,
+                created_at=now(),
+                updated_at=now(),
+            )
+            db.add(row)
+            db.flush()
+        # ARCH-L2: staff/learner explicit link also ensures Person on write.
+        person, attached = graph.ensure_person_for_oidc_link(
+            db, row, email_hint=body.email_hint or row.email_hint or "",
         )
-        db.add(row)
-        db.flush()
-        audit(db, admin, "oidc.linked", oidc_link_id=row.id)
+        audit(
+            db, admin, "oidc.linked",
+            oidc_link_id=row.id, person_id=person.id, person_attached=attached,
+        )
         return encode(row)
 
 
