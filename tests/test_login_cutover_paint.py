@@ -37,6 +37,23 @@ def test_auth_m2_guest_card_only_login_register_forgot():
         assert 'className="access-request' not in src
 
 
+def test_fe_u3_crm_guest_cta_hierarchy():
+    """FE-U3: Войти is filled primary; Регистрация outline secondary (not the reverse)."""
+    login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
+    auth = login.split('className="auth-ctas"', 1)[1].split("</div>", 1)[0]
+    voiti = auth.find("Войти")
+    reg = auth.find("Регистрация")
+    assert 0 <= voiti < reg, "Войти must appear before Регистрация in auth-ctas"
+    assert 'className="primary full"' in auth
+    assert auth.index('className="primary full"') < auth.index("auth-secondary")
+    assert "a.primary" in css
+    assert "a.auth-secondary" in css
+    # Login gate uses Solo-PR terracotta — not orphan grey primary paint for SSO link.
+    assert ".login-screen" in css and "--accent:#a0463c" in css
+    assert "button.primary" in css  # local form submit still primary
+
+
 def test_crm_login_has_access_request_not_dead_owner_text():
     login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
     portals = (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
