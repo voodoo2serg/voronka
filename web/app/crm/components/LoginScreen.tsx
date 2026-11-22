@@ -173,6 +173,7 @@ export function LoginScreen({
         <h1 id="crm-login-title">{localRecover ? 'Восстановление' : 'Вход'}</h1>
         {ssoEnabled && !localRecover && (
           <div className="auth-ctas">
+            {/* FE-U3: Войти = filled primary; Регистрация = outline secondary; forgot tertiary */}
             <a className="primary full" href="/api/crm/oidc/login">
               Войти
             </a>
