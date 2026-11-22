@@ -27,6 +27,7 @@ export function launcherShowsAdmin(role?: CrmRole | null): boolean {
 
 /** Navigation only: cross-service access is granted by each app's own server-side ACL.
  * Keycloak is the SSO authority; do not share tokens or cookies using links.
+ * FE-U1: staff-chrome__* classes align with Signal portable chrome (authed Workspace only).
  */
 export default function SignalLauncher({role}:{role?: CrmRole | null}={}){
  const showAdmin=launcherShowsAdmin(role);
@@ -36,24 +37,25 @@ export default function SignalLauncher({role}:{role?: CrmRole | null}={}){
  },[showAdmin,mode]);
  const adminItems=ITEMS.filter(x=>x.admin);
  const shown=mode==='site'?ITEMS:adminItems;
- return <details className="signal-service-switcher">
-   <summary aria-label="Приложения SIGNAL" title="Приложения SIGNAL">▦</summary>
-   <div className="signal-service-popover">
-     <strong>Приложения SIGNAL</strong>
+ return <details className="staff-chrome__launcher signal-service-switcher">
+   <summary aria-label="Сервисы" title="Сервисы">▦</summary>
+   <div className="staff-chrome__popover signal-service-popover">
+     <strong>Сервисы</strong>
+     <p>Платформа</p>
      <div className="signal-service-tabs" role="group" aria-label="Разделы">
        <button type="button" aria-pressed={mode==='site'} onClick={()=>setMode('site')}>Сервисы</button>
        {showAdmin && (
          <button type="button" aria-pressed={mode==='admin'} onClick={()=>setMode('admin')}>Админка</button>
        )}
      </div>
-     <div className="signal-service-grid">
+     <div className="staff-chrome__grid signal-service-grid">
        {shown.map(x=><a href={mode==='site'?x.site:x.admin} key={x.id}>
          <b aria-hidden="true">{x.mark}</b><span>{x.label}</span>
        </a>)}
      </div>
      <small>
        {showAdmin
-         ? 'Административные права проверяются целевой системой. Пароль и токены не передаются.'
+         ? 'Переходы не передают токены. Доступ определяет целевой сервис.'
          : 'Админка скрыта без прав владельца или партнёра. Пароль и токены не передаются.'}
      </small>
    </div>
