@@ -234,6 +234,87 @@
   display: none !important;
 }
 
+/* In-app «?» / О системе — authed chrome only (same geometry as ▦). */
+.staff-chrome__help {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: var(--staff-chrome-radius);
+  border: 1px solid #d7d2cb;
+  background: transparent;
+  color: inherit;
+  font: 700 1.05rem/1 var(--staff-chrome-font);
+  cursor: pointer;
+}
+.staff-chrome__help:hover,
+.staff-chrome__help:focus-visible,
+.staff-chrome__help[aria-expanded="true"] {
+  background: #f6f3ee;
+  border-color: var(--staff-chrome-accent);
+  outline: none;
+}
+
+.system-help-modal {
+  width: min(640px, 100%);
+}
+.system-help-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--staff-chrome-ink);
+}
+.system-help-body h3 {
+  margin: 0 0 0.45rem;
+  font-family: var(--staff-chrome-display);
+  font-size: 1.05rem;
+}
+.system-help-body p {
+  margin: 0 0 0.55rem;
+}
+.system-help-body a {
+  color: var(--staff-chrome-accent);
+  font-weight: 600;
+}
+.system-help-menu {
+  display: grid;
+  gap: 0.55rem 0.75rem;
+  margin: 0.35rem 0 0.75rem;
+}
+.system-help-menu > div {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 9.5rem) 1fr;
+  gap: 0.35rem 0.75rem;
+}
+.system-help-menu dt {
+  margin: 0;
+  font-weight: 700;
+  color: var(--staff-chrome-ink);
+}
+.system-help-menu dd {
+  margin: 0;
+  color: var(--staff-chrome-ink-soft);
+}
+.system-help-chrome,
+.system-help-keys {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.15rem;
+}
+.system-help-chrome li,
+.system-help-keys li {
+  margin-bottom: 0.4rem;
+}
+.system-help-body code {
+  font-size: 0.85em;
+  background: #f3f1ec;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+
 /* Optional operator deep-link strip (CRM Today · History). */
 .staff-chrome__strip {
   display: none;
