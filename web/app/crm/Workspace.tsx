@@ -5,6 +5,7 @@ import { createCrmApi } from './api';
 import { FormModal } from './components/FormModal';
 import { HistoryTimeline } from './components/HistoryTimeline';
 import { LoginScreen } from './components/LoginScreen';
+import { SystemHelpModal } from './components/SystemHelpModal';
 import { sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
@@ -23,6 +24,7 @@ export default function Workspace() {
   const [token, setToken] = useState('');
   const [ready, setReady] = useState(false);
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [me, setMe] = useState<Row | null>(null);
   const [pid, setPid] = useState('');
   const [section, setSection] = useState('overview');
@@ -178,6 +180,7 @@ export default function Workspace() {
           const hash = window.location.hash || '';
           if (hash === '#today' || hash.startsWith('#today')) setSection('overview');
           if (hash === '#payments') setSection('payments');
+          if (hash === '#help' || hash.startsWith('#help')) setHelpOpen(true);
           const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
           if (personMatch) {
             void api('/contacts/' + personMatch[1])
@@ -749,6 +752,17 @@ export default function Workspace() {
           <div className="staff-chrome__actions" role="toolbar" aria-label="Действия">
             <div className="staff-chrome__platform" role="group" aria-label="Платформа">
               <SignalLauncher role={typeof me?.role === 'string' ? me.role : undefined} />
+              <button
+                type="button"
+                className="staff-chrome__help"
+                aria-label="О системе"
+                title="О системе"
+                aria-expanded={helpOpen}
+                aria-controls="system-help-title"
+                onClick={() => setHelpOpen(true)}
+              >
+                ?
+              </button>
               <button
                 type="button"
                 className="staff-chrome__logout"
@@ -2493,6 +2507,7 @@ export default function Workspace() {
           }}
         />
       )}
+      {helpOpen && <SystemHelpModal onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }
