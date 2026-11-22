@@ -52,7 +52,8 @@ Auth: `Authorization: Bearer <INTEGRATION_INBOUND_TOKEN|SOLO_PR_WEBHOOK_SECRET>`
 
 | Событие | Путь |
 |---|---|
-| `learning.completed` | `POST /api/crm/integrations/lms_end/completions` (dual-read `course_id`/`commerce_product_id`/`resource`, `keycloak_sub`; auth `X-Lms-*` или `X-Voronka-*` / Bearer) |
+| `learning.completed` / `progress.updated` | `POST /api/crm/integrations/lms_end/completions` (+ alias `/progress`) — dual-read markers + `keycloak_sub`; writes Person History «Курс»; auth `X-Lms-*` / `X-Voronka-*` / Bearer |
+| `lms.person` (A9-05) | `POST /api/crm/integrations/lms_end/person` — first learner SSO/grant → Person+OIDC (no Account, email=ContactPoint hint only) |
 
 ## Миграции
 

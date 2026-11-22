@@ -47,7 +47,7 @@ class LeadBody(Body):
 
 class CompletionBody(Body):
     event_id: str = Field(min_length=4, max_length=160)
-    kind: Literal["learning.completed"] = "learning.completed"
+    kind: Literal["learning.completed", "learning.progress", "progress.updated"] = "learning.completed"
     voronka_profile_id: str | None = None
     email: str = Field(default="", max_length=250)
     resource: str = Field(default="", max_length=200)
@@ -55,7 +55,20 @@ class CompletionBody(Body):
     commerce_product_id: str = Field(default="", max_length=200)
     keycloak_sub: str = Field(default="", max_length=200)
     evidence: str = Field(default="", max_length=2000)
+    progress_percent: int | None = None
+    completed: bool = False
     source: Literal["lms_end"] = "lms_end"
+
+
+class LmsPersonBody(Body):
+    """A9-05: first LMS/solo learner SSO → Person+OIDC (no Account, no email merge)."""
+
+    keycloak_sub: str = Field(min_length=4, max_length=200)
+    issuer: str = Field(default="", max_length=250)
+    email: str = Field(default="", max_length=250)
+    name: str = Field(default="", max_length=200)
+    voronka_profile_id: str | None = None
+    event_id: str = Field(default="", max_length=160)
 
 
 class QuoteBody(Body):
@@ -182,27 +195,62 @@ def _attach_learner_oidc(
     return person.id
 
 
+def _is_progress_envelope(envelope_type: str) -> bool:
+    return str(envelope_type) in {
+        "learning.progress",
+        "progress.updated",
+        "progress",
+        "course.progress",
+    }
+
+
+def _is_completion_envelope(envelope_type: str) -> bool:
+    return str(envelope_type) in {
+        "learning.completed",
+        "completion",
+        "course.completed",
+    }
+
+
 def normalize_completion_body(raw: dict[str, Any]) -> CompletionBody:
-    """Dual-read LMS learning.completed: course_id / commerce_product_id / keycloak_sub."""
+    """Dual-read LMS learning.completed / progress.updated → History.
+
+    Accepts course_id / commerce_product_id / keycloak_sub aliases from lms_end outbound.
+    """
     if not isinstance(raw, dict):
         raise HTTPException(422, "Ожидался JSON-объект")
     merged = _merge_envelope(raw)
     event_id = str(merged.get("event_id") or merged.get("idempotency_key") or "")
-    envelope_type = merged.get("type") or merged.get("kind") or "learning.completed"
-    if str(envelope_type) not in {"learning.completed", "completion", "course.completed"}:
-        # Soft-accept if LMS omits kind but sends course markers.
+    envelope_type = str(merged.get("type") or merged.get("kind") or "learning.completed")
+    is_progress = _is_progress_envelope(envelope_type)
+    is_completion = _is_completion_envelope(envelope_type)
+    if not is_progress and not is_completion:
+        # Soft-accept if LMS omits kind but sends course markers (treat as completion).
         if not (merged.get("course_id") or merged.get("commerce_product_id") or merged.get("resource")):
-            raise HTTPException(422, "Ожидался learning.completed")
+            raise HTTPException(422, "Ожидался learning.completed или progress.updated")
+        is_completion = True
     resource = str(
         merged.get("resource")
         or merged.get("course_id")
         or merged.get("commerce_product_id")
         or ""
     )
+    kind: Literal["learning.completed", "learning.progress", "progress.updated"]
+    if is_progress:
+        kind = "learning.progress"
+    else:
+        kind = "learning.completed"
+    progress_raw = merged.get("progress_percent")
+    progress_percent = None
+    if progress_raw is not None and progress_raw != "":
+        try:
+            progress_percent = max(0, min(100, int(progress_raw)))
+        except (TypeError, ValueError):
+            progress_percent = None
     try:
         return CompletionBody(
             event_id=event_id,
-            kind="learning.completed",
+            kind=kind,
             voronka_profile_id=merged.get("voronka_profile_id"),
             email=str(merged.get("email") or ""),
             resource=resource,
@@ -210,10 +258,77 @@ def normalize_completion_body(raw: dict[str, Any]) -> CompletionBody:
             commerce_product_id=str(merged.get("commerce_product_id") or ""),
             keycloak_sub=str(merged.get("keycloak_sub") or ""),
             evidence=str(merged.get("evidence") or ""),
+            progress_percent=progress_percent,
+            completed=bool(merged.get("completed", False)) or kind == "learning.completed",
             source="lms_end",
         )
     except ValidationError as exc:
         raise HTTPException(422, exc.errors()) from exc
+
+
+def normalize_lms_person_body(raw: dict[str, Any]) -> LmsPersonBody:
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "Ожидался JSON-объект")
+    merged = _merge_envelope(raw)
+    sub = str(merged.get("keycloak_sub") or merged.get("subject") or merged.get("sub") or "").strip()
+    try:
+        return LmsPersonBody(
+            keycloak_sub=sub,
+            issuer=str(merged.get("issuer") or "")[:250],
+            email=str(merged.get("email") or "")[:250],
+            name=str(merged.get("name") or merged.get("display_name") or "")[:200],
+            voronka_profile_id=merged.get("voronka_profile_id") or merged.get("profile_id"),
+            event_id=str(merged.get("event_id") or merged.get("idempotency_key") or "")[:160],
+        )
+    except ValidationError as exc:
+        raise HTTPException(422, exc.errors()) from exc
+
+
+def _record_learning_history(db, *, profile: Profile, body: CompletionBody) -> None:
+    """A9-03: LMS progress/completion → Person Interaction (CRM History, no SQL)."""
+    from app import person_graph
+
+    if not getattr(profile, "person_id", None):
+        try:
+            person_graph.ensure_person_for_profile(db, profile)
+        except Exception:
+            return
+    person_id = getattr(profile, "person_id", None)
+    if not person_id:
+        return
+    is_progress = body.kind in {"learning.progress", "progress.updated"}
+    kind = "learning.progress" if is_progress else "learning.completed"
+    course = body.course_id or body.resource or body.commerce_product_id or ""
+    percent = body.progress_percent
+    title_bits = []
+    if course:
+        title_bits.append(course)
+    if is_progress and percent is not None:
+        title_bits.append(f"{percent}%")
+    evidence = body.evidence or ("Прогресс по курсу" if is_progress else "Курс завершён")
+    person_graph.record_interaction(
+        db,
+        person_id=person_id,
+        kind=kind,
+        direction="system",
+        channel="lms_end",
+        project_id=profile.project_id,
+        source_service="lms_end",
+        external_event_key=f"{kind}:{body.event_id}",
+        payload={
+            "stage": "course",
+            "stage_label": "Курс",
+            "course_id": body.course_id or "",
+            "resource": body.resource or "",
+            "commerce_product_id": body.commerce_product_id or "",
+            "progress_percent": percent,
+            "completed": bool(body.completed) or not is_progress,
+            "evidence": evidence[:500],
+            "keycloak_sub": body.keycloak_sub or "",
+            "summary": " · ".join(title_bits) if title_bits else evidence[:120],
+        },
+        evidence_status="recorded",
+    )
 
 
 def _parse_json_body(raw: bytes) -> dict[str, Any]:
@@ -413,12 +528,29 @@ async def inbound_lead(request: Request):
     return _apply_inbound_lead(body)
 
 
-@router.post("/integrations/lms_end/completions")
-async def inbound_completion(request: Request):
-    raw = await _require_integration(request)
-    payload = _parse_json_body(raw)
-    body = normalize_completion_body(payload)
+def _resolve_lms_profile(db, body: CompletionBody | LmsPersonBody) -> Profile | None:
+    profile = None
+    profile_id = getattr(body, "voronka_profile_id", None)
+    if profile_id:
+        profile = db.get(Profile, profile_id)
+    email = getattr(body, "email", "") or ""
+    if profile is None and email:
+        try:
+            normalized = normalize_email(email)
+        except ValueError:
+            raise HTTPException(422, "Некорректный email")
+        profile = db.scalar(select(Profile).where(Profile.email == normalized))
+    keycloak_sub = getattr(body, "keycloak_sub", "") or ""
+    if profile is None and keycloak_sub:
+        profile = _find_profile_by_keycloak(db, keycloak_sub)
+    return profile
+
+
+def _apply_lms_learning_event(body: CompletionBody) -> dict[str, Any]:
+    """A9-03: LMS outbound progress/completion → inbox + History (+ academic on complete)."""
     markers = _resource_markers(body)
+    is_progress = body.kind in {"learning.progress", "progress.updated"}
+    inbox_kind = "learning.progress" if is_progress else "learning.completed"
     with Session.begin() as db:
         prior = db.scalar(
             select(IntegrationInbox).where(
@@ -426,21 +558,11 @@ async def inbound_completion(request: Request):
             )
         )
         if prior:
-            return {"ok": True, "duplicate": True}
-        profile = None
-        if body.voronka_profile_id:
-            profile = db.get(Profile, body.voronka_profile_id)
-        if profile is None and body.email:
-            try:
-                email = normalize_email(body.email)
-            except ValueError:
-                raise HTTPException(422, "Некорректный email")
-            profile = db.scalar(select(Profile).where(Profile.email == email))
-        if profile is None and body.keycloak_sub:
-            profile = _find_profile_by_keycloak(db, body.keycloak_sub)
+            return {"ok": True, "duplicate": True, "kind": prior.kind}
+        profile = _resolve_lms_profile(db, body)
         if profile is None:
             raise HTTPException(404, "Профиль не найден")
-        # ARCH-M2: LMS learner sub → Person/issuer+sub (coverage growth; no Account invent).
+        # ARCH-M2 / A9-05: LMS learner sub → Person/issuer+sub (coverage growth; no Account).
         if body.keycloak_sub:
             _attach_learner_oidc(
                 db,
@@ -449,26 +571,37 @@ async def inbound_completion(request: Request):
                 email_hint=body.email or profile.email or "",
                 display_name=profile.name or "",
             )
-        # Mark open course orders academic_complete when resource/course markers match snapshot/product.
-        orders = list(db.scalars(select(Order).where(Order.profile_id == profile.id, Order.state == "open")))
-        updated = []
-        for order in orders:
-            snap = order.snapshot or {}
-            order_markers = {
-                snap.get("name", ""),
-                order.product_id,
-                snap.get("kind", ""),
-                snap.get("course_id", ""),
-                (snap.get("config") or {}).get("course_id", "") if isinstance(snap.get("config"), dict) else "",
-            }
-            if markers and markers.isdisjoint({m for m in order_markers if m}):
-                if snap.get("kind") != "course":
-                    continue
-            order.academic_complete = True
-            updated.append(order.id)
+        updated: list[str] = []
+        if not is_progress:
+            orders = list(
+                db.scalars(select(Order).where(Order.profile_id == profile.id, Order.state == "open"))
+            )
+            for order in orders:
+                snap = order.snapshot or {}
+                order_markers = {
+                    snap.get("name", ""),
+                    order.product_id,
+                    snap.get("kind", ""),
+                    snap.get("course_id", ""),
+                    (snap.get("config") or {}).get("course_id", "")
+                    if isinstance(snap.get("config"), dict)
+                    else "",
+                }
+                if markers and markers.isdisjoint({m for m in order_markers if m}):
+                    if snap.get("kind") != "course":
+                        continue
+                order.academic_complete = True
+                updated.append(order.id)
         from app.db import Admin
+
         owner = db.scalar(select(Admin).where(Admin.role == "owner", Admin.active.is_(True)))
         if owner:
+            outcome = "learning.progress" if is_progress else "learning.completed"
+            percent_bit = (
+                f" · {body.progress_percent}%"
+                if is_progress and body.progress_percent is not None
+                else ""
+            )
             db.add(
                 Activity(
                     id=uid(),
@@ -476,22 +609,158 @@ async def inbound_completion(request: Request):
                     actor_id=owner.telegram_id,
                     kind="learning",
                     channel="lms_end",
-                    outcome="learning.completed",
-                    body=(body.evidence or body.resource or body.course_id or "Обучение завершено")[:20000],
+                    outcome=outcome,
+                    body=(
+                        body.evidence
+                        or body.resource
+                        or body.course_id
+                        or ("Прогресс по курсу" if is_progress else "Обучение завершено")
+                    )[:20000]
+                    + percent_bit,
                 )
             )
+        _record_learning_history(db, profile=profile, body=body)
         row = IntegrationInbox(
             id=uid(),
             source="lms_end",
             event_key=body.event_id,
-            kind="learning.completed",
+            kind=inbox_kind,
             payload=body.model_dump(),
             state="applied",
             profile_id=profile.id,
             created_at=now(),
         )
         db.add(row)
-        return {"ok": True, "orders_updated": updated, "profile_id": profile.id}
+        return {
+            "ok": True,
+            "kind": inbox_kind,
+            "orders_updated": updated,
+            "profile_id": profile.id,
+            "person_id": profile.person_id,
+        }
+
+
+@router.post("/integrations/lms_end/completions")
+@router.post("/integrations/lms_end/progress")
+async def inbound_completion(request: Request):
+    """LMS → CRM: completion and progress share auth; History paints «Курс»."""
+    raw = await _require_integration(request)
+    payload = _parse_json_body(raw)
+    body = normalize_completion_body(payload)
+    return _apply_lms_learning_event(body)
+
+
+@router.post("/integrations/lms_end/person")
+async def inbound_lms_person(request: Request):
+    """A9-05: first learner SSO / grant handoff → Person+OIDC (no Account, no email merge)."""
+    raw = await _require_integration(request)
+    payload = _parse_json_body(raw)
+    body = normalize_lms_person_body(payload)
+    if "@" in body.keycloak_sub:
+        raise HTTPException(422, "keycloak_sub должен быть OIDC subject, не email")
+    with Session.begin() as db:
+        event_key = body.event_id or f"lms.person:{body.keycloak_sub}"
+        prior = db.scalar(
+            select(IntegrationInbox).where(
+                IntegrationInbox.source == "lms_end", IntegrationInbox.event_key == event_key
+            )
+        )
+        if prior and isinstance(prior.payload, dict) and prior.payload.get("person_id"):
+            return {
+                "ok": True,
+                "duplicate": True,
+                "person_id": prior.payload.get("person_id"),
+                "profile_id": prior.profile_id,
+            }
+        profile = _resolve_lms_profile(db, body)
+        if profile is None and body.email:
+            # Optional thin Profile when DEFAULT_PROJECT_ID is set; otherwise Person+OIDC only.
+            project_id = os.getenv("DEFAULT_PROJECT_ID", "")
+            if project_id:
+                try:
+                    email = normalize_email(body.email)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+                profile = create_profile(
+                    db,
+                    project_id,
+                    {
+                        "name": body.name or email,
+                        "email": email,
+                        "source": "lms_end_sso",
+                    },
+                )
+        if profile is None:
+            # Profile-less ensure still grows learners_with_person via OidcLink alone.
+            # Email is ContactPoint hint only — never merges Persons / invents Account.
+            from app import person_graph
+
+            link, person, changed = person_graph.ensure_oidc_person(
+                db,
+                issuer=(body.issuer or "").rstrip("/") or _default_issuer(),
+                subject=body.keycloak_sub,
+                display_name=body.name or "",
+                email_hint=body.email or "",
+            )
+            if not prior:
+                db.add(
+                    IntegrationInbox(
+                        id=uid(),
+                        source="lms_end",
+                        event_key=event_key,
+                        kind="lms.person",
+                        payload={
+                            "keycloak_sub": body.keycloak_sub,
+                            "person_id": person.id,
+                            "oidc_link_id": link.id,
+                            "email": body.email,
+                        },
+                        state="applied",
+                        profile_id=None,
+                        created_at=now(),
+                    )
+                )
+            return {
+                "ok": True,
+                "person_id": person.id,
+                "oidc_link_id": link.id,
+                "account_id": link.account_id,
+                "changed": changed,
+                "coverage": person_graph.oidc_person_coverage(db),
+            }
+        person_id = _attach_learner_oidc(
+            db,
+            profile,
+            keycloak_sub=body.keycloak_sub,
+            issuer=body.issuer,
+            email_hint=body.email or profile.email or "",
+            display_name=body.name or profile.name or "",
+        )
+        if not prior:
+            db.add(
+                IntegrationInbox(
+                    id=uid(),
+                    source="lms_end",
+                    event_key=event_key,
+                    kind="lms.person",
+                    payload={
+                        "keycloak_sub": body.keycloak_sub,
+                        "person_id": person_id or profile.person_id,
+                        "email": body.email or profile.email,
+                    },
+                    state="applied",
+                    profile_id=profile.id,
+                    created_at=now(),
+                )
+            )
+        from app import person_graph as graph
+
+        return {
+            "ok": True,
+            "person_id": person_id or profile.person_id,
+            "profile_id": profile.id,
+            "coverage": graph.oidc_person_coverage(db),
+        }
 
 
 @router.post("/integrations/commerce/quote")

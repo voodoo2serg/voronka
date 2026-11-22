@@ -74,4 +74,5 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .history-stage.stage-pay{background:#edf4ed;border-color:#b7ceb9;color:#4f6b55}
 .history-stage.stage-mail{background:#eef2f7;border-color:#b7c3d4;color:#3f5678}
 .history-stage.stage-access{background:#f7f0e4;border-color:#e0c89a;color:#8a6a32}
+.history-stage.stage-course{background:#f0eef7;border-color:#c4bdd8;color:#5a5280}
 .history-item.is-letter{background:#fafbfd}

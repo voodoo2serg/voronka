@@ -514,6 +514,10 @@ def _record_access_interaction(db, *, grant, order, profile, hints: dict | None 
             "email": profile.email,
             "resource": grant.resource,
             "service": hints.get("service") or hints.get("course_id") or grant.resource,
+            # A9-03: History paints «Открыть курс» for grant → LMS /open → MyCourses.
+            "stage": "access",
+            "stage_label": "Открыть курс",
+            "open_course": True,
         },
         evidence_status="recorded",
     )

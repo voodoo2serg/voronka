@@ -291,6 +291,8 @@ def oidc_person_coverage(db) -> dict:
             "m2m_oidc_person": "POST /api/crm/m2m/oidc-person",
             "solo_lead_keycloak_sub": "POST /api/crm/integrations/leads (+ keycloak_sub)",
             "lms_completion_keycloak_sub": "POST /api/crm/integrations/lms_end/completions (+ keycloak_sub)",
+            "lms_person_sso": "POST /api/crm/integrations/lms_end/person (+ keycloak_sub)",
+            "lms_progress": "POST /api/crm/integrations/lms_end/progress|completions (progress.updated)",
         },
     }
 

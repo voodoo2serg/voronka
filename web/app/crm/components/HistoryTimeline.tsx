@@ -6,7 +6,7 @@ import { date, money } from '../utils';
 type HistoryItem = {
   key: string;
   at: string | number | null | undefined;
-  stage: 'pay' | 'mail' | 'access' | 'touch' | 'other';
+  stage: 'pay' | 'mail' | 'access' | 'course' | 'touch' | 'other';
   stageLabel: string;
   title: string;
   body: string;
@@ -27,11 +27,35 @@ function stageFromInteraction(ix: Row): Pick<HistoryItem, 'stage' | 'stageLabel'
       letter: false,
     };
   }
-  if (kind === 'course.access_granted' || kind.startsWith('access.')) {
+  if (
+    kind === 'learning.completed' ||
+    kind === 'learning.progress' ||
+    payload.stage === 'course' ||
+    channel === 'lms_end'
+  ) {
+    const percent = typeof payload.progress_percent === 'number' ? payload.progress_percent : null;
+    const done = Boolean(payload.completed) || kind === 'learning.completed';
+    const summary = payload.summary ? String(payload.summary) : '';
+    return {
+      stage: 'course',
+      stageLabel: 'Курс',
+      title: done
+        ? summary
+          ? `Курс завершён · ${summary}`
+          : 'Курс завершён'
+        : percent != null
+          ? `Прогресс · ${percent}%`
+          : summary
+            ? `Прогресс · ${summary}`
+            : 'Прогресс по курсу',
+      letter: false,
+    };
+  }
+  if (kind === 'course.access_granted' || kind.startsWith('access.') || payload.stage === 'access') {
     return {
       stage: 'access',
-      stageLabel: 'Доступ',
-      title: 'Доступ открыт',
+      stageLabel: 'Открыть курс',
+      title: 'Доступ открыт · можно открыть курс',
       letter: false,
     };
   }
@@ -103,12 +127,19 @@ export function HistoryTimeline({ detail }: { detail: Row }) {
   }
 
   for (const a of (detail.activities || []) as Row[]) {
+    const outcome = String(a.outcome || '');
+    const isLearning =
+      a.channel === 'lms_end' ||
+      outcome.startsWith('learning.') ||
+      a.kind === 'learning';
     items.push({
       key: 'act-' + String(a.id),
       at: a.created_at,
-      stage: a.channel === 'email' ? 'mail' : 'touch',
-      stageLabel: a.channel === 'email' ? 'Письмо' : 'Касание',
-      title: String(a.outcome || (a.kind === 'ai_draft' ? 'Черновик ИИ' : 'Контакт')),
+      stage: a.channel === 'email' ? 'mail' : isLearning ? 'course' : 'touch',
+      stageLabel: a.channel === 'email' ? 'Письмо' : isLearning ? 'Курс' : 'Касание',
+      title: String(
+        a.outcome || (a.kind === 'ai_draft' ? 'Черновик ИИ' : isLearning ? 'Обучение' : 'Контакт'),
+      ),
       body: String(a.body || ''),
       meta: `${a.channel || 'manual'}${a.kind === 'ai_draft' ? ' · Черновик ИИ' : ''}`,
       letter: a.channel === 'email',
