@@ -11,9 +11,9 @@ def test_staff_chrome_css_shipped():
     assert ".staff-chrome__mark" in css
     assert ".staff-chrome__launcher" in css
     assert ".staff-chrome__logout" in css
-    # Codex #46 follow-up: right-anchored popover + chrome above drawer-layer (40).
+    # Codex #46 follow-up: right-anchored popover; chrome stays under drawer-layer (40).
     assert "left: auto" in css
-    assert "z-index: 50" in css
+    assert "z-index: 30" in css
 
 
 def test_crm_workspace_authed_chrome_slots():

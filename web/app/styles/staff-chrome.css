@@ -34,8 +34,8 @@
   font-family: var(--staff-chrome-font);
   position: sticky;
   top: 0;
-  /* Above .drawer-layer (40) so strip/▦ stay clickable with contact open; below .modal-layer (60). */
-  z-index: 50;
+  /* Below .drawer-layer (40) so drawer close stays clickable; History strip hides while drawer open. */
+  z-index: 30;
 }
 
 .staff-chrome__brand {
