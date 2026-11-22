@@ -734,14 +734,61 @@ export default function Workspace() {
         </div>
       </aside>
       <div className="main-area">
-        <header className="topbar">
-          <SignalLauncher role={typeof me?.role === 'string' ? me.role : undefined}/>
-          <span>
-            CRM <b>/</b> {sections.find((s) => s[0] === section)?.[1]}
-          </span>
-          <button disabled={busy || !pid} onClick={() => void act(() => load())}>
-            {busy ? 'Обновление…' : 'Обновить'}
-          </button>
+        <header className="topbar staff-chrome" data-staff-chrome="crm" aria-label="Шапка CRM">
+          <div className="staff-chrome__brand">
+            <span className="staff-chrome__mark" aria-hidden="true" />
+            <div>
+              <p className="staff-chrome__product">CRM</p>
+              <p className="staff-chrome__meta">
+                {sections.find((s) => s[0] === section)?.[1] || 'Обзор'}
+                {' · '}
+                {me.role === 'owner' ? 'Владелец' : me.role === 'editor' ? 'Партнёр' : 'Менеджер'}
+              </p>
+            </div>
+          </div>
+          <div className="staff-chrome__actions" role="toolbar" aria-label="Действия">
+            <div className="staff-chrome__platform" role="group" aria-label="Платформа">
+              <SignalLauncher role={typeof me?.role === 'string' ? me.role : undefined} />
+              <button
+                type="button"
+                className="staff-chrome__logout"
+                onClick={() =>
+                  void act(async () => {
+                    await api('/logout', 'POST');
+                    sessionStorage.removeItem('crm-token');
+                    setToken('');
+                    setMe(null);
+                  })
+                }
+              >
+                Выйти
+              </button>
+            </div>
+            <button type="button" disabled={busy || !pid} onClick={() => void act(() => load())}>
+              {busy ? 'Обновление…' : 'Обновить'}
+            </button>
+          </div>
+          <nav className="staff-chrome__strip" data-visible="true" aria-label="Быстрые ссылки">
+            <button type="button" className="linkish" onClick={goToday}>
+              Работа сегодня
+            </button>
+            <button
+              type="button"
+              className="linkish"
+              onClick={() => {
+                if (detail?.id) {
+                  window.requestAnimationFrame(() => {
+                    document.getElementById('contact-history')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  });
+                  return;
+                }
+                setSection('contacts');
+                setError('');
+              }}
+            >
+              History
+            </button>
+          </nav>
         </header>
         <main className="content">
           <div className="page-heading">
@@ -2424,11 +2471,13 @@ export default function Workspace() {
                 ))}
               </>
             )}
-            <h3>История</h3>
-            <p className="fine">
-              Стадии и письма цикла: sandbox-оплата и mail видны здесь без SSH (FUNC-M2).
-            </p>
-            <HistoryTimeline detail={detail} />
+            <div id="contact-history">
+              <h3>История</h3>
+              <p className="fine">
+                Стадии и письма цикла: sandbox-оплата и mail видны здесь без SSH (FUNC-M2).
+              </p>
+              <HistoryTimeline detail={detail} />
+            </div>
           </aside>
         </div>
       )}

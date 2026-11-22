@@ -1,0 +1,50 @@
+"""FE-U1: CRM shared staff chrome markers (Signal portable pattern). Guest login stays FE-U3."""
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_staff_chrome_css_shipped():
+    css = (ROOT / "web" / "app" / "styles" / "staff-chrome.css").read_text(encoding="utf-8")
+    assert "--staff-chrome-accent-2" in css
+    assert "#c45c26" in css
+    assert ".staff-chrome__mark" in css
+    assert ".staff-chrome__launcher" in css
+    assert ".staff-chrome__logout" in css
+
+
+def test_crm_workspace_authed_chrome_slots():
+    src = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
+    assert 'data-staff-chrome="crm"' in src
+    assert "staff-chrome__mark" in src
+    assert 'staff-chrome__product">CRM' in src or "staff-chrome__product\">CRM" in src
+    assert "staff-chrome__platform" in src
+    assert "staff-chrome__logout" in src
+    assert "Выйти" in src
+    assert "SignalLauncher" in src
+    assert "staff-chrome__strip" in src
+    assert "Работа сегодня" in src
+    # Chrome only after authed `me` gate — LoginScreen is the guest path.
+    assert "if (!me)" in src
+    assert "<LoginScreen" in src
+
+
+def test_launcher_uses_staff_chrome_classes():
+    src = (ROOT / "web" / "app" / "components" / "SignalLauncher.tsx").read_text(encoding="utf-8")
+    assert "staff-chrome__launcher" in src
+    assert "▦" in src
+    assert 'aria-label="Сервисы"' in src
+
+
+def test_guest_login_fe_u3_untouched():
+    login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    assert "staff-chrome" not in login
+    assert "SignalLauncher" not in login
+    assert ">Войти<" in login or "Войти" in login
+    assert "Регистрация" in login
+    assert "Забыли пароль?" in login
+
+
+def test_layout_imports_staff_chrome():
+    layout = (ROOT / "web" / "app" / "layout.tsx").read_text(encoding="utf-8")
+    assert "staff-chrome.css" in layout

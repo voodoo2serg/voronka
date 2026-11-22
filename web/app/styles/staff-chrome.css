@@ -1,0 +1,292 @@
+/**
+ * FE-U1 — Shared staff chrome (portable snippet)
+ * Copied from Signal web/staff-chrome.css for CRM staff shell.
+ * Do not mount ▦ / chrome logout on guest / login / register surfaces.
+ * Catalog SoR: Signal GET /api/v1/platform/services (PR-CAT0); static fallback OK.
+ * Contract: Project docs/fe-u1-shared-chrome.md
+ */
+
+:root {
+  --staff-chrome-ink: #15231c;
+  --staff-chrome-ink-soft: #3d4f45;
+  --staff-chrome-paper: rgba(243, 239, 230, 0.82);
+  --staff-chrome-line: rgba(21, 35, 28, 0.12);
+  /* CRM keeps monochrome HQ body; mark gradient still uses teal→terracotta family cue. */
+  --staff-chrome-accent: #0f6b5c;
+  --staff-chrome-accent-2: #c45c26;
+  --staff-chrome-surface: #fffdf8;
+  --staff-chrome-radius: 11px;
+  --staff-chrome-font: "Manrope", "Segoe UI", sans-serif;
+  --staff-chrome-display: "Literata", Georgia, serif;
+  --staff-chrome-shadow: 0 14px 35px rgba(0, 0, 0, 0.12);
+}
+
+.staff-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.15rem;
+  border-bottom: 1px solid var(--staff-chrome-line);
+  background: var(--staff-chrome-paper);
+  backdrop-filter: blur(10px);
+  color: var(--staff-chrome-ink);
+  font-family: var(--staff-chrome-font);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.staff-chrome__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.staff-chrome__mark {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.55rem;
+  background: linear-gradient(
+    135deg,
+    var(--staff-chrome-accent),
+    #1a8f7a 55%,
+    var(--staff-chrome-accent-2)
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.staff-chrome__product {
+  margin: 0;
+  font-family: var(--staff-chrome-display);
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+}
+
+.staff-chrome__meta {
+  margin: 0.12rem 0 0;
+  font-size: 0.78rem;
+  color: var(--staff-chrome-ink-soft);
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staff-chrome__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+.staff-chrome__platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* ▦ services switcher — authed only (host JS must keep [hidden] for guests). */
+.staff-chrome__launcher,
+.signal-launcher {
+  position: relative;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+}
+.staff-chrome__launcher[hidden],
+.signal-launcher[hidden] {
+  display: none !important;
+}
+.staff-chrome__launcher > summary,
+.signal-launcher > summary {
+  list-style: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--staff-chrome-radius);
+  border: 1px solid #d7d2cb;
+  background: transparent;
+  color: inherit;
+  font-size: 1.55rem;
+  line-height: 1;
+}
+.staff-chrome__launcher > summary::-webkit-details-marker,
+.signal-launcher > summary::-webkit-details-marker {
+  display: none;
+}
+.staff-chrome__launcher > summary:hover,
+.staff-chrome__launcher[open] > summary,
+.signal-launcher > summary:hover,
+.signal-launcher[open] > summary {
+  background: #f6f3ee;
+}
+
+.staff-chrome__popover,
+.signal-launcher-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: min(370px, calc(100vw - 24px));
+  max-height: 75vh;
+  overflow-y: auto;
+  padding: 16px;
+  background: #fff;
+  color: #292929;
+  border: 1px solid #d7d2cb;
+  border-radius: 16px;
+  box-shadow: var(--staff-chrome-shadow);
+  z-index: 60;
+}
+.staff-chrome__popover > strong,
+.signal-launcher-popover > strong {
+  font-size: 15px;
+}
+.staff-chrome__popover p,
+.signal-launcher-popover p {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #67645f;
+}
+.staff-chrome__grid,
+.signal-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.staff-chrome__grid a,
+.signal-launcher-grid a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  border-radius: 12px;
+  padding: 8px 4px;
+  font-size: 12px;
+  text-align: center;
+  text-decoration: none;
+  color: #292929;
+}
+.staff-chrome__grid a:hover,
+.staff-chrome__grid a:focus-visible,
+.signal-launcher-grid a:hover,
+.signal-launcher-grid a:focus-visible {
+  background: #f1ede6;
+  outline-offset: 2px;
+}
+.staff-chrome__grid b,
+.signal-launcher-grid b {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid #e2ddd4;
+  background: #f7f3ed;
+  font-size: 13px;
+}
+.staff-chrome__grid a.disabled,
+.staff-chrome__grid a[aria-disabled="true"],
+.signal-launcher-grid a.disabled,
+.signal-launcher-grid a[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.staff-chrome__popover small,
+.signal-launcher-popover small {
+  font-size: 10px;
+  font-weight: 400;
+  color: #777;
+  line-height: 1.5;
+}
+.staff-chrome__popover > small,
+.signal-launcher-popover > small {
+  display: block;
+  margin-top: 12px;
+}
+
+.staff-chrome__logout {
+  appearance: none;
+  border: 1px solid var(--staff-chrome-line);
+  background: var(--staff-chrome-surface);
+  color: var(--staff-chrome-ink);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.85rem;
+  font: 600 0.88rem/1.2 var(--staff-chrome-font);
+  cursor: pointer;
+}
+.staff-chrome__logout:hover,
+.staff-chrome__logout:focus-visible {
+  border-color: var(--staff-chrome-accent);
+  outline: none;
+}
+.staff-chrome__logout[hidden] {
+  display: none !important;
+}
+
+/* Optional operator deep-link strip (CRM Today · History). */
+.staff-chrome__strip {
+  display: none;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--staff-chrome-line);
+  font-size: 0.78rem;
+}
+.staff-chrome__strip[data-visible="true"] {
+  display: flex;
+}
+.staff-chrome__strip a,
+.staff-chrome__strip button.linkish {
+  color: var(--staff-chrome-accent);
+  text-decoration: none;
+  font-weight: 600;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+.staff-chrome__strip a:hover,
+.staff-chrome__strip a:focus-visible,
+.staff-chrome__strip button.linkish:hover,
+.staff-chrome__strip button.linkish:focus-visible {
+  text-decoration: underline;
+}
+
+/* Coexist with legacy .topbar metrics when both classes are present. */
+.topbar.staff-chrome {
+  height: auto;
+  min-height: 56px;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.15rem;
+  color: var(--staff-chrome-ink);
+  font-size: inherit;
+}
+.topbar.staff-chrome .staff-chrome__actions > button {
+  font-size: 0.88rem;
+}
+
+@media (max-width: 720px) {
+  .staff-chrome {
+    flex-wrap: wrap;
+    padding: 0.65rem 0.85rem;
+  }
+  .staff-chrome__product {
+    font-size: 1.05rem;
+  }
+  .topbar.staff-chrome {
+    padding: 0.65rem 0.85rem;
+  }
+}
