@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — A9-03 / A9-05 History + learner Person
+
+- A9-03: LMS `progress.updated` / `learning.completed` → Person Interaction History («Курс»); alias `POST …/lms_end/progress`.
+- A9-03: HistoryTimeline paints pay / mail / «Открыть курс» / course; backfill `scripts/backfill_payment_history.py`.
+- A9-05: `POST …/lms_end/person` — first learner SSO/grant → Person+OIDC (no Account, no email merge).
+- Tests: `tests/test_a9_lms_history_person.py`.
+
 ## Unreleased — Lift 8→10 AUTH-M2 / FUNC-M2 / ARCH-M2 / Q11=C runbook
 
 - AUTH-M2: CRM/ops guest card = RU login / register / forgot only; `register=1` → Keycloak `kc_action=REGISTER`.
