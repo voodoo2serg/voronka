@@ -34,6 +34,7 @@
   font-family: var(--staff-chrome-font);
   position: sticky;
   top: 0;
+  /* Below .drawer-layer (40) so drawer close stays clickable; History strip hides while drawer open. */
   z-index: 30;
 }
 
@@ -132,6 +133,7 @@
 .staff-chrome__popover,
 .signal-launcher-popover {
   position: absolute;
+  left: auto; /* win over legacy .signal-service-popover { left: 0 } if both classes ever applied */
   right: 0;
   top: calc(100% + 10px);
   width: min(370px, calc(100vw - 24px));

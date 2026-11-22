@@ -37,9 +37,10 @@ export default function SignalLauncher({role}:{role?: CrmRole | null}={}){
  },[showAdmin,mode]);
  const adminItems=ITEMS.filter(x=>x.admin);
  const shown=mode==='site'?ITEMS:adminItems;
- return <details className="staff-chrome__launcher signal-service-switcher">
+ return <details className="staff-chrome__launcher">
    <summary aria-label="Сервисы" title="Сервисы">▦</summary>
-   <div className="staff-chrome__popover signal-service-popover">
+   {/* FE-U1: staff-chrome popover only (no legacy left:0 class — clips when right-anchored). */}
+   <div className="staff-chrome__popover">
      <strong>Сервисы</strong>
      <p>Платформа</p>
      <div className="signal-service-tabs" role="group" aria-label="Разделы">
@@ -48,7 +49,7 @@ export default function SignalLauncher({role}:{role?: CrmRole | null}={}){
          <button type="button" aria-pressed={mode==='admin'} onClick={()=>setMode('admin')}>Админка</button>
        )}
      </div>
-     <div className="staff-chrome__grid signal-service-grid">
+     <div className="staff-chrome__grid">
        {shown.map(x=><a href={mode==='site'?x.site:x.admin} key={x.id}>
          <b aria-hidden="true">{x.mark}</b><span>{x.label}</span>
        </a>)}

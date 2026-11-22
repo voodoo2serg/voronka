@@ -772,22 +772,20 @@ export default function Workspace() {
             <button type="button" className="linkish" onClick={goToday}>
               Работа сегодня
             </button>
-            <button
-              type="button"
-              className="linkish"
-              onClick={() => {
-                if (detail?.id) {
-                  window.requestAnimationFrame(() => {
-                    document.getElementById('contact-history')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                  });
-                  return;
-                }
-                setSection('contacts');
-                setError('');
-              }}
-            >
-              History
-            </button>
+            {/* History lives in the contact drawer (z-40). Hide strip link while drawer open so chrome
+                need not sit above the drawer (that blocked «Закрыть карточку»). */}
+            {!detail?.id && (
+              <button
+                type="button"
+                className="linkish"
+                onClick={() => {
+                  setSection('contacts');
+                  setError('');
+                }}
+              >
+                History
+              </button>
+            )}
           </nav>
         </header>
         <main className="content">

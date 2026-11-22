@@ -11,6 +11,9 @@ def test_staff_chrome_css_shipped():
     assert ".staff-chrome__mark" in css
     assert ".staff-chrome__launcher" in css
     assert ".staff-chrome__logout" in css
+    # Codex #46 follow-up: right-anchored popover; chrome stays under drawer-layer (40).
+    assert "left: auto" in css
+    assert "z-index: 30" in css
 
 
 def test_crm_workspace_authed_chrome_slots():
@@ -32,8 +35,13 @@ def test_crm_workspace_authed_chrome_slots():
 def test_launcher_uses_staff_chrome_classes():
     src = (ROOT / "web" / "app" / "components" / "SignalLauncher.tsx").read_text(encoding="utf-8")
     assert "staff-chrome__launcher" in src
+    assert "staff-chrome__popover" in src
     assert "▦" in src
     assert 'aria-label="Сервисы"' in src
+    # Drop legacy left:0 popover class so staff-chrome right:0 wins (Codex P1).
+    assert 'className="staff-chrome__popover"' in src
+    assert "signal-service-popover" not in src
+    assert "signal-service-switcher" not in src
 
 
 def test_guest_login_fe_u3_untouched():
