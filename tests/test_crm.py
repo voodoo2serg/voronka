@@ -140,6 +140,29 @@ def test_future_installment_not_overdue_and_snapshot_is_immutable(crm):
     assert crm.client.get('/api/crm/projects/p/orders').json()[0]['total_minor']==100000
 
 
+def test_product_lms_course_id_bind_in_config_and_order_snapshot(crm):
+    """VR-405 / T2: Product config.course_id is the LMS externalId used as AccessGrant resource."""
+    p = product(crm, kind='course', name='Курс LMS', config={'course_id': '  oo-course-42  ', 'club': 'keep-me'})
+    assert p['config']['course_id'] == 'oo-course-42'
+    assert p['config']['club'] == 'keep-me'
+    o = order(crm, item=p, request_key='lms-bind-order-1')
+    assert o['snapshot']['config']['course_id'] == 'oo-course-42'
+    assert crm.client.put(
+        '/api/crm/products/' + p['id'],
+        json={'name': 'Курс LMS', 'kind': 'course', 'price_minor': 100000, 'config': {'course_id': '', 'club': 'keep-me'}},
+    ).status_code == 200
+    updated = crm.client.get('/api/crm/projects/p/products').json()
+    row = next(x for x in updated if x['id'] == p['id'])
+    assert 'course_id' not in row['config']
+    assert row['config']['club'] == 'keep-me'
+    # Order snapshot stays frozen at create-time bind
+    assert crm.client.get('/api/crm/projects/p/orders').json()[0]['snapshot']['config']['course_id'] == 'oo-course-42'
+    assert crm.client.post(
+        '/api/crm/projects/p/products',
+        json={'name': 'Bad', 'kind': 'course', 'price_minor': 1, 'config': {'course_id': 123}},
+    ).status_code == 422
+
+
 def test_promocode_capacity_and_cancel_release(crm):
     person=contact(crm);item=product(crm)
     assert crm.client.post('/api/crm/projects/p/promos',json={'code':'HELLO','percent':20,'max_uses':1}).status_code==200

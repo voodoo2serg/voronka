@@ -336,6 +336,9 @@ export default function Workspace() {
   }
 
   function productForm(row?: Row) {
+    const priorConfig = row?.config && typeof row.config === 'object' ? { ...row.config } : {};
+    const boundCourse =
+      typeof priorConfig.course_id === 'string' ? priorConfig.course_id : '';
     setForm({
       title: row ? 'Изменить продукт' : 'Новый продукт или услуга',
       fields: [
@@ -343,16 +346,25 @@ export default function Workspace() {
         { key: 'kind', label: 'Вид', type: 'select', options: kinds, value: row?.kind || 'audit' },
         { key: 'description', label: 'Описание и результат', type: 'textarea', value: row?.description },
         { key: 'price', label: 'Стоимость, ₽', type: 'number', value: String((row?.price_minor || 0) / 100) },
+        {
+          key: 'lms_course_id',
+          label: 'Курс LMS · externalId / ключ ресурса (для AccessGrant)',
+          value: boundCourse,
+        },
         { key: 'active', label: 'Доступен для оформления заказа', type: 'checkbox', value: row?.active ? 'true' : '' },
       ],
       save: async (v) => {
+        const courseId = (v.lms_course_id || '').trim();
+        const config = { ...priorConfig };
+        if (courseId) config.course_id = courseId;
+        else delete config.course_id;
         await api(row ? '/products/' + row.id : `/projects/${pid}/products`, row ? 'PUT' : 'POST', {
           name: v.name,
           kind: v.kind,
           description: v.description,
           price_minor: toMinor(v.price),
           active: v.active === 'true',
-          config: row?.config || {},
+          config,
         });
         await load();
       },
@@ -463,10 +475,26 @@ export default function Workspace() {
   }
 
   function grantForm(o: Row) {
+    const snapConfig =
+      o.snapshot?.config && typeof o.snapshot.config === 'object' ? o.snapshot.config : {};
+    const fromProduct = products.find((p) => p.id === o.product_id);
+    const productConfig =
+      fromProduct?.config && typeof fromProduct.config === 'object' ? fromProduct.config : {};
+    const boundResource =
+      (typeof snapConfig.course_id === 'string' && snapConfig.course_id.trim()) ||
+      (typeof productConfig.course_id === 'string' && productConfig.course_id.trim()) ||
+      '';
     setForm({
-      title: 'Назначить право',
+      title: boundResource ? 'Назначить право (ресурс из продукта)' : 'Назначить право',
       fields: [
-        { key: 'resource', label: 'Ключ ресурса / раздела', required: true },
+        {
+          key: 'resource',
+          label: boundResource
+            ? 'Ключ ресурса / раздела (подставлен из курса LMS продукта)'
+            : 'Ключ ресурса / раздела (externalId курса LMS)',
+          required: true,
+          value: boundResource,
+        },
         {
           key: 'capability',
           label: 'Действие',
@@ -480,6 +508,7 @@ export default function Workspace() {
             ['live.join', 'Онлайн-занятие'],
             ['certificate.issue', 'Сертификат'],
           ],
+          value: boundResource ? 'course.view' : undefined,
         },
         { key: 'min_paid_percent', label: 'Минимальная оплата, %', type: 'number', value: '100' },
         { key: 'expires_at', label: 'До даты', type: 'datetime-local' },
@@ -1257,7 +1286,12 @@ export default function Workspace() {
                     )}
                   </div>
                   <div className="product-grid">
-                    {products.map((p) => (
+                    {products.map((p) => {
+                      const courseId =
+                        p.config && typeof p.config === 'object' && typeof p.config.course_id === 'string'
+                          ? p.config.course_id.trim()
+                          : '';
+                      return (
                       <article className="panel product-card" key={p.id}>
                         <div className="row">
                           <span className="tag">{me.product_kinds[p.kind]}</span>
@@ -1265,6 +1299,13 @@ export default function Workspace() {
                         </div>
                         <h2>{p.name}</h2>
                         <p className="muted">{p.description || 'Описание пока не добавлено'}</p>
+                        {courseId ? (
+                          <p className="fine">
+                            Курс LMS: <code>{courseId}</code>
+                          </p>
+                        ) : (
+                          <p className="fine muted">Курс LMS не привязан</p>
+                        )}
                         <div className="row">
                           <strong>{money(p.price_minor)}</strong>
                           <button disabled={me.role !== 'owner'} onClick={() => productForm(p)}>
@@ -1272,7 +1313,8 @@ export default function Workspace() {
                           </button>
                         </div>
                       </article>
-                    ))}
+                      );
+                    })}
                   </div>
                   {!products.length && <div className="empty">Создайте продукт или добавьте шаблоны направлений. Цены не заполняются вымышленными значениями.</div>}
                 </>

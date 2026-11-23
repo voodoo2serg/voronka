@@ -101,6 +101,11 @@ export function SystemHelpModal({ onClose }: { onClose: () => void }) {
                 мержит разных людей.
               </li>
               <li>
+                <strong>Продукт → курс LMS</strong> — в «Продукты» → «+ Продукт» / «Изменить» поле{' '}
+                <em>Курс LMS · externalId</em> пишется в <code>config.course_id</code>. При «Право
+                доступа» на заказе ключ ресурса подставляется из этой привязки.
+              </li>
+              <li>
                 <strong>AccessGrant</strong> — право на курс после оплаты/заказа. CRM выдаёт грант →
                 outbox в LMS/Signal; ученик открывает курс через{' '}
                 <a href={PORTAL_URLS.lms + '/open'} target="_blank" rel="noreferrer">
