@@ -154,6 +154,120 @@ def test_lead_created_idempotent(crm, monkeypatch):
         assert allowed, reason
 
 
+def test_messenger_lead_registers_contact_points(crm, monkeypatch):
+    """VR-408: solo_pr telegram/max contact_type must become Person ContactPoints."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    from app.crm_models import Consent, ContactPoint, Profile
+
+    tg_payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "lead-tg-1",
+        "idempotency_key": "lead-tg-1",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "telegram",
+            "contact": "@vr408_course",
+            "email": "",
+            "name": "TG Lead",
+            "kind": "course",
+            "service": "intensiv-novye-vozmozhnosti-kommunikatsiy",
+            "consent": True,
+            "ads_consent": False,
+        },
+        "project_id": "p",
+    }
+    raw = json.dumps(tg_payload).encode()
+    r = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
+    )
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    person_id = r.json()["person_id"]
+    assert person_id
+
+    max_payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "lead-max-1",
+        "idempotency_key": "lead-max-1",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "max",
+            "contact": "+79991112233",
+            "email": "",
+            "name": "MAX Lead",
+            "kind": "course",
+            "service": "intensiv-novye-vozmozhnosti-kommunikatsiy",
+            "consent": True,
+            "ads_consent": False,
+        },
+        "project_id": "p",
+    }
+    raw2 = json.dumps(max_payload).encode()
+    r2 = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw2, headers=_auth_headers("inbound-secret", raw2)
+    )
+    assert r2.status_code == 200 and r2.json()["duplicate"] is False
+
+    with crm.db() as db:
+        tg_cps = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == person_id)))
+        assert any(cp.channel == "telegram" and "@vr408_course" in (cp.normalized_value or cp.raw_value or "") for cp in tg_cps)
+        tg_cp = next(cp for cp in tg_cps if cp.channel == "telegram")
+        tx = db.scalar(
+            select(Consent).where(Consent.contact_point_id == tg_cp.id, Consent.purpose == "transactional")
+        )
+        assert tx and tx.status == "granted"
+
+        max_profile = db.scalar(select(Profile).where(Profile.phone == "+79991112233"))
+        assert max_profile and max_profile.person_id
+        max_cps = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == max_profile.person_id)))
+        assert any(cp.channel == "max" for cp in max_cps)
+        assert any(cp.channel == "phone" for cp in max_cps)
+
+
+def test_email_lead_with_messenger_extras_one_person(crm, monkeypatch):
+    """VR-408: email primary + telegram/max extras → one Person, all ContactPoints."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    from app.crm_models import ContactPoint, Profile
+
+    payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "lead-multi-1",
+        "idempotency_key": "lead-multi-1",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "email",
+            "contact": "course.lead@example.ru",
+            "email": "course.lead@example.ru",
+            "telegram": "@course_lead_tg",
+            "max": "+79990001122",
+            "name": "Multi",
+            "kind": "course",
+            "service": "intensiv-novye-vozmozhnosti-kommunikatsiy",
+            "consent": True,
+            "ads_consent": False,
+        },
+        "project_id": "p",
+    }
+    raw = json.dumps(payload).encode()
+    r = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
+    )
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    person_id = r.json()["person_id"]
+    with crm.db() as db:
+        profile = db.scalar(select(Profile).where(Profile.email == "course.lead@example.ru"))
+        assert profile and profile.person_id == person_id
+        channels = {
+            cp.channel
+            for cp in db.scalars(select(ContactPoint).where(ContactPoint.person_id == person_id))
+        }
+        assert {"email", "telegram", "max", "phone"} <= channels
+
+
 def test_raga_lead_creates_person_via_generic_path(crm, monkeypatch):
     monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
     monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-other-secret")

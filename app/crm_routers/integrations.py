@@ -40,6 +40,9 @@ class LeadBody(Body):
     source: LEAD_SOURCES = "solo_pr"
     project_id: str | None = None
     promo_code: str = Field(default="", max_length=40)
+    # VR-408: optional messenger extras when primary contact is email.
+    telegram: str = Field(default="", max_length=250)
+    max: str = Field(default="", max_length=250)
     # ARCH-M2: solo/learner handoff — optional verified Keycloak sub (not email).
     keycloak_sub: str = Field(default="", max_length=200)
     issuer: str = Field(default="", max_length=250)
@@ -148,6 +151,8 @@ def normalize_lead_body(raw: dict[str, Any]) -> LeadBody:
             source=source,  # type: ignore[arg-type]
             project_id=merged.get("project_id"),
             promo_code=str(merged.get("promo_code") or merged.get("promo") or "")[:40],
+            telegram=str(merged.get("telegram") or "")[:250],
+            max=str(merged.get("max") or "")[:250],
             keycloak_sub=str(merged.get("keycloak_sub") or merged.get("sub") or "")[:200],
             issuer=str(merged.get("issuer") or "")[:250],
         )
@@ -358,16 +363,63 @@ def _find_profile_by_keycloak(db, keycloak_sub: str) -> Profile | None:
     return None
 
 
+def _lead_channel_values(body: LeadBody) -> tuple[str, str, str, str]:
+    """Map solo_pr contact_type → email / phone / telegram / max values.
+
+    Site form uses contact_type email|telegram|max (not phone). MAX may be a
+    phone or https://max.ru/… link; only phones go into Profile.phone.
+    Optional body.telegram / body.max ride alongside an email primary contact.
+    """
+    ct = (body.contact_type or "").strip().lower()
+    raw = (body.contact or "").strip()
+    email = body.email or (raw if ct == "email" else "")
+    phone = raw if ct == "phone" else ""
+    telegram = (body.telegram or "").strip() or (raw if ct == "telegram" else "")
+    max_value = (body.max or "").strip() or (raw if ct == "max" else "")
+    if ct == "max" and raw and not raw.lower().startswith("http") and not phone:
+        # Phone-shaped MAX contact also fills Profile.phone for lookup.
+        phone = raw
+    if max_value and not max_value.lower().startswith("http") and not phone:
+        phone = max_value
+    try:
+        email = normalize_email(email)
+        phone = normalize_phone(phone)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if ct in {"telegram", "max"} and not (telegram or max_value):
+        raise HTTPException(422, "Укажите контакт Telegram или MAX")
+    if ct == "email" and not email:
+        raise HTTPException(422, "Укажите email")
+    if not any((email, phone, telegram, max_value)):
+        raise HTTPException(422, "Укажите контакт")
+    return email, phone, telegram, max_value
+
+
+def _grant_lead_consent(db, contact_point_id: str, *, source: str, event_id: str, ads_consent: bool) -> None:
+    from app import person_graph
+
+    evidence = f"{source} lead.created:{event_id}"
+    person_graph.set_consent(
+        db, contact_point_id, purpose="transactional", status="granted", evidence=evidence
+    )
+    person_graph.set_consent(
+        db, contact_point_id, purpose="service", status="granted", evidence=evidence
+    )
+    person_graph.set_consent(
+        db,
+        contact_point_id,
+        purpose="marketing",
+        status="granted" if ads_consent else "denied",
+        evidence=evidence,
+    )
+
+
 def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
     """Upsert Person/Profile/Deal from any marketing lead source (solo_pr / RAGA)."""
     project_id = body.project_id or os.getenv("DEFAULT_PROJECT_ID", "")
     if not project_id:
         raise HTTPException(503, "DEFAULT_PROJECT_ID не задан для входящих лидов")
-    try:
-        email = normalize_email(body.email or (body.contact if body.contact_type == "email" else ""))
-        phone = normalize_phone(body.contact if body.contact_type == "phone" else "")
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
+    email, phone, telegram, max_value = _lead_channel_values(body)
     source = body.source
     default_name = {
         "solo_pr": "Лид сайта",
@@ -401,6 +453,7 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
         lead_extra = {
             "lead_event_id": body.event_id,
             "contact_type": body.contact_type,
+            "contact": body.contact,
             "service": body.service,
             "consent": body.consent,
             "ads_consent": body.ads_consent,
@@ -408,12 +461,17 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
             "lead_source": source,
             "promo_code": body.promo_code,
         }
+        if telegram:
+            lead_extra["telegram"] = telegram
+        if max_value:
+            lead_extra["max"] = max_value
+        display = body.name or email or phone or telegram or max_value or default_name
         if profile is None:
             profile = create_profile(
                 db,
                 project_id,
                 {
-                    "name": body.name or email or phone or default_name,
+                    "name": display,
                     "email": email,
                     "phone": phone,
                     "source": source,
@@ -429,38 +487,35 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
             extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
             extra.update(lead_extra)
             profile.extra = extra
-        # CRM-102 / MAIL-101: record form consent onto email ContactPoint.
+            if phone and not profile.phone:
+                profile.phone = phone
+            if email and not profile.email:
+                profile.email = email
+        # CRM-102 / MAIL-101: record form consent onto every submitted ContactPoint.
         from app import person_graph
 
         person = person_graph.sync_profile_contact_points(db, profile)
-        email_cp = None
+        channel_points: list[tuple[str, str]] = []
         if email:
-            email_cp = person_graph.upsert_contact_point(
-                db, person, channel="email", value=email, verified=False
+            channel_points.append(("email", email))
+        if phone:
+            channel_points.append(("phone", phone))
+        if telegram:
+            channel_points.append(("telegram", telegram))
+        if max_value:
+            channel_points.append(("max", max_value))
+        for channel, value in channel_points:
+            cp = person_graph.upsert_contact_point(
+                db, person, channel=channel, value=value, verified=False
             )
-        if email_cp and body.consent:
-            evidence = f"{source} lead.created:{body.event_id}"
-            person_graph.set_consent(
-                db,
-                email_cp.id,
-                purpose="transactional",
-                status="granted",
-                evidence=evidence,
-            )
-            person_graph.set_consent(
-                db,
-                email_cp.id,
-                purpose="service",
-                status="granted",
-                evidence=evidence,
-            )
-            person_graph.set_consent(
-                db,
-                email_cp.id,
-                purpose="marketing",
-                status="granted" if body.ads_consent else "denied",
-                evidence=evidence,
-            )
+            if cp and body.consent:
+                _grant_lead_consent(
+                    db,
+                    cp.id,
+                    source=source,
+                    event_id=body.event_id,
+                    ads_consent=body.ads_consent,
+                )
         # ARCH-M2: solo handoff with verified Keycloak sub → Person coverage (no staff Account).
         if body.keycloak_sub:
             _attach_learner_oidc(
