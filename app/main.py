@@ -78,6 +78,54 @@ def index(request: Request):
         return RedirectResponse(url="/crm/", status_code=302)
     return HTMLResponse(Path("app/admin.html").read_text(encoding="utf-8"))
 
+
+@app.get("/u/marketing/{token}", response_class=HTMLResponse)
+def marketing_unsubscribe(token: str):
+    """Public marketing opt-out from Telegram/email invite footer (VR-424). No auth."""
+    from app import lead_invite
+    from app import person_graph
+
+    parsed = lead_invite.verify_unsubscribe_token(token)
+    if not parsed:
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>Ссылка недействительна</title>"
+            "<body style='font-family:system-ui;max-width:36rem;margin:3rem auto;padding:0 1rem'>"
+            "<h1>Ссылка недействительна</h1>"
+            "<p>Срок действия истёк или ссылка повреждена. Напишите нам, если нужно отписаться вручную.</p>"
+            "</body>",
+            status_code=400,
+        )
+    with Session.begin() as db:
+        from app.crm_models import ContactPoint, Profile
+
+        cp = db.get(ContactPoint, parsed["contact_point_id"])
+        if cp is None:
+            return HTMLResponse(
+                "<!doctype html><meta charset=utf-8><title>Ссылка недействительна</title>"
+                "<body style='font-family:system-ui;max-width:36rem;margin:3rem auto;padding:0 1rem'>"
+                "<h1>Ссылка недействительна</h1>"
+                "<p>Контакт уже удалён или ссылка устарела.</p>"
+                "</body>",
+                status_code=404,
+            )
+        person_graph.set_consent(
+            db,
+            cp.id,
+            purpose="marketing",
+            status="revoked",
+            evidence="public_unsubscribe_link",
+        )
+        if cp.person_id:
+            for profile in db.scalars(select(Profile).where(Profile.person_id == cp.person_id)):
+                profile.stopped = True
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><title>Вы отписались</title>"
+        "<body style='font-family:system-ui;max-width:36rem;margin:3rem auto;padding:0 1rem'>"
+        "<h1>Вы отписались от рассылки</h1>"
+        "<p>Маркетинговые сообщения на этот контакт больше не будут отправляться.</p>"
+        "</body>"
+    )
+
 @app.get("/health")
 def health():
     with Session() as db:

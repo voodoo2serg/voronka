@@ -193,6 +193,7 @@ def normalize(platform, raw):
         event = {"event_id": str(raw["update_id"]), "user_id": str(user["id"]),
             "chat_id": str(msg["chat"]["id"]), "text": text,
             "name": " ".join(filter(None, [user.get("first_name"), user.get("last_name")]))[:200],
+            "username": (user.get("username") or "").strip().lower() or None,
             "start": parts[0].split("@")[0] == "/start" if parts else False,
             "payload": parts[1] if len(parts) == 2 and parts[0].split("@")[0] == "/start" else None}
         if query:

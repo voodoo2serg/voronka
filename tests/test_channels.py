@@ -44,6 +44,22 @@ def test_rejected_telegram(monkeypatch):
     with patch("app.channels.httpx.Client",return_value=wrapper), pytest.raises(DeliveryRejected):
         send(connection("telegram"),"123",{"type":"text","text":"x"},"stable")
 
+def test_telegram_normalize_captures_username():
+    raw = {
+        "update_id": 9,
+        "message": {
+            "message_id": 1,
+            "chat": {"id": 55, "type": "private"},
+            "from": {"id": 55, "first_name": "A", "username": "Vr424_Lead", "is_bot": False},
+            "text": "/start",
+        },
+    }
+    msg = normalize("telegram", raw)
+    assert msg["start"] is True
+    assert msg["username"] == "vr424_lead"
+    assert msg["user_id"] == "55"
+
+
 def test_max_started():
     msg=normalize("max",{"update_type":"bot_started","user":{"user_id":123},"timestamp":1000,"payload":"entry"})
     assert msg["start"] is True and msg["payload"]=="entry"

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — VR-424 Solo_pr_bot course channel invite
+
+- After `lead.created` with Telegram ContactPoint + marketing consent, Voronka queues a channel invite DM via `@Solo_pr_bot` Outbox (not Signal CE). Cold leads stay pending until `/start`.
+- Public marketing opt-out: `GET /u/marketing/{token}` → Consent `marketing=revoked`.
+- Connections hub / CRM Подключения / ops Боты show `@bot_username` + Outbox pending/fail.
+- Env: `TG_SOLO_PR_TOKEN`, `TG_SOLO_PR_WEBHOOK_SECRET`, `SOLO_PR_CHANNEL_INVITE_URL`.
+
 ## Unreleased — A9-03 / A9-05 History + learner Person
 
 - A9-03: LMS `progress.updated` / `learning.completed` → Person Interaction History («Курс»); alias `POST …/lms_end/progress`.
