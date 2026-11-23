@@ -285,7 +285,10 @@ class LlmReplyAudit(Base):
         CheckConstraint(
             "response_status IN ('ok', 'error', 'timeout', 'fallback', 'pending', 'approved', 'rejected', 'edited')"
         ),
-        CheckConstraint("mode IN ('draft_only', 'human_approval')"),
+        CheckConstraint(
+            "mode IN ('draft_only', 'human_approval', 'auto_framed')",
+            name="llm_reply_audits_mode_check",
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id"), index=True)

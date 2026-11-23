@@ -4,15 +4,17 @@ MEDIA = {"photo", "video", "video_note", "voice", "document"}
 SEND = {"text"} | MEDIA
 # escalate / operator_pause = pause for human (≠ handoff bot switch).
 # llm_reply = draft-first LLM node (PDialog P1 / Signal#20 / VR-124); auto_send is never a publish field.
+# intent_router = keyword/pattern branch (VR-406 / SIG-UX-10 slice); llm_classify stays forward-compat.
 TYPES = SEND | {
     "question", "survey", "condition", "wait", "grant", "stage", "task", "finish", "goal",
-    "handoff", "llm_reply", "escalate", "operator_pause",
+    "handoff", "llm_reply", "escalate", "operator_pause", "intent_router",
 }
-LLM_MODES = {"draft_only", "human_approval"}
+LLM_MODES = {"draft_only", "human_approval", "auto_framed"}
 LLM_PROVIDERS = {"raga", "openrouter", "ollama", "openai_compatible"}
 LLM_REPLY_MODES = LLM_MODES
+VARIANT_PICK = {"random", "round_robin"}
 # Still descriptor-only on Signal publish until dedicated runtime lands.
-FORWARD_COMPAT_TYPES = {"send_template", "tag_contact"}
+FORWARD_COMPAT_TYPES = {"send_template", "tag_contact", "llm_classify"}
 PUBLISHED_TYPES = TYPES | FORWARD_COMPAT_TYPES
 RESERVED = "_"
 
@@ -53,9 +55,58 @@ def _validate_forward_compat_node(key, node, kind):
         if not isinstance(tag, str) or not tag.strip() or len(tag) > 80:
             raise ValueError(f"tag_contact {key}: tag required")
 
+def _validate_text_variants(key, node):
+    """SIG-UX-04 / VR-406: messenger variants (3–5) on text nodes — pick at send time."""
+    raw = node.get("variants")
+    if not isinstance(raw, list) or not 3 <= len(raw) <= 5:
+        raise ValueError(f"text {key}: variants нужен список 3–5 текстов")
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+        else:
+            raise ValueError(f"text {key}: variant — строка или {{text}}")
+        if not text or len(text) > 4000:
+            raise ValueError(f"text {key}: variant текст 1–4000")
+    pick = node.get("pick", "random")
+    if pick not in VARIANT_PICK:
+        raise ValueError(f"text {key}: pick random|round_robin")
+
+
+def _validate_intent_router_node(key, node):
+    routes = node.get("routes")
+    if routes is not None and not isinstance(routes, dict):
+        raise ValueError(f"intent_router {key}: routes — объект keyword→node_id")
+    if isinstance(routes, dict):
+        for intent, target in routes.items():
+            if not isinstance(intent, str) or not intent.strip() or len(intent) > 80:
+                raise ValueError(f"intent_router {key}: неверный ключ маршрута")
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError(f"intent_router {key}: маршрут {intent!r} требует node_id")
+    patterns = node.get("patterns")
+    if patterns is not None:
+        if not isinstance(patterns, list) or len(patterns) > 40:
+            raise ValueError(f"intent_router {key}: patterns — список до 40")
+        for pat in patterns:
+            if not isinstance(pat, dict):
+                raise ValueError(f"intent_router {key}: pattern — объект")
+            needle = pat.get("match")
+            intent = pat.get("intent")
+            if not isinstance(needle, str) or not needle.strip() or len(needle) > 200:
+                raise ValueError(f"intent_router {key}: pattern.match 1–200")
+            if not isinstance(intent, str) or not intent.strip() or len(intent) > 80:
+                raise ValueError(f"intent_router {key}: pattern.intent 1–80")
+    if not (isinstance(routes, dict) and routes) and not (isinstance(patterns, list) and patterns):
+        raise ValueError(f"intent_router {key}: нужен routes и/или patterns")
+    miss = node.get("on_miss") or node.get("next")
+    if miss is not None and (not isinstance(miss, str) or not miss.strip()):
+        raise ValueError(f"intent_router {key}: on_miss|next — node_id")
+
+
 def _validate_llm_reply_node(key, node):
-    # P0/P1 publish descriptor: id?, provider?, model?, temperature?, max_tokens?,
-    # rules_version (required), mode draft_only|human_approval, fallback?, prompt_ref?
+    # P0/P1/VR-406: id?, provider?, model?, temperature?, max_tokens?,
+    # rules_version (required), mode draft_only|human_approval|auto_framed, fallback?, prompt_ref?
     # auto_send is intentionally not accepted as a publish field.
     if "auto_send" in node:
         raise ValueError(f"llm_reply {key}: auto_send не publish-поле (всегда false)")
@@ -64,7 +115,7 @@ def _validate_llm_reply_node(key, node):
         raise ValueError(f"llm_reply {key}: нужен rules_version (pin 1–120)")
     mode = node.get("mode", "draft_only")
     if mode not in LLM_MODES:
-        raise ValueError(f"llm_reply {key}: mode draft_only|human_approval")
+        raise ValueError(f"llm_reply {key}: mode draft_only|human_approval|auto_framed")
     if "provider" in node and node["provider"] is not None:
         if node["provider"] not in LLM_PROVIDERS:
             raise ValueError(f"llm_reply {key}: неизвестный provider")
@@ -85,6 +136,12 @@ def _validate_llm_reply_node(key, node):
     if "prompt_ref" in node and node["prompt_ref"] is not None:
         if not isinstance(node["prompt_ref"], str) or len(node["prompt_ref"]) > 160:
             raise ValueError(f"llm_reply {key}: prompt_ref до 160")
+    if "allowed_intents" in node and node["allowed_intents"] is not None:
+        intents = node["allowed_intents"]
+        if not isinstance(intents, list) or not all(
+            isinstance(x, str) and x.strip() and len(x) <= 80 for x in intents
+        ):
+            raise ValueError(f"llm_reply {key}: allowed_intents — список строк")
     if "id" in node and node["id"] is not None:
         if not isinstance(node["id"], str) or not node["id"].strip() or len(node["id"]) > 80:
             raise ValueError(f"llm_reply {key}: id 1–80")
@@ -93,6 +150,10 @@ def _node_outgoing(key, node, kind, nodes):
     """Return outgoing refs for one node (classic TYPES + remaining forward-compat)."""
     if kind in FORWARD_COMPAT_TYPES:
         _validate_forward_compat_node(key, node, kind)
+        # llm_classify may carry on_ok / on_low / on_fail (descriptor-only until runtime).
+        if kind == "llm_classify":
+            refs = [node.get("next"), node.get("on_ok"), node.get("on_low"), node.get("on_fail"), node.get("handoff")]
+            return [r for r in refs if isinstance(r, str) and r.strip()]
         return [node.get("next")]
 
     outgoing = [] if kind == "finish" else [node.get("next")]
@@ -101,6 +162,17 @@ def _node_outgoing(key, node, kind, nodes):
         checked_key(node.get("key"))
         if "equals" not in node:
             node["equals"] = True
+    if kind == "intent_router":
+        _validate_intent_router_node(key, node)
+        outgoing = []
+        routes = node.get("routes") or {}
+        if isinstance(routes, dict):
+            outgoing.extend(routes.values())
+        miss = node.get("on_miss") or node.get("next")
+        if miss:
+            outgoing.append(miss)
+        if node.get("next") and node.get("next") not in outgoing:
+            outgoing.append(node.get("next"))
     if kind == "question":
         options = checked_options(node.get("options", []))
         if len(options) > 5:
@@ -118,7 +190,10 @@ def _node_outgoing(key, node, kind, nodes):
         maximum = 1024 if kind in MEDIA else 4000
         if kind == "video_note":
             maximum = 4000
-        checked_text(node.get("text", ""), f"Текст узла {key}", maximum)
+        if kind == "text" and node.get("variants") is not None:
+            _validate_text_variants(key, node)
+        else:
+            checked_text(node.get("text", ""), f"Текст узла {key}", maximum)
     if kind in MEDIA:
         if not node.get("asset_id") and not secure_url(node.get("media")):
             raise ValueError("Выберите материал из медиабанка или HTTPS URL")
@@ -143,6 +218,10 @@ def _node_outgoing(key, node, kind, nodes):
             outgoing = [node.get("next"), node.get("on_reply")]
     if kind == "llm_reply":
         _validate_llm_reply_node(key, node)
+        for field in ("on_out_of_frame", "on_ok", "handoff"):
+            target = node.get(field)
+            if isinstance(target, str) and target.strip():
+                outgoing.append(target)
     if kind in {"escalate", "operator_pause"}:
         # Operator pause — do not confuse with handoff (bot switch).
         if "connection_id" in node:

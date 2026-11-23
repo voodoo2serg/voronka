@@ -68,6 +68,14 @@
 - Env (names only): `MEDIA_REGISTRY_*`, `SIGNAL_INTERNAL_MEDIA_*`. No cutover flag flip.
 - Tests: `tests/test_media_sor_wave_b.py`.
 
+## Unreleased — VR-406 course-lead dialog runtime (SIG-UX-10 slice)
+
+- Runtime TYPES: `intent_router` (pattern/keyword → route; wait for inbound); `text.variants` + `pick` at send.
+- `llm_reply.mode=auto_framed` accepted and queues framed reply (no inbox park); interceptor counters **NEXT**.
+- Alembic `0011` expands `llm_reply_audits.mode` check to include `auto_framed`.
+- Publish still P0 M2M `POST …/scenarios/versions`; interceptors stored, not executed.
+- Tests: `tests/test_pdialog_vr406_runtime.py`.
+
 ## Unreleased — PDialog P0 scenario publish (signal#20)
 
 - M2M scopes `scenario:publish|pause|status` (+ `scenario:*`); default grant includes `scenario:*`.

@@ -1,4 +1,4 @@
-import re, secrets
+import re, secrets, random
 from datetime import timedelta
 from uuid import uuid4
 from sqlalchemy import select, func
@@ -10,6 +10,86 @@ class AwaitDelivery(Exception):
 
 def uid():
     return str(uuid4())
+
+
+def _normalize_variants(raw):
+    out = []
+    for item in raw or []:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+        else:
+            continue
+        if text:
+            out.append(text)
+    return out
+
+
+def _next_round_robin_index(n: int, state, *, version_id: str | None, node_key: str | None) -> int:
+    """Shared cursor across Runs for the same Version node (Redis); fallback = run state."""
+    if n <= 0:
+        return 0
+    if version_id and node_key:
+        try:
+            from app import auth
+            key = f"variant-rr:{version_id}:{node_key}"
+            count = auth.cache.incr(key)
+            if count == 1:
+                # Keep counter for the life of a published series experiment (~90d).
+                auth.cache.expire(key, 90 * 86400)
+            return (int(count) - 1) % n
+        except Exception:
+            pass
+    idx0 = int(state.get("_variant_rr") or 0) % n
+    state["_variant_rr"] = idx0 + 1
+    return idx0
+
+
+def pick_variant_text(node, state, *, version_id: str | None = None, node_key: str | None = None):
+    """Resolve text node body: static text or variants[] pick (VR-406 / SIG-UX-04)."""
+    variants = _normalize_variants(node.get("variants"))
+    if not variants:
+        return node.get("text") or "", None
+    pick = node.get("pick") or "random"
+    if pick == "round_robin":
+        idx0 = _next_round_robin_index(
+            len(variants), state, version_id=version_id, node_key=node_key
+        )
+    else:
+        idx0 = random.randrange(len(variants))
+    # 1-based index for staff markers «(вариант N)»
+    return variants[idx0], idx0 + 1
+
+
+def match_intent_router(node, text: str) -> str | None:
+    """Return matched route key from patterns then routes keywords (Signal simulate parity)."""
+    hay = (text or "").strip().lower()
+    if not hay:
+        return None
+    for pat in node.get("patterns") or []:
+        if not isinstance(pat, dict):
+            continue
+        needle = str(pat.get("match") or "").strip().lower()
+        intent = str(pat.get("intent") or "").strip()
+        if needle and intent and needle in hay:
+            return intent
+    routes = node.get("routes") or {}
+    if isinstance(routes, dict):
+        for keyword in routes:
+            if str(keyword).lower() in hay:
+                return str(keyword)
+    return None
+
+
+def resolve_intent_router_next(node, matched: str | None) -> str | None:
+    routes = node.get("routes") or {}
+    if matched is not None and isinstance(routes, dict) and matched in routes:
+        target = routes.get(matched)
+        if isinstance(target, str) and target.strip():
+            return target
+    miss = node.get("on_miss") or node.get("next")
+    return miss if isinstance(miss, str) and miss.strip() else None
 
 def event(db, kind, connection_id=None, contact_id=None, run_id=None, actor_id=None, **payload):
     db.add(Event(id=uid(), kind=kind, connection_id=connection_id, contact_id=contact_id,
@@ -72,6 +152,11 @@ def _execute_llm_reply(db, run, identity, contact, node, key, state, connection)
     rules_version = node["rules_version"]
     project_id = connection.project_id if connection else None
     published = _published_rules_text(version, rules_version)
+    # Prefer Version.graph meta.rules_text from Signal publish when pin matches.
+    if not published:
+        meta = (version.graph or {}).get("meta") or {}
+        if meta.get("rules_version") == rules_version and isinstance(meta.get("rules_text"), str):
+            published = meta.get("rules_text")
     resolved = ai_providers.resolve_rules_pin(
         db,
         rules_version=rules_version,
@@ -118,12 +203,51 @@ def _execute_llm_reply(db, run, identity, contact, node, key, state, connection)
             draft_text = fallback.strip()
             response_status = "fallback"
         else:
-            # Safe default template, then escalate to operator.
             draft_text = (
                 "Спасибо за сообщение. Менеджер скоро ответит лично — "
                 "автоматический черновик сейчас недоступен."
             )
             response_status = "fallback"
+            if mode == "auto_framed":
+                # Course-lead soft path: branch without operator park when AI unavailable.
+                audit = LlmReplyAudit(
+                    id=uid(),
+                    execution_id=run.id,
+                    node_id=node_id,
+                    run_id=run.id,
+                    identity_id=identity.id,
+                    contact_id=contact.id,
+                    connection_id=identity.connection_id,
+                    project_id=project_id,
+                    provider=provider,
+                    model=model or "",
+                    rules_version=rules_version,
+                    mode=mode,
+                    response_status=response_status,
+                    latency_ms=latency_ms,
+                    error_class=error_class,
+                    draft_text=draft_text[:20000],
+                    created_at=now(),
+                    updated_at=now(),
+                )
+                db.add(audit)
+                db.flush()
+                event(
+                    db, "llm_reply.out_of_frame", identity.connection_id, contact.id, run.id,
+                    node=node_id, error_class=error_class, audit_id=audit.id, mode=mode,
+                )
+                nxt = node.get("on_out_of_frame") or node.get("next")
+                if nxt:
+                    state["_force_next"] = nxt
+                    run.state = state
+                    return False  # advance honors _force_next
+                pause_for_operator(
+                    db, run, identity, contact,
+                    reason="llm_error",
+                    task_title=f"LLM ошибка ({error_class}): нужен ответ клиенту",
+                )
+                run.state = state
+                return True
             audit = LlmReplyAudit(
                 id=uid(),
                 execution_id=run.id,
@@ -159,6 +283,55 @@ def _execute_llm_reply(db, run, identity, contact, node, key, state, connection)
             )
             run.state = state
             return True  # stop advance
+
+    # auto_framed (VR-406 course-lead): queue framed reply and continue — not inbox park.
+    # Interceptor counters / Approach C limits remain SIG-UX-10 NEXT.
+    if mode == "auto_framed":
+        audit = LlmReplyAudit(
+            id=uid(),
+            execution_id=run.id,
+            node_id=node_id,
+            run_id=run.id,
+            identity_id=identity.id,
+            contact_id=contact.id,
+            connection_id=identity.connection_id,
+            project_id=project_id,
+            provider=provider,
+            model=model or "",
+            rules_version=rules_version,
+            mode=mode,
+            response_status=(
+                "ok" if response_status == "ok" and draft_text.strip()
+                else (response_status if response_status != "ok" else "fallback")
+            ),
+            latency_ms=latency_ms,
+            error_class=error_class,
+            draft_text=(draft_text or "")[:20000],
+            created_at=now(),
+            updated_at=now(),
+        )
+        db.add(audit)
+        db.flush()
+        if isinstance(draft_text, str) and draft_text.strip():
+            queue(db, identity, {"type": "text", "text": draft_text.strip()[:4000]}, run)
+            event(
+                db, "llm_reply.auto_framed", identity.connection_id, contact.id, run.id,
+                node=node_id, audit_id=audit.id, mode=mode, rules_version=rules_version,
+                response_status=audit.response_status, auto_send=False, framed=True,
+            )
+            run.state = state
+            return False  # fall through to node["next"]
+        nxt = node.get("on_out_of_frame") or node.get("next")
+        event(
+            db, "llm_reply.out_of_frame", identity.connection_id, contact.id, run.id,
+            node=node_id, audit_id=audit.id, mode=mode,
+        )
+        if nxt:
+            state["_force_next"] = nxt
+            run.state = state
+            return False
+        run.state = state
+        return True
 
     # Draft-first modes park as pending for inbox; preserve fallback/error labels when used.
     stored_status = response_status if response_status in {"fallback", "error", "timeout"} else "pending"
@@ -213,7 +386,18 @@ def advance(db, run, identity):
             # Circle messages have no caption in Telegram: queue explanatory text first.
             if kind == "video_note" and node.get("text"):
                 queue(db, identity, {"type": "text", "text": node["text"]}, run)
-            queue(db, identity, node, run)
+            if kind == "text":
+                body, variant_index = pick_variant_text(
+                    node, state, version_id=run.version_id, node_key=key
+                )
+                payload = {**node, "text": body}
+                payload.pop("variants", None)
+                if variant_index is not None:
+                    state["last_variant_index"] = variant_index
+                    payload["variant_index"] = variant_index
+                queue(db, identity, payload, run)
+            else:
+                queue(db, identity, node, run)
         elif kind == "question":
             prompt(db, run, identity, node, state)
             run.status = "waiting"
@@ -225,6 +409,26 @@ def advance(db, run, identity):
             break
         elif kind == "condition":
             run.current = node["yes"] if state.get(node["key"]) == node.get("equals", True) else node["no"]
+            continue
+        elif kind == "intent_router":
+            # Only fresh inbound — consume so a later router does not reuse it.
+            inbound = state.get("_last_inbound") or ""
+            if not str(inbound).strip():
+                state["_await"] = "intent_router"
+                run.status = "waiting"
+                run.state = state
+                break
+            state.pop("_last_inbound", None)
+            matched = match_intent_router(node, str(inbound))
+            nxt = resolve_intent_router_next(node, matched)
+            event(
+                db, "intent_router.matched", identity.connection_id, contact.id, run.id,
+                node=key, matched=matched, next=nxt, input=str(inbound)[:200],
+            )
+            if not nxt:
+                run.status = "completed"
+                break
+            run.current = nxt
             continue
         elif kind == "wait":
             # Delay starts after preceding messages are sent, not when they enter outbox.
@@ -272,6 +476,10 @@ def advance(db, run, identity):
         elif kind == "llm_reply":
             if _execute_llm_reply(db, run, identity, contact, node, key, state, connection):
                 break
+            forced = state.pop("_force_next", None)
+            if forced:
+                run.current = forced
+                continue
         elif kind == "grant":
             if not all(state.get(x) is True for x in node["requires"]):
                 run.status = "blocked"
@@ -444,6 +652,21 @@ def consume(db, connection, msg):
         state["_last_inbound"] = text
         run.state = state
         event(db, "message.received", connection.id, identity.contact_id, run.id, text=text)
+        return
+    if run and run.status == "waiting" and (run.state or {}).get("_await") == "intent_router":
+        if not text.strip():
+            return
+        node = db.get(Version, run.version_id).graph["nodes"][run.current]
+        if node.get("type") != "intent_router":
+            event(db, "message.received", connection.id, identity.contact_id, run.id, text=text)
+            return
+        state = dict(run.state)
+        state["_last_inbound"] = text
+        state.pop("_await", None)
+        event(db, "message.received", connection.id, identity.contact_id, run.id, text=text)
+        # Re-enter advance on the same router node so inbound is consumed once there.
+        run.state, run.status = state, "active"
+        advance(db, run, identity)
         return
     if not run or run.status != "waiting":
         event(db, "message.received", connection.id, identity.contact_id, run.id if run else None, text=text)
