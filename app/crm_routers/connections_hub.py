@@ -60,6 +60,19 @@ def connections_hub(pid: str, admin=Depends(crm_actor)):
             secret_present = bool(connection.secret_env and os.environ.get(connection.secret_env))
             cfg = connection.config if isinstance(connection.config, dict) else {}
             bot_username = str(cfg.get("username") or "").strip() or None
+            # VR-433: course invites waiting for lead /start (any Person ContactPoint).
+            course_invites_pending = 0
+            if connection.platform == "telegram":
+                from app.crm_models import Profile
+                from app.lead_invite import PENDING_KEY
+
+                for profile in db.scalars(select(Profile).where(Profile.project_id == pid)):
+                    extra = profile.extra if isinstance(profile.extra, dict) else {}
+                    pend = extra.get(PENDING_KEY)
+                    if isinstance(pend, dict) and (
+                        not pend.get("connection_id") or pend.get("connection_id") == connection.id
+                    ):
+                        course_invites_pending += 1
             # Never return env values — only names + presence.
             item = {
                 "id": connection.id,
@@ -83,6 +96,8 @@ def connections_hub(pid: str, admin=Depends(crm_actor)):
                 "media_free_bytes": free,
                 "outbox_failed_or_unknown": failed,
                 "outbox_pending": pending,
+                "course_invites_pending": course_invites_pending,
+                "course_invite_requires_start": True if connection.platform == "telegram" else None,
                 "capabilities": platform_capabilities(connection.platform),
             }
             if admin.role == "manager":

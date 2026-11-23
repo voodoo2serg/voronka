@@ -2149,9 +2149,18 @@ export default function Workspace() {
                             {typeof c.outbox_failed_or_unknown === 'number' && c.outbox_failed_or_unknown
                               ? ` · fail ${c.outbox_failed_or_unknown}`
                               : ''}
+                            {typeof c.course_invites_pending === 'number' && c.course_invites_pending > 0
+                              ? ` · ждут /start ${c.course_invites_pending}`
+                              : ''}
                             {c.media_writable === false ? ' · media RO' : ''}
                           </small>
                         )}
+                        {c.platform === 'telegram' && c.course_invite_requires_start ? (
+                          <small className="muted">
+                            Invite в канал: только после /start у этого бота (любой лид с ContactPoint
+                            telegram + marketing consent).
+                          </small>
+                        ) : null}
                         {c.capabilities?.video_note && (
                           <small>
                             video_note: {c.capabilities.video_note.available ? 'native' : 'недоступно'}

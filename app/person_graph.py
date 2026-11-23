@@ -334,6 +334,11 @@ def upsert_contact_point(
             normalized = normalize_phone(value)
         except ValueError:
             return None
+    elif channel in {"telegram", "max"}:
+        # Strip @ / t.me/ so invite flush can match /start username to ContactPoint.
+        from app.lead_invite import normalize_tg_handle
+
+        normalized = normalize_tg_handle(value) or value.strip().lstrip("@").lower()
     else:
         normalized = value
     if not normalized:

@@ -1,10 +1,16 @@
-"""VR-424: course-lead Telegram channel invite via Solo_pr_bot Outbox (not Signal CE).
+"""VR-424 / VR-433: course-lead Telegram channel invite via Solo_pr_bot Outbox (not Signal CE).
 
 Telegram cannot cold-DM by @username. Flow:
 1) lead.created + telegram ContactPoint + marketing consent → queue Outbox if Identity
    already exists for Solo_pr connection; else store pending invite on profile.extra.
-2) On first private message /start to that bot → match pending by username (or numeric id)
-   and enqueue Outbox DM with channel URL + unsubscribe link.
+2) On first private message /start to that bot → match pending by:
+   - deep-link start payload (`inv_<token>`), or
+   - Telegram username / numeric id, or
+   - ContactPoint.normalized_value for any Person on the project,
+   then enqueue Outbox DM with channel URL + unsubscribe link.
+
+External leads only get a DM after their /start reaches this bot's webhook (not the
+bot creator alone). Staff UI must show that /start is required.
 """
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from sqlalchemy import select
 
@@ -28,6 +34,7 @@ DEFAULT_CHANNEL_URL = "https://t.me/+45nxMJzQ-X4wZTUy"
 COURSE_TITLE_HINTS = {
     "intensiv-novye-vozmozhnosti-kommunikatsiy": "Интенсив «Новые возможности коммуникаций»",
 }
+START_PAYLOAD_PREFIX = "inv_"
 
 
 def _uid() -> str:
@@ -50,6 +57,45 @@ def normalize_tg_handle(value: str) -> str:
     if re.fullmatch(r"[a-z0-9_]{3,64}", value):
         return value
     return value
+
+
+def start_payload_for_lead(lead_event_id: str) -> str:
+    """Telegram /start payload (≤64 chars): stable token derived from lead event id."""
+    raw = (lead_event_id or "").strip().encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:32]
+    return f"{START_PAYLOAD_PREFIX}{digest}"
+
+
+def webhook_public_domain() -> str:
+    """Hostname Telegram should POST webhooks to.
+
+    Prefer VORONKA_PUBLIC_URL (production DNS) over legacy DOMAIN=*.sslip.io —
+    Telegram has timed out delivering updates to the sslip hostname even when
+    the same IP serves voronka.solo-pr.ru.
+    """
+    for key in ("VORONKA_PUBLIC_URL", "CRM_PUBLIC_URL"):
+        base = (os.getenv(key) or "").strip()
+        if not base:
+            continue
+        host = urlparse(base if "://" in base else f"https://{base}").hostname
+        if host and "sslip.io" not in host.lower():
+            return host
+    domain = (os.getenv("DOMAIN") or "").strip()
+    if domain and domain != "funnels.example.ru":
+        return domain
+    return ""
+
+
+def bot_start_url(connection: Connection, *, start_payload: str | None = None) -> str | None:
+    cfg = connection.config if isinstance(connection.config, dict) else {}
+    username = str(cfg.get("username") or "").strip().lstrip("@")
+    if not username:
+        return None
+    if start_payload:
+        token = re.sub(r"[^A-Za-z0-9_-]", "", start_payload)[:64]
+        if token:
+            return f"https://t.me/{username}?start={token}"
+    return f"https://t.me/{username}"
 
 
 def channel_invite_url() -> str:
@@ -319,6 +365,8 @@ def schedule_course_channel_invite(
         db, profile=profile, connection=connection, telegram_value=telegram_value
     )
     handle = normalize_tg_handle(telegram_value)
+    start_payload = start_payload_for_lead(lead_event_id)
+    deep_link = bot_start_url(connection, start_payload=start_payload)
     pending = {
         "connection_id": connection.id,
         "contact_point_id": contact_point_id,
@@ -326,6 +374,8 @@ def schedule_course_channel_invite(
         "course_title": title,
         "channel_url": channel_url,
         "lead_event_id": lead_event_id,
+        "start_payload": start_payload,
+        "bot_start_url": deep_link,
         "created_at": now().isoformat(),
     }
 
@@ -349,7 +399,13 @@ def schedule_course_channel_invite(
             "status": "queued",
         }
         profile.extra = extra
-        return {"status": "queued", "outbox_id": out.id, "connection_id": connection.id}
+        return {
+            "status": "queued",
+            "outbox_id": out.id,
+            "connection_id": connection.id,
+            "bot_start_url": deep_link,
+            "start_payload": start_payload,
+        }
 
     extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}
     extra[PENDING_KEY] = pending
@@ -365,11 +421,38 @@ def schedule_course_channel_invite(
         )
     )
     db.flush()
-    return {"status": "pending", "connection_id": connection.id, "telegram": handle}
+    return {
+        "status": "pending",
+        "connection_id": connection.id,
+        "telegram": handle,
+        "bot_start_url": deep_link,
+        "start_payload": start_payload,
+        "requires_start": True,
+    }
+
+
+def _pending_profiles_for_project(db, project_id: str) -> list:
+    """All project profiles that still wait for a Solo_pr course invite flush."""
+    from app.crm_models import Profile
+
+    # Avoid silent drops: scan all project profiles with a pending invite marker.
+    # (JSON path filters vary by dialect; project lead volume stays modest.)
+    out = []
+    for profile in db.scalars(select(Profile).where(Profile.project_id == project_id)):
+        extra = profile.extra if isinstance(profile.extra, dict) else {}
+        pending = extra.get(PENDING_KEY)
+        if isinstance(pending, dict):
+            out.append(profile)
+    return out
 
 
 def flush_pending_channel_invites(
-    db, *, identity: Identity, connection: Connection, telegram_username: str | None = None
+    db,
+    *,
+    identity: Identity,
+    connection: Connection,
+    telegram_username: str | None = None,
+    start_payload: str | None = None,
 ) -> list[str]:
     """On /start (or first DM) to Solo_pr bot: deliver deferred course channel invites."""
     if connection.platform != "telegram" or not connection.project_id:
@@ -383,13 +466,20 @@ def flush_pending_channel_invites(
     from app import person_graph
 
     handle = normalize_tg_handle(telegram_username or "")
-    numeric = identity.external_user_id
+    numeric = str(identity.external_user_id or "")
+    start_token = re.sub(r"[^A-Za-z0-9_-]", "", (start_payload or "").strip())[:64]
     queued: list[str] = []
 
     candidates: list[Profile] = []
-    for profile in db.scalars(
-        select(Profile).where(Profile.project_id == connection.project_id).limit(500)
-    ):
+    seen: set[str] = set()
+
+    def _add(profile: Profile) -> None:
+        if profile.id in seen:
+            return
+        seen.add(profile.id)
+        candidates.append(profile)
+
+    for profile in _pending_profiles_for_project(db, connection.project_id):
         extra = profile.extra if isinstance(profile.extra, dict) else {}
         pending = extra.get(PENDING_KEY)
         if not isinstance(pending, dict):
@@ -397,15 +487,40 @@ def flush_pending_channel_invites(
         if pending.get("connection_id") and pending.get("connection_id") != connection.id:
             continue
         pending_tg = normalize_tg_handle(str(pending.get("telegram") or ""))
+        pending_start = str(pending.get("start_payload") or "")
         matched = False
-        if pending_tg and handle and pending_tg == handle:
+        if start_token and pending_start and start_token == pending_start:
+            matched = True
+        elif pending_tg and handle and pending_tg == handle:
             matched = True
         elif pending_tg and pending_tg == numeric:
             matched = True
         elif profile.contact_id == identity.contact_id:
             matched = True
         if matched:
-            candidates.append(profile)
+            _add(profile)
+
+    # Also match ContactPoint.normalized_value (may still carry leading @).
+    if handle or numeric:
+        needles = {v for v in (handle, numeric, f"@{handle}" if handle else "") if v}
+        for cp in db.scalars(
+            select(ContactPoint).where(ContactPoint.channel == "telegram")
+        ):
+            cp_norm = normalize_tg_handle(cp.normalized_value or cp.raw_value or "")
+            if not cp_norm or cp_norm not in {normalize_tg_handle(n) for n in needles}:
+                continue
+            for profile in db.scalars(
+                select(Profile).where(
+                    Profile.project_id == connection.project_id,
+                    Profile.person_id == cp.person_id,
+                )
+            ):
+                extra = profile.extra if isinstance(profile.extra, dict) else {}
+                if isinstance(extra.get(PENDING_KEY), dict):
+                    pending = extra[PENDING_KEY]
+                    if pending.get("connection_id") and pending.get("connection_id") != connection.id:
+                        continue
+                    _add(profile)
 
     for profile in candidates:
         extra = dict(profile.extra) if isinstance(profile.extra, dict) else {}

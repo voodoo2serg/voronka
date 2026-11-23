@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — VR-433 Solo_pr_bot external lead DMs
+
+- Root cause: invite flush only ran after `/start` hit the Solo_pr webhook; production `DOMAIN=*.sslip.io` had Telegram `Connection timed out`, so external `/start` never arrived while the bot creator’s updates sometimes did.
+- Activate webhook prefers `VORONKA_PUBLIC_URL` host over `DOMAIN` (avoid sslip).
+- Pending flush matches `/start` deep-link `inv_<token>`, username, numeric id, or ContactPoint (any Person — not admin-only); no 500-profile silent drop.
+- Lead response + Events include `bot_start_url`; hub/CRM/ops show «ждут /start» + staff note that cold-DM is impossible.
+- Telegram/MAX ContactPoint normalization strips `@` / `t.me/` for reliable match.
+
 ## Unreleased — VR-424 Solo_pr_bot course channel invite
 
 - After `lead.created` with Telegram ContactPoint + marketing consent, Voronka queues a channel invite DM via `@Solo_pr_bot` Outbox (not Signal CE). Cold leads stay pending until `/start`.

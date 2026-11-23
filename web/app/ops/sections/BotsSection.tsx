@@ -20,7 +20,11 @@ export function BotsSection({
       <div className="page-heading">
         <div>
           <h1>Боты</h1>
-          <p className="muted">Connection + preflight. Activate webhook без Telegram WebApp.</p>
+          <p className="muted">
+            Connection + preflight. Activate webhook без Telegram WebApp. Курс-invite (@Solo_pr_bot): бот
+            не шлёт cold-DM по @username — лид должен нажать /start (deep-link из заявки). Очередь pending
+            работает для любого ContactPoint, не только для админа.
+          </p>
         </div>
         <button disabled={busy} onClick={onRefresh}>
           Обновить
@@ -99,6 +103,9 @@ export function BotsSection({
                       <small className="danger-text">{c.last_error || '—'}</small>
                       <small className="muted">
                         outbox fail {c.outbox_failed_or_unknown || 0} · pending {c.outbox_pending || 0}
+                        {typeof c.course_invites_pending === 'number' && c.course_invites_pending > 0
+                          ? ` · ждут /start ${c.course_invites_pending}`
+                          : ''}
                       </small>
                       <small className="muted">media_writable: {String(c.media_writable)}</small>
                     </td>
