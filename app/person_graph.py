@@ -351,6 +351,21 @@ def upsert_contact_point(
             ContactPoint.address_hash == digest,
         )
     )
+    # VR-433: pre-normalize rows hashed `@alice` must not duplicate as `alice`.
+    if existing is None and channel in {"telegram", "max"}:
+        legacy_values = {value, value.lstrip("@"), f"@{normalized}" if normalized else "", normalized}
+        legacy_hashes = {address_hash(channel, v) for v in legacy_values if v and address_hash(channel, v) != digest}
+        if legacy_hashes:
+            existing = db.scalar(
+                select(ContactPoint).where(
+                    ContactPoint.person_id == person.id,
+                    ContactPoint.channel == channel,
+                    ContactPoint.address_hash.in_(legacy_hashes),
+                )
+            )
+            if existing is not None:
+                existing.normalized_value = normalized
+                existing.address_hash = digest
     if existing:
         if verified and not existing.verified:
             existing.verified = True

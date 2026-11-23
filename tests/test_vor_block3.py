@@ -420,6 +420,43 @@ def test_vr424_tg_invite_pending_then_flush_on_start(crm, monkeypatch):
         assert len(invites) == 2
 
 
+def test_vr433_telegram_cp_legacy_at_hash_migrates(crm):
+    """VR-433: upsert with stripped handle reuses pre-normalize @hash ContactPoint."""
+    from app.crm_models import ContactPoint
+    from app import person_graph
+    from app.crm_service import create_profile
+
+    with crm.db.begin() as db:
+        profile = create_profile(db, "p", {"name": "Legacy TG", "email": "legacy-tg@example.ru"})
+        person = person_graph.sync_profile_contact_points(db, profile)
+        # Simulate pre-VR-433 row hashed with leading @.
+        legacy = ContactPoint(
+            id="cp-legacy-at",
+            person_id=person.id,
+            channel="telegram",
+            raw_value="@legacy_user",
+            normalized_value="@legacy_user",
+            address_hash=person_graph.address_hash("telegram", "@legacy_user"),
+            verified=False,
+            reachable=True,
+            created_at=__import__("app.db", fromlist=["now"]).now(),
+        )
+        db.add(legacy)
+        db.flush()
+        reused = person_graph.upsert_contact_point(db, person, channel="telegram", value="@legacy_user")
+        assert reused is not None and reused.id == "cp-legacy-at"
+        assert reused.normalized_value == "legacy_user"
+        assert reused.address_hash == person_graph.address_hash("telegram", "legacy_user")
+        assert (
+            db.scalar(
+                select(ContactPoint).where(
+                    ContactPoint.person_id == person.id, ContactPoint.channel == "telegram"
+                ).where(ContactPoint.id != "cp-legacy-at")
+            )
+            is None
+        )
+
+
 def test_vr433_external_flush_by_start_payload(crm, monkeypatch):
     """VR-433: external lead /start with deep-link payload flushes even without username match."""
     monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
@@ -433,6 +470,10 @@ def test_vr433_external_flush_by_start_payload(crm, monkeypatch):
     from app.db import Connection as Conn
 
     assert lead_invite.webhook_public_domain() == "voronka.solo-pr.ru"
+    assert lead_invite.webhook_public_base_url() == "https://voronka.solo-pr.ru"
+    monkeypatch.setenv("VORONKA_PUBLIC_URL", "https://voronka.solo-pr.ru:8443/crm")
+    assert lead_invite.webhook_public_base_url() == "https://voronka.solo-pr.ru:8443/crm"
+    monkeypatch.setenv("VORONKA_PUBLIC_URL", "https://voronka.solo-pr.ru")
 
     with crm.db.begin() as db:
         conn = db.get(Conn, "tg")

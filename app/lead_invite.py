@@ -66,24 +66,38 @@ def start_payload_for_lead(lead_event_id: str) -> str:
     return f"{START_PAYLOAD_PREFIX}{digest}"
 
 
-def webhook_public_domain() -> str:
-    """Hostname Telegram should POST webhooks to.
+def webhook_public_base_url() -> str:
+    """Public HTTPS base for setWebhook (scheme + host[:port] + optional path).
 
-    Prefer VORONKA_PUBLIC_URL (production DNS) over legacy DOMAIN=*.sslip.io —
-    Telegram has timed out delivering updates to the sslip hostname even when
-    the same IP serves voronka.solo-pr.ru.
+    Prefer VORONKA_PUBLIC_URL over DOMAIN=*.sslip.io — Telegram timed out on sslip
+    while the same IP served voronka.solo-pr.ru. Keep non-default port / path prefix
+    from the configured URL instead of collapsing to bare hostname.
     """
     for key in ("VORONKA_PUBLIC_URL", "CRM_PUBLIC_URL"):
-        base = (os.getenv(key) or "").strip()
-        if not base:
+        raw = (os.getenv(key) or "").strip().rstrip("/")
+        if not raw:
             continue
-        host = urlparse(base if "://" in base else f"https://{base}").hostname
-        if host and "sslip.io" not in host.lower():
-            return host
-    domain = (os.getenv("DOMAIN") or "").strip()
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        if not parsed.hostname or "sslip.io" in parsed.hostname.lower():
+            continue
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc  # host:port when present
+        path = (parsed.path or "").rstrip("/")
+        return f"{scheme}://{netloc}{path}"
+    domain = (os.getenv("DOMAIN") or "").strip().rstrip("/")
     if domain and domain != "funnels.example.ru":
-        return domain
+        if "://" in domain:
+            return domain
+        return f"https://{domain}"
     return ""
+
+
+def webhook_public_domain() -> str:
+    """Hostname-only helper (tests / diagnostics). Prefer webhook_public_base_url() for Activate."""
+    base = webhook_public_base_url()
+    if not base:
+        return ""
+    return urlparse(base).hostname or ""
 
 
 def bot_start_url(connection: Connection, *, start_payload: str | None = None) -> str | None:
@@ -470,6 +484,10 @@ def flush_pending_channel_invites(
     start_token = re.sub(r"[^A-Za-z0-9_-]", "", (start_payload or "").strip())[:64]
     queued: list[str] = []
 
+    pending_profiles = _pending_profiles_for_project(db, connection.project_id)
+    if not pending_profiles:
+        return []
+
     candidates: list[Profile] = []
     seen: set[str] = set()
 
@@ -479,7 +497,7 @@ def flush_pending_channel_invites(
         seen.add(profile.id)
         candidates.append(profile)
 
-    for profile in _pending_profiles_for_project(db, connection.project_id):
+    for profile in pending_profiles:
         extra = profile.extra if isinstance(profile.extra, dict) else {}
         pending = extra.get(PENDING_KEY)
         if not isinstance(pending, dict):
@@ -500,24 +518,26 @@ def flush_pending_channel_invites(
         if matched:
             _add(profile)
 
-    # Also match ContactPoint.normalized_value (may still carry leading @).
-    if handle or numeric:
-        needles = {v for v in (handle, numeric, f"@{handle}" if handle else "") if v}
-        for cp in db.scalars(
-            select(ContactPoint).where(ContactPoint.channel == "telegram")
-        ):
-            cp_norm = normalize_tg_handle(cp.normalized_value or cp.raw_value or "")
-            if not cp_norm or cp_norm not in {normalize_tg_handle(n) for n in needles}:
-                continue
-            for profile in db.scalars(
-                select(Profile).where(
-                    Profile.project_id == connection.project_id,
-                    Profile.person_id == cp.person_id,
+    # ContactPoint fallback: only persons that already have a pending invite on this project.
+    if (handle or numeric) and len(candidates) < len(pending_profiles):
+        person_ids = {p.person_id for p in pending_profiles if p.person_id}
+        needle_norms = {normalize_tg_handle(v) for v in (handle, numeric) if v}
+        if person_ids and needle_norms:
+            for cp in db.scalars(
+                select(ContactPoint).where(
+                    ContactPoint.channel == "telegram",
+                    ContactPoint.person_id.in_(person_ids),
                 )
             ):
-                extra = profile.extra if isinstance(profile.extra, dict) else {}
-                if isinstance(extra.get(PENDING_KEY), dict):
-                    pending = extra[PENDING_KEY]
+                cp_norm = normalize_tg_handle(cp.normalized_value or cp.raw_value or "")
+                if not cp_norm or cp_norm not in needle_norms:
+                    continue
+                for profile in pending_profiles:
+                    if profile.person_id != cp.person_id:
+                        continue
+                    pending = (profile.extra or {}).get(PENDING_KEY) if isinstance(profile.extra, dict) else None
+                    if not isinstance(pending, dict):
+                        continue
                     if pending.get("connection_id") and pending.get("connection_id") != connection.id:
                         continue
                     _add(profile)
