@@ -504,6 +504,7 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
             channel_points.append(("telegram", telegram))
         if max_value:
             channel_points.append(("max", max_value))
+        telegram_cp_id = None
         for channel, value in channel_points:
             cp = person_graph.upsert_contact_point(
                 db, person, channel=channel, value=value, verified=False
@@ -516,6 +517,23 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
                     event_id=body.event_id,
                     ads_consent=body.ads_consent,
                 )
+            if cp and channel == "telegram":
+                telegram_cp_id = cp.id
+        # VR-424: Telegram channel invite via Solo_pr_bot Outbox (never Signal CE).
+        if telegram and telegram_cp_id and body.consent and body.ads_consent:
+            from app import lead_invite
+
+            lead_invite.schedule_course_channel_invite(
+                db,
+                profile=profile,
+                project_id=project_id,
+                telegram_value=telegram,
+                contact_point_id=telegram_cp_id,
+                ads_consent=body.ads_consent,
+                consent=body.consent,
+                service=body.service,
+                lead_event_id=body.event_id,
+            )
         # ARCH-M2: solo handoff with verified Keycloak sub → Person coverage (no staff Account).
         if body.keycloak_sub:
             _attach_learner_oidc(

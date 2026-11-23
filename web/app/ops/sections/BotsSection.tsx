@@ -69,6 +69,9 @@ export function BotsSection({
                   <tr key={c.id}>
                     <td>
                       <b>{c.name}</b>
+                      {c.bot_username ? (
+                        <small className="muted">@{String(c.bot_username)}</small>
+                      ) : null}
                       <small className="muted mono">{c.id}</small>
                     </td>
                     <td>{c.platform}</td>

@@ -268,6 +268,182 @@ def test_email_lead_with_messenger_extras_one_person(crm, monkeypatch):
         assert {"email", "telegram", "max", "phone"} <= channels
 
 
+def test_vr424_tg_invite_pending_then_flush_on_start(crm, monkeypatch):
+    """VR-424: marketing+telegram → pending invite; /start Solo_pr bot → Outbox DM."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    monkeypatch.setenv("SOLO_PR_TELEGRAM_CONNECTION_ID", "tg")
+    monkeypatch.setenv("SOLO_PR_CHANNEL_INVITE_URL", "https://t.me/+45nxMJzQ-X4wZTUy")
+    monkeypatch.setenv("CRM_PUBLIC_URL", "https://crm.solo-pr.ru")
+    from app.crm_models import Consent, ContactPoint, Profile
+    from app import lead_invite, runtime
+    from app.db import Connection as Conn
+
+    with crm.db.begin() as db:
+        conn = db.get(Conn, "tg")
+        conn.config = {**(conn.config or {}), "username": "Solo_pr_bot"}
+
+    payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "lead-vr424-1",
+        "idempotency_key": "lead-vr424-1",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "telegram",
+            "contact": "@vr424_lead",
+            "name": "Invite Lead",
+            "kind": "course",
+            "service": "intensiv-novye-vozmozhnosti-kommunikatsiy",
+            "consent": True,
+            "ads_consent": True,
+        },
+        "project_id": "p",
+    }
+    raw = json.dumps(payload).encode()
+    r = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
+    )
+    assert r.status_code == 200 and r.json()["duplicate"] is False
+    profile_id = r.json()["profile_id"]
+
+    with crm.db() as db:
+        profile = db.get(Profile, profile_id)
+        assert profile and isinstance(profile.extra, dict)
+        pending = profile.extra.get("pending_tg_channel_invite")
+        assert pending and pending.get("telegram") == "vr424_lead"
+        assert pending.get("connection_id") == "tg"
+        tg_cp = next(
+            cp
+            for cp in db.scalars(select(ContactPoint).where(ContactPoint.person_id == profile.person_id))
+            if cp.channel == "telegram"
+        )
+        mkt = db.scalar(
+            select(Consent).where(Consent.contact_point_id == tg_cp.id, Consent.purpose == "marketing")
+        )
+        assert mkt and mkt.status == "granted"
+        assert list(db.scalars(select(Outbox).where(Outbox.connection_id == "tg"))) == []
+
+    # No ads_consent → no pending
+    payload2 = {
+        **payload,
+        "event_id": "lead-vr424-noads",
+        "idempotency_key": "lead-vr424-noads",
+        "data": {**payload["data"], "contact": "@vr424_noads", "ads_consent": False},
+    }
+    raw2 = json.dumps(payload2).encode()
+    r2 = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw2, headers=_auth_headers("inbound-secret", raw2)
+    )
+    assert r2.status_code == 200
+    with crm.db() as db:
+        p2 = db.get(Profile, r2.json()["profile_id"])
+        assert "pending_tg_channel_invite" not in (p2.extra or {})
+
+    # /start with matching username → Outbox invite
+    with crm.db.begin() as db:
+        conn = db.get(Conn, "tg")
+        runtime.consume(
+            db,
+            conn,
+            {
+                "user_id": "424001",
+                "chat_id": "424001",
+                "text": "/start",
+                "start": True,
+                "name": "Invite Lead",
+                "username": "vr424_lead",
+                "payload": None,
+            },
+        )
+
+    with crm.db() as db:
+        invites = [
+            o
+            for o in db.scalars(select(Outbox).where(Outbox.connection_id == "tg"))
+            if (o.payload or {}).get("kind") == "course_channel_invite"
+        ]
+        assert len(invites) == 1
+        payload_out = invites[0].payload
+        assert "https://t.me/+45nxMJzQ-X4wZTUy" in payload_out["text"]
+        assert "Отписаться от рассылки:" in payload_out["text"]
+        assert "Интенсив" in payload_out["text"] or "курс" in payload_out["text"].lower()
+        profile = db.get(Profile, profile_id)
+        assert "pending_tg_channel_invite" not in (profile.extra or {})
+        assert profile.extra.get("last_tg_channel_invite", {}).get("outbox_id") == invites[0].id
+
+    # Idempotent duplicate lead does not double-queue
+    r3 = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
+    )
+    assert r3.status_code == 200 and r3.json()["duplicate"] is True
+    with crm.db() as db:
+        invites = [
+            o
+            for o in db.scalars(select(Outbox).where(Outbox.connection_id == "tg"))
+            if (o.payload or {}).get("kind") == "course_channel_invite"
+        ]
+        assert len(invites) == 1
+
+    # Immediate queue when Identity already exists
+    with crm.db.begin() as db:
+        profile = db.get(Profile, profile_id)
+        lead_invite.schedule_course_channel_invite(
+            db,
+            profile=profile,
+            project_id="p",
+            telegram_value="@vr424_lead",
+            contact_point_id=next(
+                cp.id
+                for cp in db.scalars(select(ContactPoint).where(ContactPoint.person_id == profile.person_id))
+                if cp.channel == "telegram"
+            ),
+            ads_consent=True,
+            consent=True,
+            service="intensiv-novye-vozmozhnosti-kommunikatsiy",
+            lead_event_id="lead-vr424-again",
+        )
+    with crm.db() as db:
+        invites = [
+            o
+            for o in db.scalars(select(Outbox).where(Outbox.connection_id == "tg"))
+            if (o.payload or {}).get("kind") == "course_channel_invite"
+        ]
+        assert len(invites) == 2
+
+
+def test_vr424_unsubscribe_link_revokes_marketing(crm, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("UNSUBSCRIBE_SIGNING_KEY", "unsub-test-secret")
+    monkeypatch.setenv("CRM_PUBLIC_URL", "https://crm.solo-pr.ru")
+    from app import lead_invite
+    from app.crm_models import Consent, ContactPoint, Profile
+    from app import person_graph
+
+    with crm.db.begin() as db:
+        from app.crm_service import create_profile
+
+        profile = create_profile(db, "p", {"name": "Unsub", "email": "unsub@example.ru"})
+        person = person_graph.sync_profile_contact_points(db, profile)
+        cp = person_graph.upsert_contact_point(db, person, channel="telegram", value="@unsub_user")
+        person_graph.set_consent(db, cp.id, purpose="marketing", status="granted", evidence="test")
+        cp_id = cp.id
+        url = lead_invite.build_unsubscribe_url(cp_id)
+        assert url.startswith("https://crm.solo-pr.ru/u/marketing/")
+        token = url.rsplit("/", 1)[-1]
+
+    r = crm.client.get(f"/u/marketing/{token}")
+    assert r.status_code == 200
+    assert "отписались" in r.text.lower()
+    with crm.db() as db:
+        mkt = db.scalar(
+            select(Consent).where(Consent.contact_point_id == cp_id, Consent.purpose == "marketing")
+        )
+        assert mkt.status == "revoked"
+        profile = db.scalar(select(Profile).where(Profile.email == "unsub@example.ru"))
+        assert profile.stopped is True
+
+
 def test_raga_lead_creates_person_via_generic_path(crm, monkeypatch):
     monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
     monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-other-secret")

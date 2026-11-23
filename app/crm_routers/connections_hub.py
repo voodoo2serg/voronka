@@ -58,6 +58,8 @@ def connections_hub(pid: str, admin=Depends(crm_actor)):
             ) or 0
             token_present = bool(connection.token_env and os.environ.get(connection.token_env))
             secret_present = bool(connection.secret_env and os.environ.get(connection.secret_env))
+            cfg = connection.config if isinstance(connection.config, dict) else {}
+            bot_username = str(cfg.get("username") or "").strip() or None
             # Never return env values — only names + presence.
             item = {
                 "id": connection.id,
@@ -65,6 +67,7 @@ def connections_hub(pid: str, admin=Depends(crm_actor)):
                 "platform": connection.platform,
                 "role": connection.role,
                 "active": connection.active,
+                "bot_username": bot_username,
                 "token_env": connection.token_env if admin.role == "owner" else None,
                 "secret_env": connection.secret_env if admin.role == "owner" else None,
                 "token_present": token_present if admin.role in {"owner", "editor"} else None,

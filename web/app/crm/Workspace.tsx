@@ -2139,11 +2139,16 @@ export default function Workspace() {
                       <div className="direction" key={c.id}>
                         <b>{c.name}</b>
                         <span>{c.platform}{c.role ? ` · ${c.role}` : ''}</span>
+                        {c.bot_username ? <span>@{String(c.bot_username)}</span> : null}
                         <span className={c.active ? 'badge good' : 'badge'}>{c.active ? 'Включено' : 'Выключено'}</span>
                         {c.webhook_preflight && (
                           <small>
                             webhook: {c.webhook_preflight.ok ? 'ok' : 'не готов'}
                             {c.last_error ? ` · err: ${c.last_error}` : ''}
+                            {typeof c.outbox_pending === 'number' ? ` · outbox pending ${c.outbox_pending}` : ''}
+                            {typeof c.outbox_failed_or_unknown === 'number' && c.outbox_failed_or_unknown
+                              ? ` · fail ${c.outbox_failed_or_unknown}`
+                              : ''}
                             {c.media_writable === false ? ' · media RO' : ''}
                           </small>
                         )}

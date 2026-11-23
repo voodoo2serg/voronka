@@ -580,6 +580,15 @@ def consume(db, connection, msg):
     if connection.project_id:
         from app.crm_service import ensure_profile
         ensure_profile(db, identity, connection.project_id)
+        # VR-424: flush deferred Solo_pr course channel invite after Identity exists.
+        from app import lead_invite
+
+        lead_invite.flush_pending_channel_invites(
+            db,
+            identity=identity,
+            connection=connection,
+            telegram_username=msg.get("username"),
+        )
     run = db.scalar(select(Run).where(Run.identity_id == identity.id,
         Run.status.in_(LIVE)).with_for_update())
     text, callback = msg.get("text", ""), msg.get("callback", "")
