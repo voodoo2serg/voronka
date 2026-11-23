@@ -26,15 +26,36 @@ def _normalize_variants(raw):
     return out
 
 
-def pick_variant_text(node, state):
+def _next_round_robin_index(n: int, state, *, version_id: str | None, node_key: str | None) -> int:
+    """Shared cursor across Runs for the same Version node (Redis); fallback = run state."""
+    if n <= 0:
+        return 0
+    if version_id and node_key:
+        try:
+            from app import auth
+            key = f"variant-rr:{version_id}:{node_key}"
+            count = auth.cache.incr(key)
+            if count == 1:
+                # Keep counter for the life of a published series experiment (~90d).
+                auth.cache.expire(key, 90 * 86400)
+            return (int(count) - 1) % n
+        except Exception:
+            pass
+    idx0 = int(state.get("_variant_rr") or 0) % n
+    state["_variant_rr"] = idx0 + 1
+    return idx0
+
+
+def pick_variant_text(node, state, *, version_id: str | None = None, node_key: str | None = None):
     """Resolve text node body: static text or variants[] pick (VR-406 / SIG-UX-04)."""
     variants = _normalize_variants(node.get("variants"))
     if not variants:
         return node.get("text") or "", None
     pick = node.get("pick") or "random"
     if pick == "round_robin":
-        idx0 = int(state.get("_variant_rr") or 0) % len(variants)
-        state["_variant_rr"] = idx0 + 1
+        idx0 = _next_round_robin_index(
+            len(variants), state, version_id=version_id, node_key=node_key
+        )
     else:
         idx0 = random.randrange(len(variants))
     # 1-based index for staff markers «(вариант N)»
@@ -366,7 +387,9 @@ def advance(db, run, identity):
             if kind == "video_note" and node.get("text"):
                 queue(db, identity, {"type": "text", "text": node["text"]}, run)
             if kind == "text":
-                body, variant_index = pick_variant_text(node, state)
+                body, variant_index = pick_variant_text(
+                    node, state, version_id=run.version_id, node_key=key
+                )
                 payload = {**node, "text": body}
                 payload.pop("variants", None)
                 if variant_index is not None:
@@ -388,12 +411,14 @@ def advance(db, run, identity):
             run.current = node["yes"] if state.get(node["key"]) == node.get("equals", True) else node["no"]
             continue
         elif kind == "intent_router":
-            inbound = state.get("_last_inbound") or state.get("last_message") or ""
+            # Only fresh inbound — consume so a later router does not reuse it.
+            inbound = state.get("_last_inbound") or ""
             if not str(inbound).strip():
                 state["_await"] = "intent_router"
                 run.status = "waiting"
                 run.state = state
                 break
+            state.pop("_last_inbound", None)
             matched = match_intent_router(node, str(inbound))
             nxt = resolve_intent_router_next(node, matched)
             event(
@@ -638,17 +663,9 @@ def consume(db, connection, msg):
         state = dict(run.state)
         state["_last_inbound"] = text
         state.pop("_await", None)
-        matched = match_intent_router(node, text)
-        nxt = resolve_intent_router_next(node, matched)
         event(db, "message.received", connection.id, identity.contact_id, run.id, text=text)
-        event(
-            db, "intent_router.matched", connection.id, identity.contact_id, run.id,
-            node=run.current, matched=matched, next=nxt, input=text[:200],
-        )
-        if not nxt:
-            run.state, run.status = state, "completed"
-            return
-        run.state, run.current, run.status = state, nxt, "active"
+        # Re-enter advance on the same router node so inbound is consumed once there.
+        run.state, run.status = state, "active"
         advance(db, run, identity)
         return
     if not run or run.status != "waiting":

@@ -160,10 +160,73 @@ def test_text_variants_round_robin(db):
         "pick": "round_robin",
         "variants": [{"text": "A"}, {"text": "B"}, {"text": "C"}],
     }
+    # Without Redis key scope, per-run state still advances within one process.
     t1, i1 = pick_variant_text(node, state)
     t2, i2 = pick_variant_text(node, state)
     assert (t1, i1) == ("A", 1)
     assert (t2, i2) == ("B", 2)
+
+
+def test_round_robin_uses_shared_counter_across_calls(monkeypatch):
+    """Codex P1: cursor must not reset per Run — shared incr across executions."""
+    from app import auth
+
+    class FakeCache:
+        def __init__(self):
+            self.n = 0
+            self.ttl = None
+
+        def incr(self, key):
+            self.n += 1
+            return self.n
+
+        def expire(self, key, seconds):
+            self.ttl = seconds
+
+    fake = FakeCache()
+    monkeypatch.setattr(auth, "cache", fake)
+    node = {
+        "type": "text",
+        "pick": "round_robin",
+        "variants": [{"text": "A"}, {"text": "B"}, {"text": "C"}],
+    }
+    # Fresh run states each time — counter lives on Redis key.
+    t1, i1 = pick_variant_text(node, {}, version_id="ver", node_key="q1")
+    t2, i2 = pick_variant_text(node, {}, version_id="ver", node_key="q1")
+    t3, i3 = pick_variant_text(node, {}, version_id="ver", node_key="q1")
+    assert (t1, i1) == ("A", 1)
+    assert (t2, i2) == ("B", 2)
+    assert (t3, i3) == ("C", 3)
+    assert fake.ttl == 90 * 86400
+
+
+def test_second_intent_router_waits_after_inbound_consumed(db):
+    """Codex P1: first router must clear _last_inbound so the next router parks."""
+    graph = {
+        "start": "r1",
+        "nodes": {
+            "r1": {
+                "type": "intent_router",
+                "routes": {"да": "mid"},
+                "on_miss": "mid",
+            },
+            "mid": {
+                "type": "intent_router",
+                "routes": {"ок": "yes"},
+                "on_miss": "no",
+            },
+            "yes": {"type": "text", "text": "YES", "next": "end"},
+            "no": {"type": "text", "text": "NO", "next": "end"},
+            "end": {"type": "finish"},
+        },
+    }
+    run = run_for(db, graph, {"_last_inbound": "да, готов"})
+    advance(db, run, db.get(Identity, "identity"))
+    db.flush()
+    assert run.current == "mid"
+    assert run.status == "waiting"
+    assert run.state.get("_await") == "intent_router"
+    assert "_last_inbound" not in (run.state or {})
 
 
 def test_wait_then_intent_router_branch(db):
