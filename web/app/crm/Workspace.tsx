@@ -475,22 +475,19 @@ export default function Workspace() {
   }
 
   function grantForm(o: Row) {
+    // Prefill only from immutable order snapshot — never live product.config
+    // (orders created before a later LMS bind must stay unbound until staff enter resource).
     const snapConfig =
       o.snapshot?.config && typeof o.snapshot.config === 'object' ? o.snapshot.config : {};
-    const fromProduct = products.find((p) => p.id === o.product_id);
-    const productConfig =
-      fromProduct?.config && typeof fromProduct.config === 'object' ? fromProduct.config : {};
     const boundResource =
-      (typeof snapConfig.course_id === 'string' && snapConfig.course_id.trim()) ||
-      (typeof productConfig.course_id === 'string' && productConfig.course_id.trim()) ||
-      '';
+      typeof snapConfig.course_id === 'string' ? snapConfig.course_id.trim() : '';
     setForm({
-      title: boundResource ? 'Назначить право (ресурс из продукта)' : 'Назначить право',
+      title: boundResource ? 'Назначить право (ресурс из заказа)' : 'Назначить право',
       fields: [
         {
           key: 'resource',
           label: boundResource
-            ? 'Ключ ресурса / раздела (подставлен из курса LMS продукта)'
+            ? 'Ключ ресурса / раздела (из snapshot заказа · курс LMS продукта)'
             : 'Ключ ресурса / раздела (externalId курса LMS)',
           required: true,
           value: boundResource,
