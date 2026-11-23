@@ -212,8 +212,10 @@ def test_messenger_lead_registers_contact_points(crm, monkeypatch):
 
     with crm.db() as db:
         tg_cps = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == person_id)))
-        assert any(cp.channel == "telegram" and "@vr408_course" in (cp.normalized_value or cp.raw_value or "") for cp in tg_cps)
         tg_cp = next(cp for cp in tg_cps if cp.channel == "telegram")
+        # VR-433: normalized_value strips @ for /start match; raw keeps submitted form.
+        assert tg_cp.normalized_value == "vr408_course"
+        assert "@vr408_course" in (tg_cp.raw_value or "")
         tx = db.scalar(
             select(Consent).where(Consent.contact_point_id == tg_cp.id, Consent.purpose == "transactional")
         )
