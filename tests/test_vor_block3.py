@@ -212,8 +212,10 @@ def test_messenger_lead_registers_contact_points(crm, monkeypatch):
 
     with crm.db() as db:
         tg_cps = list(db.scalars(select(ContactPoint).where(ContactPoint.person_id == person_id)))
-        assert any(cp.channel == "telegram" and "@vr408_course" in (cp.normalized_value or cp.raw_value or "") for cp in tg_cps)
         tg_cp = next(cp for cp in tg_cps if cp.channel == "telegram")
+        # VR-433: normalized_value strips @ for /start match; raw keeps submitted form.
+        assert tg_cp.normalized_value == "vr408_course"
+        assert "@vr408_course" in (tg_cp.raw_value or "")
         tx = db.scalar(
             select(Consent).where(Consent.contact_point_id == tg_cp.id, Consent.purpose == "transactional")
         )
@@ -305,7 +307,11 @@ def test_vr424_tg_invite_pending_then_flush_on_start(crm, monkeypatch):
         "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
     )
     assert r.status_code == 200 and r.json()["duplicate"] is False
-    profile_id = r.json()["profile_id"]
+    body = r.json()
+    profile_id = body["profile_id"]
+    assert body.get("channel_invite", {}).get("status") == "pending"
+    assert body["channel_invite"].get("requires_start") is True
+    assert body["channel_invite"].get("bot_start_url", "").startswith("https://t.me/Solo_pr_bot?start=inv_")
 
     with crm.db() as db:
         profile = db.get(Profile, profile_id)
@@ -313,11 +319,13 @@ def test_vr424_tg_invite_pending_then_flush_on_start(crm, monkeypatch):
         pending = profile.extra.get("pending_tg_channel_invite")
         assert pending and pending.get("telegram") == "vr424_lead"
         assert pending.get("connection_id") == "tg"
+        assert pending.get("start_payload", "").startswith("inv_")
         tg_cp = next(
             cp
             for cp in db.scalars(select(ContactPoint).where(ContactPoint.person_id == profile.person_id))
             if cp.channel == "telegram"
         )
+        assert tg_cp.normalized_value == "vr424_lead"
         mkt = db.scalar(
             select(Consent).where(Consent.contact_point_id == tg_cp.id, Consent.purpose == "marketing")
         )
@@ -410,6 +418,119 @@ def test_vr424_tg_invite_pending_then_flush_on_start(crm, monkeypatch):
             if (o.payload or {}).get("kind") == "course_channel_invite"
         ]
         assert len(invites) == 2
+
+
+def test_vr433_telegram_cp_legacy_at_hash_migrates(crm):
+    """VR-433: upsert with stripped handle reuses pre-normalize @hash ContactPoint."""
+    from app.crm_models import ContactPoint
+    from app import person_graph
+    from app.crm_service import create_profile
+
+    with crm.db.begin() as db:
+        profile = create_profile(db, "p", {"name": "Legacy TG", "email": "legacy-tg@example.ru"})
+        person = person_graph.sync_profile_contact_points(db, profile)
+        # Simulate pre-VR-433 row hashed with leading @.
+        legacy = ContactPoint(
+            id="cp-legacy-at",
+            person_id=person.id,
+            channel="telegram",
+            raw_value="@legacy_user",
+            normalized_value="@legacy_user",
+            address_hash=person_graph.address_hash("telegram", "@legacy_user"),
+            verified=False,
+            reachable=True,
+            created_at=__import__("app.db", fromlist=["now"]).now(),
+        )
+        db.add(legacy)
+        db.flush()
+        reused = person_graph.upsert_contact_point(db, person, channel="telegram", value="@legacy_user")
+        assert reused is not None and reused.id == "cp-legacy-at"
+        assert reused.normalized_value == "legacy_user"
+        assert reused.address_hash == person_graph.address_hash("telegram", "legacy_user")
+        assert (
+            db.scalar(
+                select(ContactPoint).where(
+                    ContactPoint.person_id == person.id, ContactPoint.channel == "telegram"
+                ).where(ContactPoint.id != "cp-legacy-at")
+            )
+            is None
+        )
+
+
+def test_vr433_external_flush_by_start_payload(crm, monkeypatch):
+    """VR-433: external lead /start with deep-link payload flushes even without username match."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.setenv("DEFAULT_PROJECT_ID", "p")
+    monkeypatch.setenv("SOLO_PR_TELEGRAM_CONNECTION_ID", "tg")
+    monkeypatch.setenv("SOLO_PR_CHANNEL_INVITE_URL", "https://t.me/+45nxMJzQ-X4wZTUy")
+    monkeypatch.setenv("VORONKA_PUBLIC_URL", "https://voronka.solo-pr.ru")
+    monkeypatch.setenv("DOMAIN", "voronka.213.171.9.30.sslip.io")
+    from app.crm_models import Profile
+    from app import lead_invite, runtime
+    from app.db import Connection as Conn
+
+    assert lead_invite.webhook_public_domain() == "voronka.solo-pr.ru"
+    assert lead_invite.webhook_public_base_url() == "https://voronka.solo-pr.ru"
+    monkeypatch.setenv("VORONKA_PUBLIC_URL", "https://voronka.solo-pr.ru:8443/crm")
+    assert lead_invite.webhook_public_base_url() == "https://voronka.solo-pr.ru:8443/crm"
+    monkeypatch.setenv("VORONKA_PUBLIC_URL", "https://voronka.solo-pr.ru")
+
+    with crm.db.begin() as db:
+        conn = db.get(Conn, "tg")
+        conn.config = {**(conn.config or {}), "username": "Solo_pr_bot"}
+
+    payload = {
+        "type": "lead.created",
+        "kind": "lead.created",
+        "event_id": "lead-vr433-ext",
+        "idempotency_key": "lead-vr433-ext",
+        "source": "solo_pr",
+        "data": {
+            "contact_type": "telegram",
+            "contact": "@external_lead_x",
+            "name": "External Lead",
+            "kind": "course",
+            "service": "intensiv-novye-vozmozhnosti-kommunikatsiy",
+            "consent": True,
+            "ads_consent": True,
+        },
+        "project_id": "p",
+    }
+    raw = json.dumps(payload).encode()
+    r = crm.client.post(
+        "/api/crm/integrations/solo_pr/leads", content=raw, headers=_auth_headers("inbound-secret", raw)
+    )
+    assert r.status_code == 200
+    start_payload = r.json()["channel_invite"]["bot_start_url"].rsplit("start=", 1)[-1]
+
+    # /start without username (privacy / no @) but with deep-link payload → still flushes
+    with crm.db.begin() as db:
+        conn = db.get(Conn, "tg")
+        runtime.consume(
+            db,
+            conn,
+            {
+                "user_id": "433777",
+                "chat_id": "433777",
+                "text": f"/start {start_payload}",
+                "start": True,
+                "name": "External Lead",
+                "username": None,
+                "payload": start_payload,
+            },
+        )
+
+    with crm.db() as db:
+        invites = [
+            o
+            for o in db.scalars(select(Outbox).where(Outbox.connection_id == "tg"))
+            if (o.payload or {}).get("kind") == "course_channel_invite"
+            and o.chat_id == "433777"
+        ]
+        assert len(invites) == 1
+        profile = db.get(Profile, r.json()["profile_id"])
+        assert "pending_tg_channel_invite" not in (profile.extra or {})
+        assert profile.extra.get("last_tg_channel_invite", {}).get("outbox_id") == invites[0].id
 
 
 def test_vr424_unsubscribe_link_revokes_marketing(crm, monkeypatch):

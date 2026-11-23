@@ -736,10 +736,15 @@ def activate_connection(cid: str, admin=Depends(actor)):
             token,secret=credential(c.token_env),credential(c.secret_env)
         except Exception:
             raise HTTPException(422,"Заполните токен и webhook-секрет в окружении сервера")
-        domain=os.environ.get("DOMAIN","")
-        if not domain or domain=="funnels.example.ru":
-            raise HTTPException(422,"Задайте DOMAIN в окружении сервера")
-        url="https://"+domain+"/hooks/"+cid
+        from app.lead_invite import webhook_public_base_url
+
+        base = webhook_public_base_url()
+        if not base or "funnels.example.ru" in base:
+            raise HTTPException(
+                422,
+                "Задайте VORONKA_PUBLIC_URL (предпочтительно) или DOMAIN в окружении сервера",
+            )
+        url = base.rstrip("/") + "/hooks/" + cid
         try:
             with httpx.Client(timeout=30) as client:
                 if c.platform=="telegram":

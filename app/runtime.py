@@ -580,7 +580,8 @@ def consume(db, connection, msg):
     if connection.project_id:
         from app.crm_service import ensure_profile
         ensure_profile(db, identity, connection.project_id)
-        # VR-424: flush deferred Solo_pr course channel invite after Identity exists.
+        # VR-424 / VR-433: flush deferred Solo_pr course channel invite after Identity exists.
+        # Match by /start deep-link payload, username, or ContactPoint — any Person, not admin-only.
         from app import lead_invite
 
         lead_invite.flush_pending_channel_invites(
@@ -588,6 +589,7 @@ def consume(db, connection, msg):
             identity=identity,
             connection=connection,
             telegram_username=msg.get("username"),
+            start_payload=msg.get("payload") if msg.get("start") else None,
         )
     run = db.scalar(select(Run).where(Run.identity_id == identity.id,
         Run.status.in_(LIVE)).with_for_update())

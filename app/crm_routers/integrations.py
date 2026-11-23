@@ -519,11 +519,12 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
                 )
             if cp and channel == "telegram":
                 telegram_cp_id = cp.id
-        # VR-424: Telegram channel invite via Solo_pr_bot Outbox (never Signal CE).
+        # VR-424 / VR-433: Telegram channel invite via Solo_pr_bot Outbox (never Signal CE).
+        channel_invite: dict | None = None
         if telegram and telegram_cp_id and body.consent and body.ads_consent:
             from app import lead_invite
 
-            lead_invite.schedule_course_channel_invite(
+            channel_invite = lead_invite.schedule_course_channel_invite(
                 db,
                 profile=profile,
                 project_id=project_id,
@@ -583,13 +584,21 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
         )
         db.add(row)
         db.flush()
-        return {
+        result = {
             "ok": True,
             "duplicate": False,
             "profile_id": profile.id,
             "person_id": profile.person_id,
             "inbox_id": row.id,
         }
+        if channel_invite:
+            result["channel_invite"] = {
+                "status": channel_invite.get("status"),
+                "requires_start": bool(channel_invite.get("requires_start")),
+                "bot_start_url": channel_invite.get("bot_start_url"),
+                "connection_id": channel_invite.get("connection_id"),
+            }
+        return result
 
 
 @router.post("/integrations/solo_pr/leads")
