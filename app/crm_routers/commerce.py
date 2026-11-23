@@ -35,6 +35,27 @@ class ProductBody(Body):
     config: dict = Field(default_factory=dict)
 
 
+def _normalize_product_config(config: dict) -> dict:
+    """Keep product.config additive; normalize optional LMS course bind (VR-405 / T2)."""
+    out = dict(config or {})
+    if "course_id" not in out:
+        return out
+    raw = out.get("course_id")
+    if raw is None or raw == "":
+        out.pop("course_id", None)
+        return out
+    if not isinstance(raw, str):
+        raise HTTPException(422, "config.course_id должен быть строкой (LMS externalId)")
+    course_id = raw.strip()
+    if len(course_id) > 200:
+        raise HTTPException(422, "config.course_id слишком длинный")
+    if course_id:
+        out["course_id"] = course_id
+    else:
+        out.pop("course_id", None)
+    return out
+
+
 @router.get("/projects/{pid}/products")
 def products(pid: str, admin=Depends(crm_actor)):
     with Session() as db:
@@ -47,9 +68,11 @@ def add_product(pid: str, body: ProductBody, admin=Depends(crm_actor)):
     staff_owner(admin)
     if body.kind not in KINDS:
         raise HTTPException(422, "Неизвестный вид продукта")
+    data = body.model_dump()
+    data["config"] = _normalize_product_config(data.get("config") or {})
     with Session.begin() as db:
         project_access(db, admin, pid)
-        row = Product(id=uid(), project_id=pid, **body.model_dump())
+        row = Product(id=uid(), project_id=pid, **data)
         db.add(row); db.flush()
         audit(db, admin, "product.created", product_id=row.id)
         return encode(row)
@@ -60,9 +83,11 @@ def update_product(product_id: str, body: ProductBody, admin=Depends(crm_actor))
     staff_owner(admin)
     if body.kind not in KINDS:
         raise HTTPException(422, "Неизвестный вид продукта")
+    data = body.model_dump()
+    data["config"] = _normalize_product_config(data.get("config") or {})
     with Session.begin() as db:
         row = must(db.get(Product, product_id)); project_access(db, admin, row.project_id)
-        for key, value in body.model_dump().items(): setattr(row, key, value)
+        for key, value in data.items(): setattr(row, key, value)
         audit(db, admin, "product.updated", product_id=row.id)
         return encode(row)
 
