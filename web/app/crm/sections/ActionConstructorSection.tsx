@@ -57,7 +57,7 @@ function VaultEmptyCta({ onOpenConnections }: { onOpenConnections?: () => void }
   return (
     <p className="fine">
       Нет настроенных подключений.{' '}
-      <a href="?section=connections">Настроить в Подключениях</a>
+      <a href="#connections">Настроить в Подключениях</a>
     </p>
   );
 }
@@ -391,7 +391,7 @@ export function ActionConstructorSection({
               <small>Почта From, боты и платежи — только из vault</small>
             </button>
           ) : (
-            <a className="constructor-step-card" href="?section=connections">
+            <a className="constructor-step-card" href="#connections">
               <span className="eyebrow">3</span>
               <b>Подключения</b>
               <small>Почта From, боты и платежи — только из vault</small>
@@ -469,7 +469,7 @@ export function ActionConstructorSection({
                   Настроить в Подключениях
                 </button>
               ) : (
-                <a href="?section=connections">Настроить в Подключениях</a>
+                <a href="#connections">Настроить в Подключениях</a>
               )}
             </div>
           </div>
