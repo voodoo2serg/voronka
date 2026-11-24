@@ -198,6 +198,66 @@ export default function Workspace() {
     setProjectBoard(board.items || []);
   }
 
+  /** Canonical hash for a section. Constructor stays `#today` (CART-01). */
+  function sectionHash(id: string): string {
+    if (id === 'chains') return '#today';
+    if (id === 'home') return '#home';
+    if (id === 'media') return '#media';
+    return `#${id}`;
+  }
+
+  function writeHash(hash: string) {
+    if (typeof window === 'undefined') return;
+    const next = window.location.pathname + window.location.search + hash;
+    if (window.location.pathname + window.location.search + window.location.hash === next) return;
+    window.history.replaceState({}, '', next);
+  }
+
+  /** Apply location.hash → section / cart / person. Safe to call on hashchange. */
+  function applyLocationHash() {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash || '';
+    const base = hash.split('?')[0] || '';
+    // CART-01: #today is constructor-only (not WorkToday sales contour).
+    // CART-04: #today?project=&cart= — project + CMS cart id for Constructor.
+    if (base === '#today' || hash.startsWith('#today')) {
+      setSection('chains');
+      const qIdx = hash.indexOf('?');
+      if (qIdx >= 0) {
+        const q = new URLSearchParams(hash.slice(qIdx + 1));
+        const project = (q.get('project') || '').trim();
+        const cart = (q.get('cart') || '').trim();
+        if (project) setPid(project);
+        setCartId(cart);
+        setCartForProject(cart && project ? project : '');
+      }
+    } else if (base === '#payments') setSection('payments');
+    else if (base === '#connections') setSection('connections');
+    else if (base === '#media' || base === '#mediathek') setSection('media');
+    else if (base === '#chains' || base === '#constructor') setSection('chains');
+    else if (base === '#overview') setSection('overview');
+    else if (base === '#home' || base === '#projects') setSection('home');
+    else if (base === '#help' || hash.startsWith('#help')) setHelpOpen(true);
+    else if (base.startsWith('#')) {
+      const id = base.slice(1);
+      if (sections.some(([sid]) => sid === id)) setSection(id);
+    }
+    if (hash === '#help' || hash.startsWith('#help')) setHelpOpen(true);
+    const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
+    if (personMatch) {
+      void api('/contacts/' + personMatch[1])
+        .then((row: Row) => setDetail(row))
+        .catch(() => undefined);
+    }
+  }
+
+  function goSection(id: string) {
+    setSection(id);
+    setDetail(null);
+    setError('');
+    writeHash(sectionHash(id));
+  }
+
   useEffect(() => {
     if (!ready) return;
     void act(async () => {
@@ -207,40 +267,6 @@ export default function Workspace() {
         // Keep current project if still allowed; otherwise leave empty until staff picks from board.
         setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : ''));
         await loadHomeBoard().catch(() => setProjectBoard([]));
-        if (typeof window !== 'undefined') {
-          const hash = window.location.hash || '';
-          // CART-01: #today is constructor-only (not WorkToday sales contour).
-          // CART-04: #today?project=&cart= — project + CMS cart id for Constructor.
-          if (hash === '#today' || hash.startsWith('#today')) {
-            setSection('chains');
-            const qIdx = hash.indexOf('?');
-            if (qIdx >= 0) {
-              const q = new URLSearchParams(hash.slice(qIdx + 1));
-              const project = (q.get('project') || '').trim();
-              const cart = (q.get('cart') || '').trim();
-              if (project) setPid(project);
-              setCartId(cart);
-              // Bind cart to deep-linked project so a later project switch drops it.
-              setCartForProject(cart && project ? project : '');
-            } else {
-              setCartId('');
-              setCartForProject('');
-            }
-          }
-          if (hash === '#payments') setSection('payments');
-          if (hash === '#connections') setSection('connections');
-          if (hash === '#media' || hash === '#mediathek') setSection('media');
-          if (hash === '#chains' || hash === '#constructor') setSection('chains');
-          if (hash === '#overview') setSection('overview');
-          if (hash === '#home' || hash === '#projects') setSection('home');
-          if (hash === '#help' || hash.startsWith('#help')) setHelpOpen(true);
-          const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
-          if (personMatch) {
-            void api('/contacts/' + personMatch[1])
-              .then((row: Row) => setDetail(row))
-              .catch(() => undefined);
-          }
-        }
       } catch {
         setMe(null);
         setToken('');
@@ -249,6 +275,26 @@ export default function Workspace() {
       }
     });
   }, [ready, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Hash router: apply on login + listen for deep-links / back-forward.
+  // Nav writes the matching hash so a stuck `#overview` cannot snap the section back.
+  useEffect(() => {
+    if (!me) return;
+    try {
+      const saved = sessionStorage.getItem('crm-return-hash');
+      if (saved) {
+        sessionStorage.removeItem('crm-return-hash');
+        if (!window.location.hash || window.location.hash === '#') {
+          writeHash(saved);
+        }
+      }
+    } catch {}
+    applyLocationHash();
+    const onHash = () => applyLocationHash();
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me]);
 
   // CART-04 / Codex P2: drop deep-linked cart when staff switches Project (selector / board).
   useEffect(() => {
@@ -290,7 +336,11 @@ export default function Workspace() {
     setTasks([]);
     setInbox([]);
     if (pid) {
-      void act(() => load());
+      // Silent background load — do not flip global `busy` (that blinked #overview
+      // chrome and made nav feel locked while Promise.all settled).
+      void load().catch((e) => {
+        setError(e instanceof Error ? e.message : 'Ошибка загрузки');
+      });
       return;
     }
     // Linked staff without a project: keep chrome + portals; do not wall the world.
@@ -321,6 +371,7 @@ export default function Workspace() {
         setMe(m);
         setPid(p.id);
         setSection('overview');
+        writeHash('#overview');
         await loadHomeBoard().catch(() => undefined);
       },
     });
@@ -332,9 +383,7 @@ export default function Workspace() {
     setCartId('');
     setCartForProject('');
     setSection('overview');
-    if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#overview');
-    }
+    writeHash('#overview');
   }
 
   /** B-01 / CART-01: «Запустить цепочку» / #today → full-page Action Constructor (project pick if none). */
@@ -342,8 +391,8 @@ export default function Workspace() {
     setSection('chains');
     setDetail(null);
     setError('');
+    writeHash('#today');
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
       window.requestAnimationFrame(() => {
         document.getElementById('action-constructor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
@@ -782,8 +831,12 @@ export default function Workspace() {
               setOffset(0);
               const next = e.target.value;
               setPid(next);
-              if (next) setSection('overview');
-              else setSection('home');
+              if (next) {
+                setSection('overview');
+                writeHash('#overview');
+              } else {
+                goSection('home');
+              }
             }}
           >
             <option value="">Все проекты (доска)</option>
@@ -805,11 +858,7 @@ export default function Workspace() {
               <button
                 key={id}
                 className={`${section === id ? 'nav active' : 'nav'}${secondary ? ' nav-secondary' : ''}`}
-                onClick={() => {
-                  setSection(id);
-                  setDetail(null);
-                  setError('');
-                }}
+                onClick={() => goSection(id)}
               >
                 <span className="nav-icon">
                   <Icon name={id} />
@@ -901,14 +950,7 @@ export default function Workspace() {
             {/* History lives in the contact drawer (z-40). Hide strip link while drawer open so chrome
                 need not sit above the drawer (that blocked «Закрыть карточку»). */}
             {!detail?.id && (
-              <button
-                type="button"
-                className="linkish"
-                onClick={() => {
-                  setSection('contacts');
-                  setError('');
-                }}
-              >
+              <button type="button" className="linkish" onClick={() => goSection('contacts')}>
                 History
               </button>
             )}
@@ -1744,18 +1786,7 @@ export default function Workspace() {
                     setMediaOverlay(true);
                     setError('');
                   }}
-                  onOpenConnections={() => {
-                    setSection('connections');
-                    setDetail(null);
-                    setError('');
-                    if (typeof window !== 'undefined') {
-                      window.history.replaceState(
-                        {},
-                        '',
-                        window.location.pathname + window.location.search + '#connections',
-                      );
-                    }
-                  }}
+                  onOpenConnections={() => goSection('connections')}
                 />
               )}
               {section === 'chains' && mediaOverlay && (

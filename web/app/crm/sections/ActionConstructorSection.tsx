@@ -39,7 +39,42 @@ type CartState = {
 };
 
 function uid() {
-  return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `n-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function nodeBody(node: NodeRow | undefined): string {
+  if (!node) return '';
+  return String(node.config.body || node.config.text || '');
+}
+
+function channelLabel(
+  node: NodeRow | undefined,
+  vaultEmail: Row[],
+  vaultMessaging: Row[],
+  vaultPayment: Row[],
+): string {
+  if (!node) return '—';
+  const vid = String(node.config.from_vault_id || node.config.vault_id || '');
+  if (node.kind === 'email') {
+    const row = vaultEmail.find((v) => String(v.id) === vid);
+    if (row) {
+      const addr = (row.meta as Row)?.from_address;
+      return addr ? String(addr) : String(row.label);
+    }
+    return node.from_address ? String(node.from_address) : 'Email · канал не выбран';
+  }
+  if (node.kind === 'telegram') {
+    const row = vaultMessaging.find((v) => String(v.id) === vid);
+    return row ? String(row.label) : 'Telegram · бот не выбран';
+  }
+  if (node.kind === 'payment') {
+    const row = vaultPayment.find((v) => String(v.id) === vid);
+    return row ? String(row.label) : 'Оплата · подключение не выбрано';
+  }
+  return String(node.kind);
 }
 
 /** Empty vault → short CTA to Подключения (no credential forms on #today). */
@@ -90,7 +125,8 @@ export function ActionConstructorSection({
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [dryEmail, setDryEmail] = useState('');
   const [dryTg, setDryTg] = useState('');
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [cart, setCart] = useState<CartState | null>(null);
   const [plusOpenAt, setPlusOpenAt] = useState<string | null>(null);
 
@@ -134,33 +170,58 @@ export function ActionConstructorSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pid, cartId]);
 
-  function addFromCartItem(item: CartItem) {
+  function selectStep(index: number) {
+    setSelected(index);
+    setEditorOpen(true);
+    setPlusOpenAt(null);
+  }
+
+  function addFromCartItem(item: CartItem, atIndex?: number) {
     const nodeKind = item.node_kind || 'contact';
     const label =
       item.title ||
       item.kind_label ||
       ((meta?.node_kinds as Row[] | undefined) || []).find((k) => k.id === nodeKind)?.label ||
       nodeKind;
-    setNodes((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        kind: nodeKind,
-        title: String(label),
-        config: {
-          cart_kind: item.kind,
-          ...(nodeKind === 'payment' ? { provider: 'robokassa', tariff_mode: 'fixed' } : {}),
-        },
-        media_asset_id: item.asset_id,
-        from_address: null,
+    const next: NodeRow = {
+      id: uid(),
+      kind: nodeKind,
+      title: String(label),
+      config: {
+        cart_kind: item.kind,
+        ...(nodeKind === 'payment' ? { provider: 'robokassa', tariff_mode: 'fixed' } : {}),
       },
-    ]);
-    setSelected(nodes.length);
+      media_asset_id: item.asset_id,
+      from_address: null,
+    };
+    setNodes((prev) => {
+      if (atIndex === undefined) return [...prev, next];
+      const insertAt = Math.max(0, Math.min(prev.length, atIndex + 1));
+      const copy = [...prev];
+      copy.splice(insertAt, 0, next);
+      return copy;
+    });
+    const newIndex =
+      atIndex === undefined ? nodes.length : Math.max(0, Math.min(nodes.length, atIndex + 1));
+    setSelected(newIndex);
+    setEditorOpen(true);
     setPlusOpenAt(null);
   }
 
   function updateNode(index: number, patch: Partial<NodeRow>) {
     setNodes((prev) => prev.map((n, i) => (i === index ? { ...n, ...patch } : n)));
+  }
+
+  function removeNode(index: number) {
+    setNodes((prev) => prev.filter((_, i) => i !== index));
+    setSelected((cur) => {
+      if (cur === null) return null;
+      if (cur === index) {
+        setEditorOpen(false);
+        return null;
+      }
+      return cur > index ? cur - 1 : cur;
+    });
   }
 
   async function saveChain() {
@@ -215,7 +276,7 @@ export function ActionConstructorSection({
     window.open(mediaUrl, '_blank', 'noopener');
   }
 
-  const current = nodes[selected];
+  const current = selected !== null ? nodes[selected] : undefined;
   const vaultEmail = (meta?.vault_email as Row[] | undefined) || [];
   const vaultPayment = (meta?.vault_payment as Row[] | undefined) || [];
   const vaultMessaging = (meta?.vault_messaging as Row[] | undefined) || [];
@@ -228,13 +289,15 @@ export function ActionConstructorSection({
   const needsChannel =
     current && (current.kind === 'email' || current.kind === 'telegram' || current.kind === 'payment');
   const showEmptyGuide = cartEmpty || !nodes.length;
+  const previewChannel = channelLabel(current, vaultEmail, vaultMessaging, vaultPayment);
+  const previewBody = nodeBody(current);
 
-  function PlusMenu({ menuKey, below }: { menuKey: string; below?: boolean }) {
+  function PlusMenu({ menuKey, afterIndex }: { menuKey: string; afterIndex?: number }) {
     const open = plusOpenAt === menuKey;
     if (cartEmpty) {
       return (
         <a
-          className={`constructor-plus${below ? ' below' : ''} constructor-plus-cta`}
+          className="constructor-plus constructor-plus-cta"
           href={cartUrl}
           target="_blank"
           rel="noopener noreferrer"
@@ -245,10 +308,10 @@ export function ActionConstructorSection({
       );
     }
     return (
-      <div className={`constructor-plus-wrap${below ? ' is-below' : ''}`}>
+      <div className="constructor-plus-wrap">
         <button
           type="button"
-          className={`constructor-plus${below ? ' below' : ''}`}
+          className="constructor-plus"
           title="Добавить шаг из корзины"
           aria-expanded={open}
           aria-haspopup="menu"
@@ -263,7 +326,7 @@ export function ActionConstructorSection({
                 key={`${item.asset_id}:${item.kind}`}
                 type="button"
                 role="menuitem"
-                onClick={() => addFromCartItem(item)}
+                onClick={() => addFromCartItem(item, afterIndex)}
               >
                 <b>{item.title || item.kind_label || item.kind}</b>
                 <small>
@@ -293,7 +356,8 @@ export function ActionConstructorSection({
               setRevision(1);
               setName('Новая цепочка');
               setNodes([]);
-              setSelected(0);
+              setSelected(null);
+              setEditorOpen(false);
             }}
           >
             + Новая
@@ -309,8 +373,10 @@ export function ActionConstructorSection({
                   setChainId(String(c.id));
                   setName(String(c.name));
                   setRevision(Number(c.revision) || 1);
-                  setNodes(Array.isArray(c.nodes) ? (c.nodes as NodeRow[]) : []);
-                  setSelected(0);
+                  const loaded = Array.isArray(c.nodes) ? (c.nodes as NodeRow[]) : [];
+                  setNodes(loaded);
+                  setSelected(loaded.length ? 0 : null);
+                  setEditorOpen(Boolean(loaded.length));
                 }}
               >
                 {String(c.name)}
@@ -336,7 +402,7 @@ export function ActionConstructorSection({
             <ul className="constructor-cart-items">
               {cartItems.map((item) => (
                 <li key={`${item.asset_id}:${item.kind}`}>
-                  <button type="button" onClick={() => addFromCartItem(item)} disabled={busy}>
+                  <button type="button" onClick={() => addFromCartItem(item)}>
                     <b>{item.title || item.kind_label || item.kind}</b>
                     <small>
                       {item.kind} · {item.asset_id.slice(0, 8)}…
@@ -349,308 +415,429 @@ export function ActionConstructorSection({
         </div>
       </aside>
 
-      <section className="panel constructor-canvas">
-        <div className="panel-title">
-          <div className="constructor-name-block">
-            <h2>Холст</h2>
-            <label className="constructor-name-field">
-              Название цепочки
-              <input value={name} onChange={(e) => setName(e.target.value)} />
-            </label>
-          </div>
-          <div className="constructor-actions">
-            <button type="button" disabled={busy} onClick={() => void saveChain()}>
-              Сохранить
-            </button>
-            <button type="button" className="primary" disabled={busy} onClick={() => void publishChain()}>
-              Опубликовать
-            </button>
-          </div>
-        </div>
-
-        <div className="constructor-next-steps" role="group" aria-label="Корзина и медиатека">
-          <button type="button" className="constructor-step-card" onClick={openMedia}>
-            <span className="eyebrow">1</span>
-            <b>Медиатека CRM</b>
-            <small>Создать файл и подписать kind + Project</small>
-          </button>
-          <a
-            className="constructor-step-card"
-            href={cartUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span className="eyebrow">2</span>
-            <b>Корзина CMS</b>
-            <small>Набрать ассеты проекта до сборки цепочки</small>
-          </a>
-          {onOpenConnections ? (
-            <button type="button" className="constructor-step-card" onClick={onOpenConnections}>
-              <span className="eyebrow">3</span>
-              <b>Подключения</b>
-              <small>Почта From, боты и платежи — только из vault</small>
-            </button>
-          ) : (
-            <a className="constructor-step-card" href="#connections">
-              <span className="eyebrow">3</span>
-              <b>Подключения</b>
-              <small>Почта From, боты и платежи — только из vault</small>
-            </a>
-          )}
-        </div>
-        <p className="fine constructor-hint">
-          «+» собирает шаги только из корзины CMS. Медиатека — в CRM;{' '}
-          <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
-            Открыть в Signal
-          </a>{' '}
-          — запасной путь. Каналы — в Подключениях, без форм на этом экране.
-        </p>
-
-        <div className="constructor-flow">
-          <div className="constructor-fixed">
-            <strong>Клиент получает</strong>
-            <p className="fine">Базовый контур коммуникации</p>
-          </div>
-          <PlusMenu menuKey="flow" />
-          {nodes.map((node, index) => (
-            <div key={node.id} className={`constructor-square${selected === index ? ' selected' : ''}`}>
-              <button
-                type="button"
-                className="constructor-media"
-                title="Открыть медиатеку CRM"
-                aria-label="Открыть медиатеку CRM"
-                onClick={openMedia}
-              >
-                +
-              </button>
-              <button type="button" className="square-body" onClick={() => setSelected(index)}>
-                <b>{node.title}</b>
-                <small>
-                  {node.kind}
-                  {node.media_asset_id ? ` · ${String(node.media_asset_id).slice(0, 8)}…` : ''}
-                </small>
-              </button>
-              <PlusMenu menuKey={node.id} below />
+      <div className="constructor-stage">
+        <section className="panel constructor-canvas">
+          <div className="panel-title">
+            <div className="constructor-name-block">
+              <h2>Холст</h2>
+              <label className="constructor-name-field">
+                Название цепочки
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </label>
             </div>
-          ))}
-        </div>
-
-        {!cartEmpty && (
-          <div className="constructor-kinds" role="group" aria-label="Шаги из корзины">
-            {cartItems.map((item) => (
-              <button
-                key={`kind-${item.asset_id}:${item.kind}`}
-                type="button"
-                onClick={() => addFromCartItem(item)}
-                disabled={busy}
-              >
-                + {item.title || item.kind_label || item.kind}
+            <div className="constructor-actions">
+              <button type="button" disabled={busy} onClick={() => void saveChain()}>
+                Сохранить
               </button>
+              <button type="button" className="primary" disabled={busy} onClick={() => void publishChain()}>
+                Опубликовать
+              </button>
+            </div>
+          </div>
+
+          <div className="constructor-next-steps" role="group" aria-label="Корзина и медиатека">
+            <button type="button" className="constructor-step-card" onClick={openMedia}>
+              <span className="eyebrow">1</span>
+              <b>Медиатека CRM</b>
+              <small>Создать файл и подписать kind + Project</small>
+            </button>
+            <a
+              className="constructor-step-card"
+              href={cartUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span className="eyebrow">2</span>
+              <b>Корзина CMS</b>
+              <small>Набрать ассеты проекта до сборки цепочки</small>
+            </a>
+            {onOpenConnections ? (
+              <button type="button" className="constructor-step-card" onClick={onOpenConnections}>
+                <span className="eyebrow">3</span>
+                <b>Подключения</b>
+                <small>Почта From, боты и платежи — только из vault</small>
+              </button>
+            ) : (
+              <a className="constructor-step-card" href="#connections">
+                <span className="eyebrow">3</span>
+                <b>Подключения</b>
+                <small>Почта From, боты и платежи — только из vault</small>
+              </a>
+            )}
+          </div>
+          <p className="fine constructor-hint">
+            «+» собирает шаги только из корзины CMS. Клик по шагу открывает правую панель. Превью справа всегда
+            на месте.{' '}
+            <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+              Открыть в Signal
+            </a>
+          </p>
+
+          <div className="constructor-flow constructor-flow-vertical" aria-label="Последовательность шагов">
+            <div className="constructor-fixed">
+              <strong>Клиент получает</strong>
+              <p className="fine">Старт цепочки</p>
+            </div>
+            <div className="constructor-connector" aria-hidden="true">
+              <PlusMenu menuKey="flow-start" afterIndex={-1} />
+            </div>
+            {nodes.map((node, index) => (
+              <div key={node.id} className="constructor-step-block">
+                <div
+                  className={`constructor-square${selected === index ? ' selected' : ''}`}
+                  data-step-index={index}
+                >
+                  <span className="constructor-step-index" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <button
+                    type="button"
+                    className="constructor-media"
+                    title="Открыть медиатеку CRM"
+                    aria-label="Открыть медиатеку CRM"
+                    onClick={openMedia}
+                  >
+                    +
+                  </button>
+                  <button type="button" className="square-body" onClick={() => selectStep(index)}>
+                    <b>{node.title}</b>
+                    <small>
+                      {node.kind}
+                      {node.media_asset_id ? ` · ${String(node.media_asset_id).slice(0, 8)}…` : ''}
+                    </small>
+                  </button>
+                </div>
+                <div className="constructor-connector" aria-hidden="true">
+                  <PlusMenu menuKey={node.id} afterIndex={index} />
+                </div>
+              </div>
             ))}
           </div>
-        )}
 
-        {showEmptyGuide && cartEmpty && (
-          <div className="empty compact constructor-empty-cart">
-            <h3>С чего начать</h3>
-            <p>
-              Корзина пуста для этого проекта. Создайте файл в медиатеке, наберите корзину в CMS — затем
-              меню «+» появится по типам из корзины. Каналы настраиваются в Подключениях.
-            </p>
-            <div className="row constructor-cart-ctas-inline">
-              <button type="button" className="primary" onClick={openMedia}>
-                Из медиатеки
-              </button>
-              <a href={cartUrl} target="_blank" rel="noopener noreferrer">
-                Набрать корзину в CMS
-              </a>
-              {onOpenConnections ? (
-                <button type="button" className="link" onClick={onOpenConnections}>
-                  Настроить в Подключениях
-                </button>
-              ) : (
-                <a href="#connections">Настроить в Подключениях</a>
-              )}
-            </div>
-          </div>
-        )}
-
-        {current && (
-          <div className="constructor-config">
-            <h3>Настройки шага</h3>
-            <label>
-              Заголовок
-              <input
-                value={current.title}
-                onChange={(e) => updateNode(selected, { title: e.target.value })}
-              />
-            </label>
-            <label>
-              Пауза перед шагом (мин)
-              <input
-                type="number"
-                min={0}
-                value={String(current.config.wait_minutes ?? '')}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  const wait = raw === '' ? undefined : Number(raw);
-                  updateNode(selected, {
-                    config: {
-                      ...current.config,
-                      wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
-                    },
-                  });
-                }}
-                placeholder="0"
-              />
-            </label>
-
-            {current.kind === 'email' && (
-              <>
-                {vaultEmail.length ? (
-                  <label>
-                    Подключение (From)
-                    <select
-                      value={String(current.config.from_vault_id || current.config.vault_id || '')}
-                      onChange={(e) => {
-                        const vid = e.target.value;
-                        const row = vaultEmail.find((v) => String(v.id) === vid);
-                        const addr = row ? String((row.meta as Row)?.from_address || '') : '';
-                        updateNode(selected, {
-                          from_address: addr || current.from_address || null,
-                          config: {
-                            ...current.config,
-                            from_vault_id: vid || null,
-                            vault_id: vid || null,
-                          },
-                        });
-                      }}
-                    >
-                      <option value="">Выбрать подключение…</option>
-                      {vaultEmail.map((v) => (
-                        <option key={String(v.id)} value={String(v.id)}>
-                          {String(v.label)}
-                          {(v.meta as Row)?.from_address ? ` · ${String((v.meta as Row).from_address)}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
-                )}
-              </>
-            )}
-
-            {current.kind === 'telegram' && (
-              <>
-                {vaultMessaging.length ? (
-                  <label>
-                    Бот / канал
-                    <select
-                      value={String(current.config.vault_id || '')}
-                      onChange={(e) => {
-                        const vid = e.target.value;
-                        updateNode(selected, {
-                          config: { ...current.config, vault_id: vid || null },
-                        });
-                      }}
-                    >
-                      <option value="">Выбрать подключение…</option>
-                      {vaultMessaging.map((v) => (
-                        <option key={String(v.id)} value={String(v.id)}>
-                          {String(v.label)} · {String(v.type_label || v.type)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
-                )}
-                {vaultMessaging.length > 0 && onOpenConnections && (
-                  <p className="fine">
-                    Webhook бота:{' '}
-                    <button type="button" className="link" onClick={onOpenConnections}>
-                      Activate в Подключениях
-                    </button>
-                  </p>
-                )}
-              </>
-            )}
-
-            {current.kind === 'payment' && (
-              <>
-                {vaultPayment.length ? (
-                  <label>
-                    Платёжное подключение
-                    <select
-                      value={String(current.config.vault_id || '')}
-                      onChange={(e) => {
-                        const vid = e.target.value;
-                        const row = vaultPayment.find((v) => String(v.id) === vid);
-                        const provider = row ? String(row.type) : String(current.config.provider || 'robokassa');
-                        updateNode(selected, {
-                          config: {
-                            ...current.config,
-                            vault_id: vid || null,
-                            provider:
-                              provider === 'yookassa'
-                                ? 'yookassa'
-                                : provider === 'robokassa'
-                                  ? 'robokassa'
-                                  : current.config.provider,
-                          },
-                        });
-                      }}
-                    >
-                      <option value="">Выбрать подключение…</option>
-                      {vaultPayment.map((v) => (
-                        <option key={String(v.id)} value={String(v.id)}>
-                          {String(v.label)} · {String(v.type_label || v.type)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
-                )}
-              </>
-            )}
-
-            {needsChannel ? null : (
-              <p className="fine">Тело и медиа — из корзины CMS (asset привязан при добавлении шага).</p>
-            )}
-            {current.media_asset_id ? (
-              <p className="fine">
-                Asset из корзины: <code>{current.media_asset_id}</code>
-                {current.config.cart_kind ? (
-                  <>
-                    {' '}
-                    · kind <code>{String(current.config.cart_kind)}</code>
-                  </>
-                ) : null}
+          {showEmptyGuide && cartEmpty && (
+            <div className="empty compact constructor-empty-cart">
+              <h3>С чего начать</h3>
+              <p>
+                Корзина пуста для этого проекта. Создайте файл в медиатеке, наберите корзину в CMS — затем меню
+                «+» появится по типам из корзины. Каналы настраиваются в Подключениях.
               </p>
+              <div className="row constructor-cart-ctas-inline">
+                <button type="button" className="primary" onClick={openMedia}>
+                  Из медиатеки
+                </button>
+                <a href={cartUrl} target="_blank" rel="noopener noreferrer">
+                  Набрать корзину в CMS
+                </a>
+                {onOpenConnections ? (
+                  <button type="button" className="link" onClick={onOpenConnections}>
+                    Настроить в Подключениях
+                  </button>
+                ) : (
+                  <a href="#connections">Настроить в Подключениях</a>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="constructor-dryrun">
+            <h3>Проверить</h3>
+            <p className="fine">Dry-run по сохранённой цепочке — email и/или Telegram получатель.</p>
+            <label>
+              Email
+              <input value={dryEmail} onChange={(e) => setDryEmail(e.target.value)} placeholder="you@example.ru" />
+            </label>
+            <label>
+              Telegram
+              <input value={dryTg} onChange={(e) => setDryTg(e.target.value)} placeholder="@username или chat_id" />
+            </label>
+            <button type="button" disabled={busy} onClick={() => void dryRun()}>
+              Проверить
+            </button>
+          </div>
+        </section>
+
+        <aside className="constructor-side" aria-label="Превью и редактор шага">
+          <section className="panel constructor-preview" aria-label="Превью шага">
+            <div className="panel-title">
+              <h2>Превью</h2>
+              {current ? <span className="badge">{current.kind}</span> : null}
+            </div>
+            {!current ? (
+              <p className="fine">Выберите шаг на холсте — здесь появится текст и канал.</p>
             ) : (
-              <p className="fine">Нет привязанного asset — добавьте шаг из корзины через «+».</p>
+              <>
+                <p className="constructor-preview-channel">
+                  <span className="eyebrow">КАНАЛ</span>
+                  {previewChannel}
+                </p>
+                <div className="constructor-preview-frame" data-kind={current.kind}>
+                  <header>
+                    <b>{current.title || 'Без названия'}</b>
+                    <small>
+                      шаг {(selected ?? 0) + 1} из {nodes.length}
+                      {current.config.wait_minutes
+                        ? ` · пауза ${String(current.config.wait_minutes)} мин`
+                        : ''}
+                    </small>
+                  </header>
+                  <div className="constructor-preview-body">
+                    {previewBody ? (
+                      <pre>{previewBody}</pre>
+                    ) : current.media_asset_id ? (
+                      <p className="fine">
+                        Тело из asset корзины <code>{String(current.media_asset_id).slice(0, 8)}…</code>
+                        {current.config.cart_kind ? (
+                          <>
+                            {' '}
+                            · <code>{String(current.config.cart_kind)}</code>
+                          </>
+                        ) : null}
+                        . Допишите текст в панели справа или оставьте asset как есть.
+                      </p>
+                    ) : (
+                      <p className="fine">Нет текста — откройте шаг и введите сообщение.</p>
+                    )}
+                  </div>
+                </div>
+                {nodes.length > 1 && (
+                  <ol className="constructor-preview-chain fine" aria-label="Цепочка">
+                    {nodes.map((n, i) => (
+                      <li key={n.id} className={i === selected ? 'is-current' : undefined}>
+                        {i + 1}. {n.title || n.kind}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </>
+            )}
+          </section>
+
+          <div
+            className={`constructor-editor-drawer${editorOpen && current ? ' is-open' : ''}`}
+            role="dialog"
+            aria-modal="false"
+            aria-label="Редактор шага"
+            hidden={!(editorOpen && current)}
+          >
+            {current && selected !== null && (
+              <div className="panel constructor-editor">
+                <div className="panel-title">
+                  <div>
+                    <h2>Шаг {(selected ?? 0) + 1}</h2>
+                    <p className="muted">{current.kind}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="link"
+                    aria-label="Закрыть редактор"
+                    onClick={() => setEditorOpen(false)}
+                  >
+                    Свернуть
+                  </button>
+                </div>
+
+                <label>
+                  Заголовок
+                  <input
+                    value={current.title}
+                    onChange={(e) => updateNode(selected, { title: e.target.value })}
+                  />
+                </label>
+                <label>
+                  Сообщение
+                  <textarea
+                    rows={6}
+                    value={previewBody}
+                    onChange={(e) =>
+                      updateNode(selected, {
+                        config: { ...current.config, body: e.target.value, text: e.target.value },
+                      })
+                    }
+                    placeholder="Текст сообщения без тяжёлой загрузки файлов…"
+                  />
+                </label>
+                <label>
+                  Пауза перед шагом (мин)
+                  <input
+                    type="number"
+                    min={0}
+                    value={String(current.config.wait_minutes ?? '')}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const wait = raw === '' ? undefined : Number(raw);
+                      updateNode(selected, {
+                        config: {
+                          ...current.config,
+                          wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
+                        },
+                      });
+                    }}
+                    placeholder="0"
+                  />
+                </label>
+
+                {!cartEmpty && (
+                  <label>
+                    Asset из корзины
+                    <select
+                      value={String(current.media_asset_id || '')}
+                      onChange={(e) => {
+                        const assetId = e.target.value;
+                        const item = cartItems.find((i) => i.asset_id === assetId);
+                        updateNode(selected, {
+                          media_asset_id: assetId || null,
+                          config: {
+                            ...current.config,
+                            cart_kind: item?.kind || current.config.cart_kind,
+                          },
+                          ...(item?.node_kind && item.node_kind !== current.kind
+                            ? { kind: item.node_kind, title: item.title || current.title }
+                            : {}),
+                        });
+                      }}
+                    >
+                      <option value="">Без asset…</option>
+                      {cartItems.map((item) => (
+                        <option key={`${item.asset_id}:${item.kind}`} value={item.asset_id}>
+                          {item.title || item.kind_label || item.kind} · {item.kind}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                {current.kind === 'email' && (
+                  <>
+                    {vaultEmail.length ? (
+                      <label>
+                        Подключение (From)
+                        <select
+                          value={String(current.config.from_vault_id || current.config.vault_id || '')}
+                          onChange={(e) => {
+                            const vid = e.target.value;
+                            const row = vaultEmail.find((v) => String(v.id) === vid);
+                            const addr = row ? String((row.meta as Row)?.from_address || '') : '';
+                            updateNode(selected, {
+                              from_address: addr || current.from_address || null,
+                              config: {
+                                ...current.config,
+                                from_vault_id: vid || null,
+                                vault_id: vid || null,
+                              },
+                            });
+                          }}
+                        >
+                          <option value="">Выбрать подключение…</option>
+                          {vaultEmail.map((v) => (
+                            <option key={String(v.id)} value={String(v.id)}>
+                              {String(v.label)}
+                              {(v.meta as Row)?.from_address
+                                ? ` · ${String((v.meta as Row).from_address)}`
+                                : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                    )}
+                  </>
+                )}
+
+                {current.kind === 'telegram' && (
+                  <>
+                    {vaultMessaging.length ? (
+                      <label>
+                        Бот / канал
+                        <select
+                          value={String(current.config.vault_id || '')}
+                          onChange={(e) => {
+                            const vid = e.target.value;
+                            updateNode(selected, {
+                              config: { ...current.config, vault_id: vid || null },
+                            });
+                          }}
+                        >
+                          <option value="">Выбрать подключение…</option>
+                          {vaultMessaging.map((v) => (
+                            <option key={String(v.id)} value={String(v.id)}>
+                              {String(v.label)} · {String(v.type_label || v.type)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                    )}
+                    {vaultMessaging.length > 0 && onOpenConnections && (
+                      <p className="fine">
+                        Webhook бота:{' '}
+                        <button type="button" className="link" onClick={onOpenConnections}>
+                          Activate в Подключениях
+                        </button>
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {current.kind === 'payment' && (
+                  <>
+                    {vaultPayment.length ? (
+                      <label>
+                        Платёжное подключение
+                        <select
+                          value={String(current.config.vault_id || '')}
+                          onChange={(e) => {
+                            const vid = e.target.value;
+                            const row = vaultPayment.find((v) => String(v.id) === vid);
+                            const provider = row
+                              ? String(row.type)
+                              : String(current.config.provider || 'robokassa');
+                            updateNode(selected, {
+                              config: {
+                                ...current.config,
+                                vault_id: vid || null,
+                                provider:
+                                  provider === 'yookassa'
+                                    ? 'yookassa'
+                                    : provider === 'robokassa'
+                                      ? 'robokassa'
+                                      : current.config.provider,
+                              },
+                            });
+                          }}
+                        >
+                          <option value="">Выбрать подключение…</option>
+                          {vaultPayment.map((v) => (
+                            <option key={String(v.id)} value={String(v.id)}>
+                              {String(v.label)} · {String(v.type_label || v.type)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                    )}
+                  </>
+                )}
+
+                {needsChannel ? null : (
+                  <p className="fine">Тело и медиа — из корзины CMS или поля «Сообщение» выше.</p>
+                )}
+
+                <div className="row constructor-editor-actions">
+                  <button type="button" className="link danger-text" onClick={() => removeNode(selected)}>
+                    Удалить шаг
+                  </button>
+                  <button type="button" onClick={openMedia}>
+                    Из медиатеки
+                  </button>
+                </div>
+              </div>
             )}
           </div>
-        )}
-
-        <div className="constructor-dryrun">
-          <h3>Проверить</h3>
-          <p className="fine">Dry-run по сохранённой цепочке — email и/или Telegram получатель.</p>
-          <label>
-            Email
-            <input value={dryEmail} onChange={(e) => setDryEmail(e.target.value)} placeholder="you@example.ru" />
-          </label>
-          <label>
-            Telegram
-            <input value={dryTg} onChange={(e) => setDryTg(e.target.value)} placeholder="@username или chat_id" />
-          </label>
-          <button type="button" disabled={busy} onClick={() => void dryRun()}>
-            Проверить
-          </button>
-        </div>
-      </section>
+        </aside>
+      </div>
     </div>
   );
 }

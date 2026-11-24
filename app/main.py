@@ -34,9 +34,14 @@ async def constraint_conflict(request: Request, exception: IntegrityError):
 
 # Next.js App Router static export embeds inline bootstrap/Flight scripts for hydration.
 # Nonces are unavailable on StaticFiles; allow same-origin + unsafe-inline for portal shells only.
+# Staff chrome loads Manrope/Literata from Google Fonts (layout.tsx). Allow those
+# origins so CSP does not drop stylesheets/fonts and flicker the shell on paint.
 _PORTAL_CSP = (
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "img-src 'self' data:; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 

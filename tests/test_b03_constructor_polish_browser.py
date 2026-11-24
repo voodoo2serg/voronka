@@ -83,13 +83,18 @@ def test_b03_constructor_media_overlay_and_activate(crm, monkeypatch, tmp_path):
         expect(page.get_by_role("group", name="Корзина и медиатека").get_by_text("Медиатека CRM")).to_be_visible()
         expect(page.get_by_role("group", name="Корзина и медиатека").get_by_text("Корзина CMS")).to_be_visible()
         expect(page.get_by_role("group", name="Корзина и медиатека").get_by_text("Подключения")).to_be_visible()
+        # VR-482: obligatory preview pane + vertical canvas
+        expect(page.get_by_role("region", name="Превью шага").or_(page.locator(".constructor-preview"))).to_be_visible()
+        expect(page.locator(".constructor-flow-vertical")).to_be_visible()
         page.screenshot(path=str(shot_dir / "b03-constructor.png"), full_page=True)
 
         # Codex P1: media opens as overlay — constructor stays mounted; B-02 real library.
         page.get_by_role("group", name="Корзина и медиатека").get_by_text("Медиатека CRM").click()
         expect(page.locator(".media-library")).to_be_visible(timeout=10000)
         expect(page.locator("#action-constructor")).to_be_visible()
-        expect(page.get_by_role("link", name="Открыть в Signal")).to_be_visible()
+        expect(
+            page.get_by_role("dialog", name="Медиатека CRM").get_by_role("link", name="Открыть в Signal")
+        ).to_be_visible()
         page.screenshot(path=str(shot_dir / "b03-media-overlay.png"), full_page=True)
         page.get_by_role("button", name="← К конструктору").click()
         expect(page.locator(".media-overlay-layer")).to_have_count(0)

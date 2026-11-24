@@ -102,11 +102,16 @@ export function LoginScreen({
       return;
     }
     // CRM-A1: no local auth island — immediate Keycloak.
+    // Remember hash (#overview / #today) — OIDC return_to is path-only (/crm/).
+    try {
+      const hash = window.location.hash || '';
+      if (hash && hash !== '#') sessionStorage.setItem('crm-return-hash', hash);
+    } catch {}
     setRedirecting(true);
     const params = new URLSearchParams(window.location.search);
-    let href = '/api/crm/oidc/login';
-    if (params.get('register') === '1') href = '/api/crm/oidc/login?register=1';
-    else if (params.get('recover') === '1') href = '/api/crm/oidc/login?recover=1';
+    let href = '/api/crm/oidc/login?return_to=' + encodeURIComponent('/crm/');
+    if (params.get('register') === '1') href = '/api/crm/oidc/login?register=1&return_to=' + encodeURIComponent('/crm/');
+    else if (params.get('recover') === '1') href = '/api/crm/oidc/login?recover=1&return_to=' + encodeURIComponent('/crm/');
     window.location.replace(href);
   }, [statusReady, ssoEnabled, showLocal, accessReason]);
 

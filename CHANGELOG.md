@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — VR-482 Overview flicker + constructor canvas / preview
+
+- Fix `#overview` blink/nav trap: hash router + `hashchange`, nav writes section hashes, silent project load (no global busy), `/me`-only 401 logout, CSP allows Google Fonts for staff chrome.
+- Action Constructor: vertical sequential canvas, right slide-out step editor (message / vault / cart asset), obligatory preview pane; cart-first + media overlay unchanged.
+- Browser: `tests/test_vr482_*.py`; uid fallback when `crypto.randomUUID` missing.
+
 ## Unreleased — B-04 / VR-473 One-click Mailu mailbox
 
 - `POST /api/crm/projects/{pid}/connection-vault/mailboxes` — domain (`solo-pr.ru` / `vodopetov.ru`) + local-part → Mailu user + app-token + vault `email_smtp` (platform SMTP host/port/secret; never owner form).
