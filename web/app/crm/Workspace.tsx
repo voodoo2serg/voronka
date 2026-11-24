@@ -2710,9 +2710,10 @@ export default function Workspace() {
             <div id="contact-history">
               <h3>История</h3>
               <p className="fine">
-                Стадии и письма цикла: sandbox-оплата и mail видны здесь без SSH (FUNC-M2).
+                Переписка и техника по Person: оплаты, доступы, согласия, приглашения, заметки.
+                Фильтры Всё / Переписка / Техника (VR-452).
               </p>
-              <HistoryTimeline detail={detail} />
+              <HistoryTimeline detail={detail} api={api} projectId={pid || detail.project_id} />
             </div>
           </aside>
         </div>

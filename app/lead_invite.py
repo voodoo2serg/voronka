@@ -329,7 +329,52 @@ def _enqueue_invite(
         )
     )
     db.flush()
+    _timeline_invite(
+        db,
+        contact_id=identity.contact_id,
+        kind="lead.channel_invite.queued",
+        external_key=f"channel_invite.queued:{out.id}",
+        payload_ref={"outbox_id": out.id, "lead_event_id": lead_event_id},
+        summary=(text or "")[:200],
+    )
     return out
+
+
+def _timeline_invite(
+    db,
+    *,
+    contact_id: str | None,
+    kind: str,
+    external_key: str,
+    payload_ref: dict | None = None,
+    summary: str = "",
+) -> None:
+    """VR-452: project channel invite into Person timeline (best-effort)."""
+    if not contact_id:
+        return
+    try:
+        from app.crm_models import Profile
+        from app import person_timeline
+
+        profile = db.scalar(select(Profile).where(Profile.contact_id == contact_id).limit(1))
+        if not profile or not profile.person_id:
+            return
+        person_timeline.record_timeline_event(
+            db,
+            person_id=profile.person_id,
+            kind=kind,
+            external_key=external_key,
+            source="voronka",
+            channel="telegram",
+            category="correspondence",
+            title="Приглашение в канал",
+            summary=summary,
+            project_id=profile.project_id,
+            branch_id=profile.branch_id,
+            payload_ref=payload_ref or {},
+        )
+    except Exception:
+        pass
 
 
 def schedule_course_channel_invite(
@@ -435,6 +480,14 @@ def schedule_course_channel_invite(
         )
     )
     db.flush()
+    _timeline_invite(
+        db,
+        contact_id=profile.contact_id,
+        kind="lead.channel_invite.pending",
+        external_key=f"channel_invite.pending:{lead_event_id}",
+        payload_ref={"lead_event_id": lead_event_id, "status": "pending"},
+        summary="Ожидает /start в Solo_pr_bot",
+    )
     return {
         "status": "pending",
         "connection_id": connection.id,

@@ -473,6 +473,24 @@ def set_consent(
         row.effective_at = ts
         row.revoked_at = ts if status in {"revoked", "denied"} else None
     db.flush()
+    try:
+        from app import person_timeline
+
+        person_timeline.record_timeline_event(
+            db,
+            person_id=cp.person_id,
+            kind="consent.changed",
+            external_key=f"consent:{row.id}:{row.status}:{int(ts.timestamp())}",
+            source="voronka",
+            channel=cp.channel or "system",
+            category="technical",
+            title="Согласие изменено",
+            summary=f"{purpose}: {status}",
+            payload_ref={"consent_id": row.id, "purpose": purpose, "status": status},
+            occurred_at=ts,
+        )
+    except Exception:
+        pass
     return row
 
 
@@ -598,6 +616,12 @@ def record_interaction(
     )
     db.add(row)
     db.flush()
+    try:
+        from app import person_timeline
+
+        person_timeline.project_from_interaction(db, row)
+    except Exception:
+        pass
     return row, False
 
 

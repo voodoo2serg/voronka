@@ -143,3 +143,7 @@ def test_history_timeline_paints_pay_and_mail_stages():
     assert "stage-${item.stage}" in hist
     assert "'pay'" in hist and "'mail'" in hist
     assert "history-stage" in hist
+    # VR-452 filters
+    assert "Переписка" in hist and "Техника" in hist
+    assert "history-filters" in hist
+    assert "correspondence" in hist and "technical" in hist

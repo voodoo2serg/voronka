@@ -193,69 +193,193 @@ def list_merges(pid: str, admin=Depends(crm_actor)):
         return [encode(r) for r in rows]
 
 
-# --- CRM-002 timeline / customer 360 ---
+# --- CRM-002 / VR-452 timeline / customer 360 ---
 
 
 @router.get("/projects/{pid}/persons/{person_id}/timeline")
-def person_timeline(pid: str, person_id: str, limit: int = 100, admin=Depends(crm_actor)):
+def person_timeline(
+    pid: str,
+    person_id: str,
+    category: Literal["all", "correspondence", "technical"] = "all",
+    offset: int = 0,
+    limit: int = 20,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    legacy: bool = False,
+    admin=Depends(crm_actor),
+):
+    """VR-452: filtered Person История (Всё / Переписка / Техника) with pagination.
+
+    Pass legacy=1 to get the pre-VR-452 mixed bag (interactions/orders/…) for M2M callers.
+    """
     if not 1 <= limit <= 500:
         raise HTTPException(422, "limit 1..500")
-    with Session() as db:
+    if offset < 0:
+        raise HTTPException(422, "offset >= 0")
+    with Session.begin() as db:
         person = _person_acl(db, admin, person_id, pid)
-        items: list[dict] = []
-        for ix in db.scalars(
-            select(Interaction)
-            .where(Interaction.person_id == person.id)
-            .order_by(Interaction.occurred_at.desc())
-            .limit(limit)
-        ):
-            items.append({"type": "interaction", "source": ix.source_service, **encode(ix)})
-        for profile in db.scalars(select(Profile).where(Profile.person_id == person.id, Profile.project_id == pid)):
-            for act in db.scalars(
-                select(Activity).where(Activity.profile_id == profile.id).order_by(Activity.created_at.desc()).limit(50)
-            ):
-                items.append({"type": "activity", "source": "voronka", **encode(act)})
-            for deal in db.scalars(select(Deal).where(Deal.profile_id == profile.id)):
-                items.append({"type": "deal", "source": "voronka", **encode(deal)})
-            for order in db.scalars(select(Order).where(Order.profile_id == profile.id)):
-                items.append({"type": "order", "source": "voronka", **encode(order)})
-                for pay in db.scalars(select(Payment).where(Payment.order_id == order.id)):
-                    items.append({"type": "payment", "source": "voronka", **encode(pay)})
-            for ev in db.scalars(
-                select(Event)
-                .where(Event.contact_id == profile.contact_id)
-                .order_by(Event.created_at.desc())
-                .limit(50)
-            ):
-                items.append(
-                    {
-                        "type": "event",
-                        "source": "voronka",
-                        "id": ev.id,
-                        "kind": ev.kind,
-                        "payload": ev.payload,
-                        "occurred_at": ev.created_at,
-                    }
-                )
-        for agreement in db.scalars(
-            select(Agreement).where(Agreement.person_id == person.id, Agreement.project_id == pid)
-        ):
-            items.append({"type": "agreement", "source": "voronka", **encode(agreement)})
-        for journey in db.scalars(
-            select(Journey).where(Journey.person_id == person.id, Journey.project_id == pid)
-        ):
-            items.append({"type": "journey", "source": "voronka", **encode(journey)})
-        for comm in db.scalars(
-            select(Communication).where(Communication.person_id == person.id).limit(100)
-        ):
-            items.append({"type": "communication", "source": "voronka", **encode(comm)})
+        if legacy:
+            return _legacy_person_timeline(db, person=person, pid=pid, limit=limit)
+        from app import person_timeline as timeline
 
-        def sort_key(item):
-            ts = item.get("occurred_at") or item.get("created_at") or item.get("signed_at")
-            return ts or datetime.min.replace(tzinfo=None)
+        return timeline.list_timeline(
+            db,
+            person_id=person.id,
+            project_id=pid,
+            category=category,
+            offset=offset,
+            limit=limit,
+            since=since,
+            until=until,
+            sync=True,
+        )
 
-        items.sort(key=sort_key, reverse=True)
-        return {"person_id": person.id, "project_id": pid, "items": items[:limit]}
+
+def _legacy_person_timeline(db, *, person: Person, pid: str, limit: int) -> dict:
+    items: list[dict] = []
+    for ix in db.scalars(
+        select(Interaction)
+        .where(Interaction.person_id == person.id)
+        .order_by(Interaction.occurred_at.desc())
+        .limit(limit)
+    ):
+        items.append({"type": "interaction", "source": ix.source_service, **encode(ix)})
+    for profile in db.scalars(select(Profile).where(Profile.person_id == person.id, Profile.project_id == pid)):
+        for act in db.scalars(
+            select(Activity).where(Activity.profile_id == profile.id).order_by(Activity.created_at.desc()).limit(50)
+        ):
+            items.append({"type": "activity", "source": "voronka", **encode(act)})
+        for deal in db.scalars(select(Deal).where(Deal.profile_id == profile.id)):
+            items.append({"type": "deal", "source": "voronka", **encode(deal)})
+        for order in db.scalars(select(Order).where(Order.profile_id == profile.id)):
+            items.append({"type": "order", "source": "voronka", **encode(order)})
+            for pay in db.scalars(select(Payment).where(Payment.order_id == order.id)):
+                items.append({"type": "payment", "source": "voronka", **encode(pay)})
+        for ev in db.scalars(
+            select(Event)
+            .where(Event.contact_id == profile.contact_id)
+            .order_by(Event.created_at.desc())
+            .limit(50)
+        ):
+            items.append(
+                {
+                    "type": "event",
+                    "source": "voronka",
+                    "id": ev.id,
+                    "kind": ev.kind,
+                    "payload": ev.payload,
+                    "occurred_at": ev.created_at,
+                }
+            )
+    for agreement in db.scalars(
+        select(Agreement).where(Agreement.person_id == person.id, Agreement.project_id == pid)
+    ):
+        items.append({"type": "agreement", "source": "voronka", **encode(agreement)})
+    for journey in db.scalars(
+        select(Journey).where(Journey.person_id == person.id, Journey.project_id == pid)
+    ):
+        items.append({"type": "journey", "source": "voronka", **encode(journey)})
+    for comm in db.scalars(select(Communication).where(Communication.person_id == person.id).limit(100)):
+        items.append({"type": "communication", "source": "voronka", **encode(comm)})
+
+    def sort_key(item):
+        ts = item.get("occurred_at") or item.get("created_at") or item.get("signed_at")
+        return ts or datetime.min.replace(tzinfo=None)
+
+    items.sort(key=sort_key, reverse=True)
+    return {"person_id": person.id, "project_id": pid, "items": items[:limit]}
+
+
+class TimelineNoteBody(Body):
+    title: str = Field(default="Заметка сотрудника", max_length=300)
+    summary: str = Field(min_length=1, max_length=800)
+    channel: str = Field(default="manual", max_length=30)
+
+
+@router.post("/projects/{pid}/persons/{person_id}/timeline/notes")
+def add_timeline_note(pid: str, person_id: str, body: TimelineNoteBody, admin=Depends(crm_actor)):
+    """Staff manual note on Person История (VR-452)."""
+    with Session.begin() as db:
+        person = _person_acl(db, admin, person_id, pid)
+        from app import person_timeline as timeline
+
+        note_id = uid()
+        row, _ = timeline.record_timeline_event(
+            db,
+            person_id=person.id,
+            kind="staff.note",
+            external_key=f"staff.note:{note_id}",
+            source="staff",
+            channel=body.channel or "manual",
+            category="correspondence",
+            title=body.title or "Заметка сотрудника",
+            summary=body.summary,
+            project_id=pid,
+            branch_id=timeline._profile_branch(db, person.id, pid),
+            payload_ref={"actor_id": admin.telegram_id},
+        )
+        audit(db, admin, "timeline.note", person_id=person.id, timeline_id=row.id)
+        return encode(row)
+
+
+class LmsTimelineStubBody(Body):
+    """Contract for OpenOlat → CRM LMS module/course opens (MVP stub)."""
+
+    person_id: str | None = None
+    email: str | None = None
+    kind: Literal["course.enter", "module.open", "learning.progress", "learning.completed"] = "module.open"
+    course_id: str = Field(default="", max_length=200)
+    module_id: str = Field(default="", max_length=200)
+    summary: str = Field(default="", max_length=800)
+    occurred_at: datetime | None = None
+    external_event_key: str | None = Field(default=None, max_length=160)
+
+
+@router.post("/projects/{pid}/lms/timeline-events")
+def lms_timeline_stub(pid: str, body: LmsTimelineStubBody, admin=Depends(crm_actor)):
+    """Stub ingest for LMS course/module opens (VR-452).
+
+    OpenOlat module-open webhook is not wired yet — this endpoint documents the contract
+    and accepts staff/M2M-shaped payloads so CRM История can show technical LMS rows.
+    """
+    with Session.begin() as db:
+        project_access(db, admin, pid)
+        person = None
+        if body.person_id:
+            person = _person_acl(db, admin, body.person_id, pid)
+        elif body.email:
+            email = body.email.strip().lower()
+            profile = db.scalar(
+                select(Profile).where(Profile.project_id == pid, Profile.email == email).limit(1)
+            )
+            if profile and profile.person_id:
+                person = _person_acl(db, admin, profile.person_id, pid)
+        if person is None:
+            raise HTTPException(422, "person_id или email с Person в проекте обязателен")
+        from app import person_timeline as timeline
+
+        key = body.external_event_key or f"lms:{body.kind}:{body.course_id}:{body.module_id}:{person.id}"
+        row, dup = timeline.record_timeline_event(
+            db,
+            person_id=person.id,
+            kind=body.kind,
+            external_key=key,
+            source="lms",
+            channel="web",
+            category="technical",
+            title=timeline._ru_title(body.kind),
+            summary=body.summary or f"{body.course_id} {body.module_id}".strip(),
+            project_id=pid,
+            branch_id=timeline._profile_branch(db, person.id, pid),
+            payload_ref={"course_id": body.course_id, "module_id": body.module_id},
+            occurred_at=body.occurred_at,
+        )
+        return {
+            **encode(row),
+            "duplicate": dup,
+            "contract": "lms.timeline.v1",
+            "gap": "OpenOlat module-open webhook not connected; stub accepts manual/M2M posts",
+        }
 
 
 # --- CRM-003 consent ---
