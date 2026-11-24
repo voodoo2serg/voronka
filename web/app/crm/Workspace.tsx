@@ -76,6 +76,10 @@ export default function Workspace() {
   const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
   const [salesRunbook, setSalesRunbook] = useState<Row | null>(null);
   const [workToday, setWorkToday] = useState<Row | null>(null);
+  /** Deep-linked CMS cart id — only valid while `pid` matches `cartForProject`. */
+  const [cartId, setCartId] = useState<string>('');
+  const [cartForProject, setCartForProject] = useState<string>('');
+  const prevPidRef = useRef('');
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
   const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
   const [analytics, setAnalytics] = useState<Row | null>(null);
@@ -203,14 +207,21 @@ export default function Workspace() {
         if (typeof window !== 'undefined') {
           const hash = window.location.hash || '';
           // CART-01: #today is constructor-only (not WorkToday sales contour).
-          // CART-03 deep-link stub: #today?project=&cart= — accept project; cart consume = CART-04.
+          // CART-04: #today?project=&cart= — project + CMS cart id for Constructor.
           if (hash === '#today' || hash.startsWith('#today')) {
             setSection('chains');
             const qIdx = hash.indexOf('?');
             if (qIdx >= 0) {
               const q = new URLSearchParams(hash.slice(qIdx + 1));
               const project = (q.get('project') || '').trim();
+              const cart = (q.get('cart') || '').trim();
               if (project) setPid(project);
+              setCartId(cart);
+              // Bind cart to deep-linked project so a later project switch drops it.
+              setCartForProject(cart && project ? project : '');
+            } else {
+              setCartId('');
+              setCartForProject('');
             }
           }
           if (hash === '#payments') setSection('payments');
@@ -234,6 +245,16 @@ export default function Workspace() {
       }
     });
   }, [ready, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // CART-04 / Codex P2: drop deep-linked cart when staff switches Project (selector / board).
+  useEffect(() => {
+    const prev = prevPidRef.current;
+    if (prev && prev !== pid) {
+      setCartId('');
+      setCartForProject('');
+    }
+    prevPidRef.current = pid;
+  }, [pid]);
 
   useEffect(() => {
     if (!me) return;
@@ -300,6 +321,8 @@ export default function Workspace() {
   function openProject(id: string) {
     setOffset(0);
     setPid(id);
+    setCartId('');
+    setCartForProject('');
     setSection('overview');
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', window.location.pathname + window.location.search + '#overview');
@@ -1694,6 +1717,9 @@ export default function Workspace() {
                 <ActionConstructorSection
                   api={api}
                   pid={pid}
+                  cartId={
+                    cartId && (!cartForProject || cartForProject === pid) ? cartId : null
+                  }
                   busy={busy}
                   onBusy={act}
                   onNotice={setNotice}
