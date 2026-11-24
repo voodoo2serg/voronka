@@ -43,7 +43,7 @@ export function ActionConstructorSection({
   async function refresh() {
     if (!pid) return;
     const [m, list] = await Promise.all([
-      api('/constructor/meta'),
+      api(`/constructor/meta?project_id=${encodeURIComponent(pid)}`),
       api(`/projects/${pid}/action-chains`),
     ]);
     setMeta(m);
@@ -122,6 +122,8 @@ export function ActionConstructorSection({
 
   const current = nodes[selected];
   const fromList = (meta?.from_identities as Row[] | undefined) || [];
+  const vaultEmail = (meta?.vault_email as Row[] | undefined) || [];
+  const vaultPayment = (meta?.vault_payment as Row[] | undefined) || [];
   const kinds = (meta?.node_kinds as Row[] | undefined) || [];
   const mediaUrl = String(meta?.media_library_url || SIGNAL_MEDIA_LIBRARY_URL);
 
@@ -237,23 +239,83 @@ export function ActionConstructorSection({
               />
             </label>
             {current.kind === 'email' && (
-              <label>
-                От кого
-                <select
-                  value={current.from_address || ''}
-                  onChange={(e) => updateNode(selected, { from_address: e.target.value || null })}
-                >
-                  <option value="">По умолчанию SMTP</option>
-                  {fromList.map((f) => (
-                    <option key={String(f.id)} value={String(f.address)}>
-                      {String(f.label)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <>
+                <label>
+                  Подключение (vault)
+                  <select
+                    value={String(current.config.from_vault_id || current.config.vault_id || '')}
+                    onChange={(e) => {
+                      const vid = e.target.value;
+                      const row = vaultEmail.find((v) => String(v.id) === vid);
+                      const addr = row ? String((row.meta as Row)?.from_address || '') : '';
+                      updateNode(selected, {
+                        from_address: addr || current.from_address || null,
+                        config: {
+                          ...current.config,
+                          from_vault_id: vid || null,
+                          vault_id: vid || null,
+                        },
+                      });
+                    }}
+                  >
+                    <option value="">Выбрать подключение…</option>
+                    {vaultEmail.map((v) => (
+                      <option key={String(v.id)} value={String(v.id)}>
+                        {String(v.label)}
+                        {(v.meta as Row)?.from_address ? ` · ${String((v.meta as Row).from_address)}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="fine">
+                  <a href="?section=connections">Создать новое в Подключениях</a>
+                </p>
+                <label>
+                  От кого
+                  <select
+                    value={current.from_address || ''}
+                    onChange={(e) => updateNode(selected, { from_address: e.target.value || null })}
+                  >
+                    <option value="">По умолчанию SMTP</option>
+                    {fromList.map((f) => (
+                      <option key={String(f.id)} value={String(f.address)}>
+                        {String(f.label)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
             )}
             {current.kind === 'payment' && (
               <>
+                <label>
+                  Подключение (vault)
+                  <select
+                    value={String(current.config.vault_id || '')}
+                    onChange={(e) => {
+                      const vid = e.target.value;
+                      const row = vaultPayment.find((v) => String(v.id) === vid);
+                      const provider = row ? String(row.type) : String(current.config.provider || 'robokassa');
+                      updateNode(selected, {
+                        config: {
+                          ...current.config,
+                          vault_id: vid || null,
+                          provider: provider === 'yookassa' ? 'yookassa' : provider === 'robokassa' ? 'robokassa' : current.config.provider,
+                        },
+                      });
+                    }}
+                  >
+                    <option value="">Выбрать подключение…</option>
+                    {vaultPayment.map((v) => (
+                      <option key={String(v.id)} value={String(v.id)}>
+                        {String(v.label)} · {String(v.type_label || v.type)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="fine">
+                  <a href="?section=connections">Создать новое в Подключениях</a>
+                </p>
                 <label>
                   Провайдер
                   <select

@@ -805,3 +805,35 @@ class PersonTimelineEvent(Base):
     payload_ref: Mapped[dict] = mapped_column(JSON, default=dict)
     external_key: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ConnectionVault(Base):
+    """VR-454: project-scoped connection credentials (bots, mail, payments). Secrets Fernet-sealed."""
+    __tablename__ = "crm_connection_vault"
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('telegram_bot', 'telegram_channel', 'max_bot', 'email_smtp', 'robokassa', 'yookassa')",
+            name="ck_crm_connection_vault_type",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("crm_branches.id"), nullable=True, index=True)
+    type: Mapped[str] = mapped_column(String(40))
+    label: Mapped[str] = mapped_column(String(200))
+    # Non-secret fields only (username, from_address, shop_id, …).
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Fernet ciphertext of secret field map — never return via list API / encode().
+    secrets_blob: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # {field: "••••xxxx"} written at seal time — safe for UI.
+    secret_masks: Mapped[dict] = mapped_column(JSON, default=dict)
+    has_secret: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Dual-read / Activate bridge to legacy Connection row.
+    legacy_connection_id: Mapped[str | None] = mapped_column(ForeignKey("connections.id"), nullable=True)
+    legacy_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
+    rotated_by: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
