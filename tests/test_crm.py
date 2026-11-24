@@ -265,6 +265,10 @@ def test_migration_0004_matches_models_and_downgrades(crm):
         # CRM redesign (0012)
         'crm_branches','crm_project_courses','crm_action_chains','crm_action_chain_dry_runs',
         'crm_staff_alert_rules','crm_staff_alert_events',
+        # VR-452 Person Timeline (0013)
+        'crm_person_timeline_events',
+        # VR-454 Connection Vault (0014)
+        'crm_connection_vault',
     }
     later_columns={
         'crm_campaigns': {'asset_id'},

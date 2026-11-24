@@ -40,6 +40,9 @@ def test_browser_login_create_contact_deal_and_import(crm,width):
         page.get_by_label('Пароль',exact=True).fill('owner-password-123')
         # AUTH-M2 / FE-U3: guest primary CTA label is short «Войти» (local form submit).
         page.get_by_role('button',name='Войти',exact=True).click()
+        # CRM redesign: default section is home «Проекты»; pick a project → Обзор.
+        expect(page.get_by_role('heading',name='Проекты',exact=True)).to_be_visible()
+        page.get_by_label('Проект',exact=True).select_option(label='Соло-PR')
         expect(page.get_by_role('heading',name='Обзор',exact=True)).to_be_visible()
         # On mobile the sidebar labels are visually compact but remain accessible.
         page.get_by_role('button',name='Клиенты',exact=False).first.click()
