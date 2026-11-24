@@ -57,7 +57,7 @@ function VaultEmptyCta({ onOpenConnections }: { onOpenConnections?: () => void }
   return (
     <p className="fine">
       Нет настроенных подключений.{' '}
-      <a href="?section=connections">Настроить в Подключениях</a>
+      <a href="#connections">Настроить в Подключениях</a>
     </p>
   );
 }

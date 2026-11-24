@@ -82,8 +82,8 @@ export function SystemHelpModal({ onClose }: { onClose: () => void }) {
                 <strong>Выйти</strong> — завершает сессию CRM (BFF logout).
               </li>
               <li>
-                <strong>Работа сегодня / History</strong> — «Работа сегодня» открывает конструктор
-                цепочки (#today); History — клиенты / карточка с Историей.
+                <strong>Запустить цепочку / History</strong> — «Запустить цепочку» открывает
+                конструктор (#today); History — клиенты / карточка с Историей.
               </li>
               <li>
                 <strong>ПРОЕКТ · фильтр</strong> — ограничивает списки выбранным проектом (или «все»,

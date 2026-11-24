@@ -1,4 +1,4 @@
-"""CART-01: #today / «Работа сегодня» → Action Constructor only (no WorkToday/vault forms)."""
+"""CART-01 / B-01: #today / «Запустить цепочку» → Action Constructor only (no WorkToday/vault forms)."""
 import mimetypes
 import os
 from pathlib import Path
@@ -73,7 +73,7 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         expect(page.get_by_role("heading", name="Обзор", exact=True, level=1)).to_be_visible()
 
         # Primary CTA → constructor (#today)
-        page.get_by_role("button", name="Работа сегодня", exact=True).first.click()
+        page.get_by_role("button", name="Запустить цепочку", exact=True).first.click()
         expect(page.get_by_role("heading", name="Конструктор", exact=True, level=1)).to_be_visible()
         expect(page.locator("#action-constructor")).to_be_visible()
         cart = page.get_by_role("group", name="Корзина и медиатека")

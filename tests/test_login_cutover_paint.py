@@ -90,7 +90,7 @@ def test_crm_empty_state_not_project_wall():
     # Linked staff keep section shell; project is optional filter/banner only.
     assert "project-optional" in src
     assert "empty-world" in src
-    assert "Работа сегодня" in src
+    assert "Запустить цепочку" in src
     assert "goToday" in src
     assert "WorkTodayPanel" in src
     assert "work-today" in src or "/work-today" in src
@@ -112,7 +112,7 @@ def test_crm_empty_state_not_project_wall():
 
 def test_ops_has_work_today_cta():
     src = (ROOT / "web" / "app" / "ops" / "Workspace.tsx").read_text(encoding="utf-8")
-    assert "Работа сегодня" in src
+    assert "Запустить цепочку" in src
     assert "crmTodayHref" in src
     assert "SalesRunbookPanel" in src
 

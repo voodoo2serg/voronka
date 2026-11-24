@@ -111,7 +111,7 @@ def portal_chrome(role: str | None = None) -> list[dict]:
     items = [
         {"id": "cms", "label": "CMS", "url": PORTAL_URLS["cms"] + "/admin", "zones": ["owner", "editor", "manager"]},
         {"id": "crm", "label": "CRM", "url": PORTAL_URLS["crm"] + "/", "zones": ["owner", "editor", "manager"]},
-        {"id": "voronka", "label": "Voronka", "url": PORTAL_URLS["voronka"] + "/ops/", "zones": ["owner", "editor"]},
+        {"id": "voronka", "label": "Боты / Ops", "url": PORTAL_URLS["voronka"] + "/ops/", "zones": ["owner", "editor"]},
         {"id": "lms", "label": "Открыть курс", "url": lms_open_course_href(), "zones": ["owner", "editor", "manager"]},
     ]
     if role == "manager":

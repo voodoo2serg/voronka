@@ -13,7 +13,7 @@ const ITEMS:Item[]=[
  {id:'wited',label:'wi-ted',mark:'WT',site:'https://wited.familypaper.online/',admin:'https://wited.familypaper.online/'},
  {id:'signal',label:'СИГНАЛ',mark:'СИ',site:'https://signal.vodopetov.ru/',admin:'https://signal.vodopetov.ru/?view=access'},
  {id:'crm',label:'CRM',mark:'CRM',site:'https://crm.solo-pr.ru/crm/',admin:'https://crm.solo-pr.ru/crm/'},
- {id:'ops',label:'Воронка',mark:'ВО',site:'https://voronka.solo-pr.ru/ops/',admin:'https://voronka.solo-pr.ru/ops/'},
+ {id:'ops',label:'Боты / Ops',mark:'Ops',site:'https://voronka.solo-pr.ru/ops/',admin:'https://voronka.solo-pr.ru/ops/'},
  {id:'lms',label:'Обучение',mark:'LMS',site:'https://lms.solo-pr.ru/',admin:'https://lms.solo-pr.ru/'},
  {id:'personal',label:'Личный сайт',mark:'СВ',site:'https://vodopetov.ru/',admin:'https://vodopetov.ru/edit/'}
 ];
