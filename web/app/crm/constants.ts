@@ -44,7 +44,7 @@ export const sectionHints: Record<string, string> = {
   payments: 'Robokassa и ЮKassa: статус, webhook, оповещения. Учётные данные — в Подключениях.',
   connections: 'Connection Vault: боты, каналы, SMTP, Robokassa/ЮKassa. Секреты только ••••last4.',
   media: 'Медиатека проекта: список и создание в Signal SoR без ухода из CRM (B-02).',
-  chains: 'Конструктор цепочки (#today): шаги из корзины CMS, медиатека в CRM, проверка email/TG.',
+  chains: 'Конструктор (#today): шаги из корзины CMS, медиатека CRM, каналы только из Подключений.',
   campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
   imports: 'Клиенты (Profile) или аудитория IMPORT-101: Person + ContactPoint + Consent.',

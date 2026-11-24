@@ -257,6 +257,9 @@ def test_frontend_no_paste_asset_id_and_cart_driven_plus():
     assert "Набрать корзину в CMS" in ctor
     assert "Шаги из корзины" in ctor
     assert "media_asset_id: item.asset_id" in ctor or "media_asset_id: item.asset_id," in ctor
+    assert "onOpenMediaLibrary" in ctor
+    assert "Медиатека CRM" in ctor
+    assert "Из медиатеки" in ctor
     # No manual paste of asset_id
     assert "вставьте asset_id" not in ctor.lower()
     assert "placeholder=\"вставьте" not in ctor
@@ -265,6 +268,10 @@ def test_frontend_no_paste_asset_id_and_cart_driven_plus():
     ws = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
     assert "cartId" in ws
     assert "q.get('cart')" in ws
+    assert "onOpenMediaLibrary" in ws
+    assert "MediaLibrarySection" in ws
+    assert "mediaOverlay" in ws
+    assert "#media" in ws
     # Codex P2: deep-linked cart must not stick after project switch
     assert "cartForProject" in ws
     assert "setCartId('')" in ws or 'setCartId("")' in ws

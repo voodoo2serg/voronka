@@ -80,6 +80,8 @@ export default function Workspace() {
   /** Deep-linked CMS cart id — only valid while `pid` matches `cartForProject`. */
   const [cartId, setCartId] = useState<string>('');
   const [cartForProject, setCartForProject] = useState<string>('');
+  /** B-03: media drawer overlay — keep constructor draft mounted. */
+  const [mediaOverlay, setMediaOverlay] = useState(false);
   const prevPidRef = useRef('');
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
   const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
@@ -257,6 +259,10 @@ export default function Workspace() {
     }
     prevPidRef.current = pid;
   }, [pid]);
+
+  useEffect(() => {
+    if (section !== 'chains') setMediaOverlay(false);
+  }, [section]);
 
   useEffect(() => {
     if (!me) return;
@@ -1735,16 +1741,8 @@ export default function Workspace() {
                   onBusy={act}
                   onNotice={setNotice}
                   onOpenMediaLibrary={() => {
-                    setSection('media');
-                    setDetail(null);
+                    setMediaOverlay(true);
                     setError('');
-                    if (typeof window !== 'undefined') {
-                      window.history.replaceState(
-                        {},
-                        '',
-                        window.location.pathname + window.location.search + '#media',
-                      );
-                    }
                   }}
                   onOpenConnections={() => {
                     setSection('connections');
@@ -1759,6 +1757,30 @@ export default function Workspace() {
                     }
                   }}
                 />
+              )}
+              {section === 'chains' && mediaOverlay && (
+                <div className="drawer-layer media-overlay-layer" role="dialog" aria-modal="true" aria-label="Медиатека CRM">
+                  <button
+                    type="button"
+                    className="scrim"
+                    aria-label="Закрыть медиатеку"
+                    onClick={() => setMediaOverlay(false)}
+                  />
+                  <div className="drawer media-overlay-drawer">
+                    <MediaLibrarySection
+                      api={api}
+                      pid={pid}
+                      busy={busy}
+                      onBusy={act}
+                      onNotice={setNotice}
+                    />
+                    <div className="row" style={{ marginTop: 12 }}>
+                      <button type="button" className="link" onClick={() => setMediaOverlay(false)}>
+                        ← К конструктору
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
               {section === 'chains' && !pid && (
                 <section className="panel" id="action-constructor" aria-label="Выбор проекта для конструктора">

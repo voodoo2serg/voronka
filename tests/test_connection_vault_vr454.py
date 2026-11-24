@@ -232,11 +232,15 @@ def test_action_chain_stores_vault_id(crm):
 def test_frontend_nav_and_vault_section():
     constants = (ROOT / "web" / "app" / "crm" / "constants.ts").read_text(encoding="utf-8")
     assert "['connections', 'Подключения']" in constants
+    assert "['media', 'Медиатека']" in constants
     section = (ROOT / "web" / "app" / "crm" / "sections" / "ConnectionsVaultSection.tsx").read_text(
         encoding="utf-8"
     )
     assert "Сменить секрет" in section
     assert "connection-vault" in section
+    # B-01/B-03: Telegram Activate CTA on vault row → ops Боты
+    assert "Активировать webhook" in section
+    assert "voronkaOpsBotsHref" in section
     ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
         encoding="utf-8"
     )
@@ -251,6 +255,7 @@ def test_frontend_nav_and_vault_section():
     assert "ConnectionsVaultSection" in ws
     assert "section === 'connections'" in ws
     assert "onOpenConnections" in ws
+    assert "MediaLibrarySection" in ws
 
 
 def test_secrets_not_in_db_plaintext(crm):
