@@ -77,7 +77,7 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         expect(page.get_by_role("heading", name="Конструктор", exact=True, level=1)).to_be_visible()
         expect(page.locator("#action-constructor")).to_be_visible()
         cart = page.get_by_role("group", name="Корзина и медиатека")
-        expect(cart.get_by_role("link", name="Создать файл в Signal")).to_be_visible()
+        expect(cart.get_by_text("Из медиатеки", exact=True)).to_be_visible()
         expect(cart.get_by_role("link", name="Набрать корзину в CMS")).to_be_visible()
         # WorkToday sales contour / Q11 ops copy must not be on #today surface
         expect(page.locator("#work-today-contour")).to_have_count(0)
