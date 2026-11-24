@@ -457,6 +457,27 @@ async def robokassa_result(request: Request):
                 # Live money stays even if entitlement/outbox later fails.
                 queue_for_payment(db, payment)
             invoice.state = "paid"
+            from app import staff_alerts
+
+            order_row = db.get(Order, invoice.order_id)
+            staff_alerts.fire_payment_alerts(
+                db,
+                kind="paid",
+                project_id=order_row.project_id if order_row else None,
+                order_id=invoice.order_id,
+                amount_minor=amount,
+                paid=True,
+                provider="robokassa",
+            )
+            staff_alerts.fire_payment_alerts(
+                db,
+                kind="amount_threshold",
+                project_id=order_row.project_id if order_row else None,
+                order_id=invoice.order_id,
+                amount_minor=amount,
+                paid=True,
+                provider="robokassa",
+            )
         prior_event.state = "processed"
         prior_event.processed_at = db_now()
     return Response("OK" + number, media_type="text/plain")

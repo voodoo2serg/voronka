@@ -66,11 +66,17 @@ def contacts(
     q: str = "",
     tag: str = "",
     source: str = "",
+    branch_id: str = "",
     offset: int = 0,
-    limit: int = 100,
+    limit: int = 50,
     admin=Depends(crm_actor),
 ):
-    if not 0 <= offset or not 1 <= limit <= 500:
+    # limit=0 → «Все» (soft cap); UI page sizes: 10 / 50 / all.
+    if not 0 <= offset:
+        raise HTTPException(422, "Некорректная страница")
+    if limit == 0:
+        limit = 5000
+    elif not 1 <= limit <= 5000:
         raise HTTPException(422, "Некорректная страница")
     source = (source or "").strip().lower()
     if source and source not in SOURCE_FILTERS:
@@ -81,6 +87,11 @@ def contacts(
         if q:
             escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = query.where(or_(*[field.ilike(f"%{escaped}%", escape="\\") for field in (Profile.name, Profile.email, Profile.phone, Profile.company)]))
+        if branch_id.strip():
+            if branch_id.strip() == "__none__":
+                query = query.where(Profile.branch_id.is_(None))
+            else:
+                query = query.where(Profile.branch_id == branch_id.strip())
         if source == "purchase":
             purchaser_ids = select(Order.profile_id).join(
                 Payment, and_(Payment.order_id == Order.id, Payment.kind == "payment")
@@ -125,7 +136,14 @@ def contacts(
                 purchasers.add(pid_row[0])
         for item in result:
             item["is_purchaser"] = item["id"] in purchasers
-        return {"items": result, "total": len(rows), "source_filter": source or None}
+        return {
+            "items": result,
+            "total": len(rows),
+            "source_filter": source or None,
+            "branch_id": branch_id.strip() or None,
+            "limit": limit,
+            "offset": offset,
+        }
 
 
 @router.post("/projects/{pid}/contacts")

@@ -51,6 +51,13 @@ export function signalHref(opts: {
   return PORTAL_URLS.signal + '/' + (qs ? `?${qs}` : '');
 }
 
+/** CRM-A15: Constructor «Медиатека» — SSO preserves return_to (Signal PR #57). */
+export const SIGNAL_MEDIA_LIBRARY_URL = PORTAL_URLS.signal + '/?view=media';
+
+export function signalMediaLibraryHref(opts: { brand?: string | null; person?: string | null } = {}): string {
+  return signalHref({ view: 'media', brand: opts.brand, person: opts.person });
+}
+
 /** Open Signal CE (регламенты / campaigns) or message-set for a Person. */
 export function signalPersonLinks(personId: string | null | undefined) {
   if (!personId) {

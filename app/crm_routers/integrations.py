@@ -418,6 +418,12 @@ def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
     """Upsert Person/Profile/Deal from any marketing lead source (solo_pr / RAGA)."""
     project_id = body.project_id or os.getenv("DEFAULT_PROJECT_ID", "")
     if not project_id:
+        # CRM redesign: raw interest lands in system Project «Старт».
+        with Session.begin() as db:
+            from app.projects_domain import start_project_id
+
+            project_id = start_project_id(db)
+    if not project_id:
         raise HTTPException(503, "DEFAULT_PROJECT_ID не задан для входящих лидов")
     email, phone, telegram, max_value = _lead_channel_values(body)
     source = body.source

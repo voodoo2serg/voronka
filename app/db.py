@@ -20,10 +20,16 @@ class Admin(Base):
     connection_ids: Mapped[list] = mapped_column(JSON, default=list)
 
 class Project(Base):
+    """Commercial / service-line container. System key «start» = inbox for raw interest."""
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(160))
     goal: Mapped[str] = mapped_column(String(400), default="")
+    description: Mapped[str] = mapped_column(String(800), default="")
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    system_key: Mapped[str | None] = mapped_column(String(40), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class Connection(Base):
     __tablename__ = "connections"

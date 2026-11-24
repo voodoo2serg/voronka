@@ -17,12 +17,18 @@ from app.crm_routers.customer_graph import router as customer_graph_router
 from app.crm_routers.audience_import import router as audience_import_router
 from app.crm_routers.company_setup import router as company_setup_router
 from app.crm_routers.reconcile import router as reconcile_router
+from app.crm_routers.projects_board import router as projects_board_router
+from app.crm_routers.action_chains import router as action_chains_router
+from app.crm_routers.payment_settings import router as payment_settings_router
 
 
 def build_router() -> APIRouter:
     router = APIRouter(prefix="/api/crm", tags=["CRM"])
     router.include_router(auth_staff_router)
     router.include_router(oidc_staff_router)
+    router.include_router(projects_board_router)
+    router.include_router(action_chains_router)
+    router.include_router(payment_settings_router)
     router.include_router(contacts_router)
     router.include_router(commerce_router)
     router.include_router(campaigns_router)

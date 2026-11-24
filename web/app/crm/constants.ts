@@ -1,4 +1,5 @@
 export const sections: [string, string][] = [
+  ['home', 'Проекты'],
   ['overview', 'Обзор'],
   ['contacts', 'Клиенты'],
   ['inbox', 'Диалоги'],
@@ -7,11 +8,18 @@ export const sections: [string, string][] = [
   ['tasks', 'Работа и сессии'],
   ['orders', 'Финансы'],
   ['payments', 'Платежи'],
+  ['chains', 'Конструктор'],
   ['campaigns', 'Рассылки'],
   ['analytics', 'Аналитика'],
-  ['outreach', 'Прогрев'],
   ['imports', 'Импорт данных'],
   ['settings', 'Команда и подключения'],
+];
+
+/** Page sizes for clients list (CRM-A6): 10 / 50 / Все. */
+export const CLIENT_PAGE_SIZES: { value: number; label: string }[] = [
+  { value: 10, label: '10' },
+  { value: 50, label: '50' },
+  { value: 0, label: 'Все' },
 ];
 
 export const stateNames: Record<string, string> = {
@@ -23,17 +31,18 @@ export const stateNames: Record<string, string> = {
 };
 
 export const sectionHints: Record<string, string> = {
-  overview: 'Фокус на следующем действии и результате работы.',
-  contacts: 'Клиенты из мессенджеров, сайта, импорта и покупатели.',
+  home: 'Доска проектов: контакты, деньги, следующие задачи.',
+  overview: 'Дашборд выбранного проекта: продажи, сделки, цепочки.',
+  contacts: 'Клиенты проекта с пагинацией 10/50/Все и колонкой Branch.',
   inbox: 'Ответы по существующим диалогам подключений.',
   deals: 'От первого вопроса до выполненного обязательства.',
   products: 'Курсы, экспертные услуги и форматы участия.',
   tasks: 'Задачи, встречи и материалы, которые вы обещали.',
   orders: 'Заказы, авансы, рассрочки и подтверждённые поступления.',
-  payments: 'Robokassa status и каркас YooKassa. Секреты не показываются.',
+  payments: 'Robokassa и ЮKassa: учётные данные, webhook, оповещения. Секреты не показываются.',
+  chains: 'Конструктор действий: шаги, медиатека Signal, проверка email/TG.',
   campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
-  outreach: 'Прогрев по телефону: dry_run с ссылкой на официальный бот, без Campaign/Outbox.',
   imports: 'Клиенты (Profile) или аудитория IMPORT-101: Person + ContactPoint + Consent.',
   settings: 'Люди, каналы, Mailu/SMTP и согласование ролей с CMS.',
 };

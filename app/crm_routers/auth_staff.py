@@ -56,9 +56,26 @@ def logout(request: Request, response: Response, admin=Depends(crm_actor)):
 
 @router.get("/me")
 def me(admin=Depends(crm_actor)):
-    with Session() as db:
-        return {"id": admin.telegram_id, "role": admin.role, "projects": [encode(p) for p in db.scalars(select(Project).where(Project.id.in_(project_ids(db, admin))))],
-                "product_kinds": KINDS, "stages": STAGES}
+    with Session.begin() as db:
+        from app.projects_domain import ensure_start_project, start_project_id
+
+        ensure_start_project(db)
+        projects = [
+            encode(p)
+            for p in db.scalars(
+                select(Project)
+                .where(Project.id.in_(project_ids(db, admin)))
+                .order_by(Project.is_system.desc(), Project.name, Project.id)
+            )
+        ]
+        return {
+            "id": admin.telegram_id,
+            "role": admin.role,
+            "projects": projects,
+            "start_project_id": start_project_id(db),
+            "product_kinds": KINDS,
+            "stages": STAGES,
+        }
 
 
 class StaffBody(Body):
