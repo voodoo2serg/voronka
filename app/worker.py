@@ -160,6 +160,30 @@ def outgoing():
         contact_id = db.get(Identity, row.identity_id).contact_id if row.identity_id else None
         event(db, "message." + status, row.connection_id, contact_id, row.run_id,
             outbox_id=rid, external_message_id=row.external_message_id)
+        if status in {"failed", "unknown"} and contact_id:
+            try:
+                from sqlalchemy import select as sa_select
+                from app.crm_models import Profile
+                from app import person_timeline
+
+                profile = db.scalar(sa_select(Profile).where(Profile.contact_id == contact_id).limit(1))
+                if profile and profile.person_id:
+                    person_timeline.record_timeline_event(
+                        db,
+                        person_id=profile.person_id,
+                        kind="outbox.failed",
+                        external_key=f"outbox.failed:{rid}",
+                        source="voronka",
+                        channel="system",
+                        category="technical",
+                        title="Сбой доставки",
+                        summary=(error or status or "")[:800],
+                        project_id=profile.project_id,
+                        branch_id=profile.branch_id,
+                        payload_ref={"outbox_id": rid, "status": status, "error": error},
+                    )
+            except Exception:
+                pass
     return True
 
 def sweep():

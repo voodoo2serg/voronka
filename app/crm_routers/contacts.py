@@ -280,9 +280,31 @@ class ActivityBody(Body):
 @router.post("/contacts/{profile_id}/activities")
 def add_activity(profile_id: str, body: ActivityBody, admin=Depends(crm_actor)):
     with Session.begin() as db:
-        get_profile(db, admin, profile_id)
+        profile = get_profile(db, admin, profile_id)
         row = Activity(id=uid(), profile_id=profile_id, actor_id=admin.telegram_id, **body.model_dump())
-        db.add(row); db.flush()
+        db.add(row)
+        db.flush()
+        if profile.person_id:
+            try:
+                from app import person_timeline
+
+                person_timeline.record_timeline_event(
+                    db,
+                    person_id=profile.person_id,
+                    kind="staff.note",
+                    external_key=f"activity:{row.id}",
+                    source="staff",
+                    channel=body.channel or "manual",
+                    category="correspondence",
+                    title=body.outcome or "Заметка сотрудника",
+                    summary=(body.body or "")[:800],
+                    project_id=profile.project_id,
+                    branch_id=profile.branch_id,
+                    payload_ref={"activity_id": row.id, "outcome": body.outcome},
+                    occurred_at=row.created_at,
+                )
+            except Exception:
+                pass
         return encode(row)
 
 

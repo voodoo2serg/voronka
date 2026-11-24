@@ -781,3 +781,27 @@ class StaffAlertEvent(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     state: Mapped[str] = mapped_column(String(30), default="sent")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PersonTimelineEvent(Base):
+    """VR-452: staff-visible Person history row (correspondence + technical)."""
+    __tablename__ = "crm_person_timeline_events"
+    __table_args__ = (
+        UniqueConstraint("source", "external_key", name="uq_crm_person_timeline_source_key"),
+        CheckConstraint("category IN ('correspondence', 'technical')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("crm_persons.id"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("crm_branches.id"), nullable=True, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    source: Mapped[str] = mapped_column(String(40), default="voronka")  # signal|voronka|lms|solo_pr|payment|staff
+    channel: Mapped[str] = mapped_column(String(30), default="system")  # email|telegram|max|web|system
+    category: Mapped[str] = mapped_column(String(20))  # correspondence | technical
+    kind: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(300), default="")
+    summary: Mapped[str] = mapped_column(String(800), default="")
+    # Soft refs only — no secrets (outbox_id, payment_id, grant_id, consent_id, …).
+    payload_ref: Mapped[dict] = mapped_column(JSON, default=dict)
+    external_key: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

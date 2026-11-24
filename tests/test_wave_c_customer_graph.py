@@ -137,9 +137,17 @@ def test_timeline_and_interactions_dedup(crm):
     )
     timeline = crm.client.get(f"/api/crm/projects/p/persons/{pid}/timeline?limit=50")
     assert timeline.status_code == 200, timeline.text
-    types = {item["type"] for item in timeline.json()["items"]}
-    assert "interaction" in types
-    assert "order" in types or "payment" in types
+    body = timeline.json()
+    assert "total" in body and body["total"] >= 1
+    kinds = {item["kind"] for item in body["items"]}
+    assert "site.visit" in kinds or "touch" in kinds
+    assert any(k.startswith("deal.paid") or k.startswith("payment") for k in kinds) or any(
+        item.get("category") == "technical" for item in body["items"]
+    )
+    legacy = crm.client.get(f"/api/crm/projects/p/persons/{pid}/timeline?limit=50&legacy=1")
+    assert legacy.status_code == 200
+    legacy_types = {item["type"] for item in legacy.json()["items"]}
+    assert "interaction" in legacy_types
     with crm.db() as db:
         assert db.scalar(select(Interaction).where(Interaction.external_event_key == "evt-1"))
         assert db.scalars(select(Interaction).where(Interaction.person_id == pid)).unique().all().__len__() >= 10

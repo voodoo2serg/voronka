@@ -69,12 +69,18 @@ a.auth-secondary{display:block;text-align:center;border:1px solid #dededb;border
 a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .auth-ctas a.link{margin-top:4px;text-align:center}
 .history-timeline{margin-top:8px}
+.history-filters{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}
+.history-filters button{padding:5px 10px;font-size:12px}
+.history-filters button.is-active{background:var(--surface,#f8f8f7);border-color:#777;font-weight:600}
+.history-pager{justify-content:space-between;align-items:center;margin-top:12px;gap:8px}
 .history-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .history-stage{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid #e5e5e0;background:#f5f5f2;color:#6a6a63;font-weight:600}
 .history-stage.stage-pay{background:#edf4ed;border-color:#b7ceb9;color:#4f6b55}
 .history-stage.stage-mail{background:#eef2f7;border-color:#b7c3d4;color:#3f5678}
 .history-stage.stage-access{background:#f7f0e4;border-color:#e0c89a;color:#8a6a32}
 .history-stage.stage-course{background:#f0eef7;border-color:#c4bdd8;color:#5a5280}
+.history-stage.stage-tech{background:#f3f1ef;border-color:#d2cbc3;color:#6a5f55}
+.history-stage.stage-note{background:#f5f5f2;border-color:#d8d8d2;color:#5a5a54}
 .history-item.is-letter{background:#fafbfd}
 
 /* CRM redesign: projects board + action constructor */

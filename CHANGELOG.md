@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — VR-452 Person Timeline (История)
+
+- Persisted `crm_person_timeline_events` (Alembic **0013**) with category correspondence/technical.
+- Person card «История»: filters Всё / Переписка / Техника + pagination; Project/Branch labels when set.
+- Ingest/project from Interaction, Communication, Activity, Payment, AccessGrant, Consent, channel_invite Events, Outbox fail.
+- Staff note `POST …/timeline/notes`; LMS stub `POST …/lms/timeline-events` (OpenOlat webhook gap documented).
+- Tests: `tests/test_person_timeline_vr452.py`.
+
 ## Unreleased — VR-433 Solo_pr_bot external lead DMs
 
 - Root cause: invite flush only ran after `/start` hit the Solo_pr webhook; production `DOMAIN=*.sslip.io` had Telegram `Connection timed out`, so external `/start` never arrived while the bot creator’s updates sometimes did.
