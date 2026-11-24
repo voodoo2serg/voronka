@@ -40,10 +40,12 @@ def test_browser_login_create_contact_deal_and_import(crm,width):
         page.get_by_label('Пароль',exact=True).fill('owner-password-123')
         # AUTH-M2 / FE-U3: guest primary CTA label is short «Войти» (local form submit).
         page.get_by_role('button',name='Войти',exact=True).click()
-        # CRM redesign: default section is home «Проекты»; pick a project → Обзор.
-        expect(page.get_by_role('heading',name='Проекты',exact=True)).to_be_visible()
-        page.get_by_label('Проект',exact=True).select_option(label='Соло-PR')
-        expect(page.get_by_role('heading',name='Обзор',exact=True)).to_be_visible()
+        # CRM redesign: default section is home «Проекты»; open a project → Обзор.
+        # Page heading is h1; board also has h2 «Проекты» — scope level=1 for strict mode.
+        # Sidebar «Проект» <select> is display:none under 650px — use the board card instead.
+        expect(page.get_by_role('heading',name='Проекты',exact=True,level=1)).to_be_visible()
+        page.locator('button.project-card').filter(has_text='Соло-PR').click()
+        expect(page.get_by_role('heading',name='Обзор',exact=True,level=1)).to_be_visible()
         # On mobile the sidebar labels are visually compact but remain accessible.
         page.get_by_role('button',name='Клиенты',exact=False).first.click()
         page.get_by_role('button',name='+ Новый клиент',exact=True).click()
