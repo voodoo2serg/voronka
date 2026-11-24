@@ -12,6 +12,11 @@ const TYPE_OPTIONS: { id: string; label: string }[] = [
   { id: 'yookassa', label: 'ЮKassa' },
 ];
 
+/** Owner create form: no email_smtp — use «Новая почта» (Mailu one-click). */
+const CREATE_TYPE_OPTIONS = TYPE_OPTIONS.filter((t) => t.id !== 'email_smtp');
+
+const DEFAULT_MAIL_DOMAINS = ['solo-pr.ru', 'vodopetov.ru'];
+
 type FormState = {
   type: string;
   label: string;
@@ -39,6 +44,7 @@ function secretFieldsFor(type: string): { key: string; label: string }[] {
         { key: 'webhook_secret', label: 'Webhook secret (пусто = авто)' },
       ];
     case 'email_smtp':
+      // Rotate only — create goes through «Новая почта» (no owner SMTP form).
       return [{ key: 'smtp_password', label: 'SMTP пароль / app-token' }];
     case 'robokassa':
       return [
@@ -67,13 +73,6 @@ function metaFieldsFor(type: string): { key: string; label: string }[] {
         { key: 'invite_url', label: 'Invite URL' },
         { key: 'chat_id', label: 'chat_id (опц.)' },
         { key: 'linked_bot_vault_id', label: 'ID бота из vault (опц.)' },
-      ];
-    case 'email_smtp':
-      return [
-        { key: 'from_address', label: 'From (name@solo-pr.ru / @vodopetov.ru)' },
-        { key: 'smtp_host', label: 'SMTP host' },
-        { key: 'smtp_user', label: 'SMTP user' },
-        { key: 'smtp_port', label: 'SMTP port' },
       ];
     case 'robokassa':
       return [
@@ -106,6 +105,10 @@ export function ConnectionsVaultSection({
   const [items, setItems] = useState<Row[]>([]);
   const [form, setForm] = useState<FormState>(emptyForm());
   const [showCreate, setShowCreate] = useState(false);
+  const [showMailbox, setShowMailbox] = useState(false);
+  const [mailDomains, setMailDomains] = useState<string[]>(DEFAULT_MAIL_DOMAINS);
+  const [mailboxDomain, setMailboxDomain] = useState(DEFAULT_MAIL_DOMAINS[0]);
+  const [mailboxLocal, setMailboxLocal] = useState('');
   const [rotateId, setRotateId] = useState('');
   const [rotateSecrets, setRotateSecrets] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState('');
@@ -114,6 +117,11 @@ export function ConnectionsVaultSection({
     if (!pid) return;
     const data = await api(`/projects/${pid}/connection-vault?include_inactive=1`);
     setItems(data.items || []);
+    const domains = Array.isArray(data.mail_domains) ? data.mail_domains.map(String) : [];
+    if (domains.length) {
+      setMailDomains(domains);
+      if (!domains.includes(mailboxDomain)) setMailboxDomain(domains[0]);
+    }
   }
 
   useEffect(() => {
@@ -152,7 +160,18 @@ export function ConnectionsVaultSection({
                 >
                   Импорт legacy
                 </button>
-                <button type="button" className="primary" disabled={busy} onClick={() => setShowCreate(true)}>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setShowMailbox(true);
+                    setShowCreate(false);
+                  }}
+                >
+                  Новая почта
+                </button>
+                <button type="button" disabled={busy} onClick={() => setShowCreate(true)}>
                   Создать
                 </button>
               </>
@@ -160,8 +179,8 @@ export function ConnectionsVaultSection({
           </div>
         </div>
         <p className="fine">
-          Боты, почта, каналы и кассы проекта. После сохранения секреты только как ••••last4. Сырые
-          токены не возвращаются API и не попадают в HTML/CSV.
+          Боты, почта, каналы и кассы проекта. Почту создавайте кнопкой «Новая почта» на доменах{' '}
+          {mailDomains.join(' / ')} — SMTP host/port/пароль не нужны. Секреты только как ••••last4.
         </p>
         <label>
           Тип
@@ -237,6 +256,69 @@ export function ConnectionsVaultSection({
         </ul>
       </section>
 
+      {isOwner && showMailbox && (
+        <section className="panel">
+          <div className="panel-title">
+            <h2>Новая почта</h2>
+            <button type="button" className="link" onClick={() => setShowMailbox(false)}>
+              Закрыть
+            </button>
+          </div>
+          <p className="fine">
+            Создаёт ящик в Mailu и подключение From для конструктора. Host, порт и пароль подставляет
+            платформа — вводить их не нужно.
+          </p>
+          <form
+            className="creds-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onBusy(async () => {
+                const local = mailboxLocal.trim().toLowerCase().replace(/@.*$/, '');
+                if (!local) throw new Error('Укажите имя ящика');
+                const created = await api(`/projects/${pid}/connection-vault/mailboxes`, 'POST', {
+                  domain: mailboxDomain,
+                  local_part: local,
+                  label: `${local}@`,
+                });
+                const addr = String(created.from_address || `${local}@${mailboxDomain}`);
+                onNotice(`Почта создана: ${addr} — доступна как From`);
+                setMailboxLocal('');
+                setShowMailbox(false);
+                await refresh();
+              });
+            }}
+          >
+            <label>
+              Домен
+              <select value={mailboxDomain} onChange={(e) => setMailboxDomain(e.target.value)}>
+                {mailDomains.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Имя
+              <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  required
+                  value={mailboxLocal}
+                  onChange={(e) => setMailboxLocal(e.target.value)}
+                  placeholder="serg"
+                  autoComplete="off"
+                  style={{ flex: 1 }}
+                />
+                <span className="mono">@{mailboxDomain}</span>
+              </span>
+            </label>
+            <button className="primary" disabled={busy || !mailboxLocal.trim()}>
+              Создать почту
+            </button>
+          </form>
+        </section>
+      )}
+
       {isOwner && showCreate && (
         <section className="panel">
           <div className="panel-title">
@@ -245,6 +327,9 @@ export function ConnectionsVaultSection({
               Закрыть
             </button>
           </div>
+          <p className="fine">
+            Для почты используйте «Новая почта». Здесь — боты, каналы и кассы (без SMTP-форм).
+          </p>
           <form
             className="creds-form"
             onSubmit={(e) => {
@@ -283,7 +368,7 @@ export function ConnectionsVaultSection({
                 value={form.type}
                 onChange={(e) => setForm({ ...emptyForm(), type: e.target.value, label: form.label })}
               >
-                {TYPE_OPTIONS.map((t) => (
+                {CREATE_TYPE_OPTIONS.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.label}
                   </option>
