@@ -174,3 +174,7 @@ def test_nav_and_media_constants_in_frontend():
     assert "SIGNAL_MEDIA_LIBRARY_URL" in ctor
     assert "cmsChainCartHref" in ctor or "/#/admin/cart" in ctor
     assert "Настроить в Подключениях" in ctor
+    # CART-04: «+» from CMS cart items; no paste asset_id
+    assert "constructor/cart" in ctor
+    assert "addFromCartItem" in ctor
+    assert "вставьте asset_id" not in ctor.lower()

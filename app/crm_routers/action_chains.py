@@ -113,7 +113,83 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
         ],
         "client_receives_label": "Клиент получает",
         "secrets_exposed": False,
+        # CART-04: cart asset kind → node kind (Constructor «+» from CMS cart).
+        "cart_kind_map": {
+            "tg_post": "telegram",
+            "tg_circle": "telegram",
+            "tg_cover": "telegram",
+            "vk_video": "contact",
+            "email_body": "email",
+            "poll": "survey",
+            "script": "contact",
+            "image": "contact",
+            "file": "contact",
+        },
     }
+
+
+@router.get("/constructor/cart")
+def constructor_cart(
+    project_id: str | None = None,
+    cart_id: str | None = None,
+    admin=Depends(crm_actor),
+):
+    """CART-04 BFF: staff session → CMS chain cart via Voronka HMAC (no secrets in browser)."""
+    from app import chain_cart as cc
+
+    pid = (project_id or "").strip()
+    cid = (cart_id or "").strip()
+    if not pid and not cid:
+        raise HTTPException(422, "Укажите project_id или cart_id")
+    if pid:
+        with Session() as db:
+            project_access(db, admin, pid)
+    if not cc.cms_hmac_secret():
+        empty = cc.enrich_cart_payload(None)
+        empty.update(
+            {
+                "configured": False,
+                "error": "cms_hmac_unconfigured",
+                "project_id": pid or None,
+                "cart_id": cid or None,
+                "cms_cart_url": (
+                    f"{cc.cms_base_url()}/#/admin/cart/{pid}" if pid else f"{cc.cms_base_url()}/#/admin/cart"
+                ),
+            }
+        )
+        return empty
+    try:
+        cart = cc.fetch_cms_cart(cart_id=cid or None, project_id=None if cid else pid or None)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:  # httpx / network
+        # Soft-fail: Constructor still opens; empty cart CTA points staff to CMS.
+        empty = cc.enrich_cart_payload(None)
+        empty.update(
+            {
+                "configured": True,
+                "error": type(exc).__name__[:80],
+                "project_id": pid or None,
+                "cart_id": cid or None,
+                "cms_cart_url": (
+                    f"{cc.cms_base_url()}/#/admin/cart/{pid}" if pid else f"{cc.cms_base_url()}/#/admin/cart"
+                ),
+            }
+        )
+        return empty
+    cart["configured"] = True
+    cart["error"] = None
+    cart_pid = str(cart.get("project_id") or "").strip()
+    if pid and cart_pid and cart_pid != pid:
+        raise HTTPException(403, "Корзина принадлежит другому проекту")
+    # When deep-link only has cart_id, still enforce staff project access on the cart's project.
+    if cart_pid and not pid:
+        with Session() as db:
+            project_access(db, admin, cart_pid)
+    if pid and not cart_pid:
+        cart["project_id"] = pid
+        cart["cms_cart_url"] = f"{cc.cms_base_url()}/#/admin/cart/{pid}"
+    return cart
 
 
 @router.get("/projects/{pid}/action-chains")
