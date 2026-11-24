@@ -70,6 +70,7 @@ export function ActionConstructorSection({
   onBusy,
   onNotice,
   onOpenConnections,
+  onOpenMediaLibrary,
 }: {
   api: ApiFn;
   pid: string;
@@ -78,6 +79,7 @@ export function ActionConstructorSection({
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
   onOpenConnections?: () => void;
+  onOpenMediaLibrary?: () => void;
 }) {
   const [meta, setMeta] = useState<Row | null>(null);
   const [chains, setChains] = useState<Row[]>([]);
@@ -345,16 +347,25 @@ export function ActionConstructorSection({
         </div>
 
         <div className="constructor-cart-ctas" role="group" aria-label="Корзина и медиатека">
-          <a className="primary" href={mediaUrl} target="_blank" rel="noopener noreferrer">
-            Создать файл в Signal
-          </a>
+          {onOpenMediaLibrary ? (
+            <button type="button" className="primary" onClick={onOpenMediaLibrary}>
+              Из медиатеки
+            </button>
+          ) : (
+            <a className="primary" href="?section=media#media">
+              Из медиатеки
+            </a>
+          )}
           <a className="constructor-cart-link" href={cartUrl} target="_blank" rel="noopener noreferrer">
             Набрать корзину в CMS
+          </a>
+          <a className="constructor-cart-link" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+            Открыть в Signal
           </a>
           <p className="fine">
             «+» собирает шаги только из корзины CMS (
             <code>/#/admin/cart</code>
-            ). Каналы (SMTP, боты, платежи) — в Подключениях.
+            ). Медиатека — в CRM; Signal — запасной путь. Каналы — в Подключениях.
           </p>
         </div>
 
@@ -369,9 +380,12 @@ export function ActionConstructorSection({
               <button
                 type="button"
                 className="constructor-media"
-                title="Создать файл в Signal"
-                aria-label="Создать файл в Signal"
-                onClick={() => window.open(mediaUrl, '_blank', 'noopener')}
+                title="Из медиатеки"
+                aria-label="Из медиатеки"
+                onClick={() => {
+                  if (onOpenMediaLibrary) onOpenMediaLibrary();
+                  else window.open(mediaUrl, '_blank', 'noopener');
+                }}
               >
                 +
               </button>
@@ -405,15 +419,24 @@ export function ActionConstructorSection({
         {cartEmpty && (
           <div className="empty compact constructor-empty-cart">
             <p>
-              Корзина пуста для этого проекта. Сначала создайте файл в Signal, затем наберите корзину в CMS —
+              Корзина пуста для этого проекта. Создайте материал в медиатеке CRM, наберите корзину в CMS —
               меню «+» появится по типам из корзины.
             </p>
             <div className="row constructor-cart-ctas-inline">
-              <a className="primary" href={mediaUrl} target="_blank" rel="noopener noreferrer">
-                Создать файл в Signal
-              </a>
+              {onOpenMediaLibrary ? (
+                <button type="button" className="primary" onClick={onOpenMediaLibrary}>
+                  Из медиатеки
+                </button>
+              ) : (
+                <a className="primary" href="?section=media#media">
+                  Из медиатеки
+                </a>
+              )}
               <a href={cartUrl} target="_blank" rel="noopener noreferrer">
                 Набрать корзину в CMS
+              </a>
+              <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                Открыть в Signal
               </a>
             </div>
           </div>

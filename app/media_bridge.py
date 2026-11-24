@@ -316,8 +316,25 @@ def bridge_http_error(exc: MediaBridgeError) -> HTTPException:
         code = 502
     elif exc.code in {"disk_full"}:
         code = 507
-    elif exc.code in {"too_large"}:
+    elif exc.code in {"too_large", "file_too_large"}:
         code = 413
-    elif exc.code in {"media_fetch_not_configured", "signal_internal_unauthorized"}:
+    elif exc.code in {
+        "media_fetch_not_configured",
+        "signal_internal_unauthorized",
+        "registry_required",
+    }:
         code = 503
+    elif exc.code in {
+        "signal_list_failed",
+        "signal_create_failed",
+        "signal_upload_failed",
+        "brand_required",
+        "brand_ambiguous",
+        "brand_project_mismatch",
+        "content_kind_required",
+        "project_required",
+        "empty_file",
+        "mime_not_allowed",
+    }:
+        code = 422
     return HTTPException(code, exc.message)

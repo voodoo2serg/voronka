@@ -52,6 +52,8 @@ Campaign payload может включать `asset_id` (`video_note`/`video`). 
 
 **Media SoR Wave B:** Signal Media Registry = originals SoR. Voronka bank is a **delivery cache** bridged by `signal_asset_id` ↔ Voronka `assets.id`. CRM soft-refs store Registry `asset_id` only (`POST …/persons/{id}/media-refs`). Fetch: Registry presign (`MEDIA_REGISTRY_*`) or Signal internal content (`SIGNAL_INTERNAL_MEDIA_*`). `POST …/assets/ensure-from-signal` + campaign preflight/launch rewrite missing bank ids. **Never** a second CRM media library; Telegram `file_id` stays private inside Voronka. Cutover flag `MEDIA_WRITE_ORIGINALS_TO_SIGNAL` lives on Signal — Voronka must not flip it.
 
+**B-02 CRM embedded медиатека:** staff chrome lists/creates Signal assets via BFF `GET|POST /api/crm/projects/{pid}/signal-media*` (crm_session → `SIGNAL_INTERNAL_MEDIA_*` → Signal ` /internal/media/project-assets|create|…`). UI section `#media` / nav «Медиатека»; constructor CTA «Из медиатеки». Optional `SIGNAL_MEDIA_DEFAULT_BRAND_ID` when multiple Signal brands share a Project. CMS chain cart stays in Solo-PR.
+
 ## Outreach
 
 `GET /api/crm/outreach-batches/{id}/export` — тексты+ссылки для ручной SIM. `OUTREACH_MAX_ENABLED=0` по умолчанию.

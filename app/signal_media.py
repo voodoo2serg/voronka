@@ -53,6 +53,11 @@ def media_fetch_configured() -> bool:
     return _registry_configured() or _signal_internal_configured()
 
 
+def media_library_bff_configured() -> bool:
+    """True when CRM can list/create Signal media via internal token (B-02)."""
+    return _signal_internal_configured()
+
+
 def _registry_headers() -> dict[str, str]:
     service_id = (os.getenv("MEDIA_REGISTRY_SERVICE_ID") or "voronka").strip()
     secret = (os.getenv("MEDIA_REGISTRY_M2M_SECRET") or "").strip()
@@ -241,3 +246,197 @@ def link_communication_asset(
             return r.json()
     except httpx.HTTPError:
         return None
+
+
+# --- B-02 CRM embedded library (CART-02 Signal project-assets + internal create) ---
+
+CONTENT_KIND_LABELS_RU: dict[str, str] = {
+    "tg_post": "Пост Telegram",
+    "tg_circle": "Кружочек TG",
+    "tg_cover": "Обложка TG",
+    "vk_video": "VK video",
+    "email_body": "Письмо",
+    "poll": "Опрос",
+    "script": "Скрипт",
+    "image": "Изображение",
+    "file": "Файл",
+}
+
+CONTENT_KINDS: frozenset[str] = frozenset(CONTENT_KIND_LABELS_RU)
+FILE_REQUIRED_KINDS: frozenset[str] = frozenset({"image", "tg_cover", "tg_circle", "file"})
+
+
+def _signal_api_base() -> str:
+    return (os.getenv("SIGNAL_INTERNAL_MEDIA_BASE_URL") or "").rstrip("/")
+
+
+def _signal_internal_headers() -> dict[str, str]:
+    token = (os.getenv("SIGNAL_INTERNAL_MEDIA_TOKEN") or "").strip()
+    return {"X-Signal-Internal-Token": token}
+
+
+def _raise_from_signal_response(resp: httpx.Response, *, fallback_code: str) -> None:
+    detail: Any = None
+    try:
+        detail = resp.json()
+    except Exception:
+        detail = (resp.text or "")[:300]
+    message = fallback_code
+    code = fallback_code
+    if isinstance(detail, dict):
+        inner = detail.get("detail") if "detail" in detail else detail
+        if isinstance(inner, dict):
+            code = str(inner.get("code") or fallback_code)
+            message = str(inner.get("message") or code)
+        elif isinstance(inner, str):
+            message = inner
+    elif isinstance(detail, str) and detail:
+        message = detail
+    raise SignalMediaError(code, message, status_code=resp.status_code, body=detail)
+
+
+def list_project_assets(
+    voronka_project_id: str,
+    *,
+    content_kind: str | None = None,
+) -> dict[str, Any]:
+    """CART-02 M2M: GET /internal/media/project-assets (Signal SoR catalog)."""
+    if not _signal_internal_configured():
+        raise SignalMediaError(
+            "media_fetch_not_configured",
+            "Set SIGNAL_INTERNAL_MEDIA_BASE_URL + SIGNAL_INTERNAL_MEDIA_TOKEN for CRM медиатека",
+        )
+    project_id = (voronka_project_id or "").strip()
+    if not project_id:
+        raise SignalMediaError("project_required", "voronka_project_id required")
+    params: dict[str, str] = {"voronka_project_id": project_id}
+    kind = (content_kind or "").strip().lower()
+    if kind:
+        params["content_kind"] = kind
+    url = f"{_signal_api_base()}/internal/media/project-assets"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(url, params=params, headers=_signal_internal_headers())
+    except httpx.HTTPError as exc:
+        raise SignalMediaError("signal_internal_unreachable", str(exc)) from exc
+    if resp.status_code in {401, 403}:
+        raise SignalMediaError(
+            "signal_internal_unauthorized",
+            "Signal internal media token rejected",
+            status_code=resp.status_code,
+        )
+    if resp.status_code >= 400:
+        _raise_from_signal_response(resp, fallback_code="signal_list_failed")
+    data = resp.json() if resp.content else {}
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        items = []
+    return {
+        "voronka_project_id": project_id,
+        "items": items,
+        "content_kinds": sorted(CONTENT_KINDS),
+        "content_kind_labels": dict(CONTENT_KIND_LABELS_RU),
+        "source": "signal_internal",
+    }
+
+
+def create_meta_asset(
+    *,
+    voronka_project_id: str,
+    content_kind: str,
+    title: str = "",
+    body_text: str | None = None,
+    brand_id: str | None = None,
+) -> dict[str, Any]:
+    """B-02: POST /internal/media/create (meta kinds: poll/script/email/…)."""
+    if not _signal_internal_configured():
+        raise SignalMediaError(
+            "media_fetch_not_configured",
+            "Set SIGNAL_INTERNAL_MEDIA_BASE_URL + SIGNAL_INTERNAL_MEDIA_TOKEN for CRM медиатека",
+        )
+    project_id = (voronka_project_id or "").strip()
+    kind = (content_kind or "").strip().lower()
+    if not project_id:
+        raise SignalMediaError("project_required", "voronka_project_id required")
+    if kind not in CONTENT_KINDS:
+        raise SignalMediaError("content_kind_required", f"Unknown content_kind: {kind}")
+    payload: dict[str, Any] = {
+        "voronka_project_id": project_id,
+        "content_kind": kind,
+        "title": (title or "").strip()[:255],
+    }
+    if body_text is not None:
+        payload["body_text"] = body_text
+    bid = (brand_id or os.getenv("SIGNAL_MEDIA_DEFAULT_BRAND_ID") or "").strip()
+    if bid:
+        payload["brand_id"] = bid
+    url = f"{_signal_api_base()}/internal/media/create"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(url, headers=_signal_internal_headers(), json=payload)
+    except httpx.HTTPError as exc:
+        raise SignalMediaError("signal_internal_unreachable", str(exc)) from exc
+    if resp.status_code in {401, 403}:
+        raise SignalMediaError(
+            "signal_internal_unauthorized",
+            "Signal internal media token rejected",
+            status_code=resp.status_code,
+        )
+    if resp.status_code >= 400:
+        _raise_from_signal_response(resp, fallback_code="signal_create_failed")
+    return resp.json() if resp.content else {}
+
+
+def upload_project_asset(
+    *,
+    voronka_project_id: str,
+    content_kind: str,
+    filename: str,
+    data: bytes,
+    content_type: str | None = None,
+    title: str | None = None,
+    body_text: str | None = None,
+    brand_id: str | None = None,
+) -> dict[str, Any]:
+    """B-02: POST /internal/media multipart (images + Project bind)."""
+    if not _signal_internal_configured():
+        raise SignalMediaError(
+            "media_fetch_not_configured",
+            "Set SIGNAL_INTERNAL_MEDIA_BASE_URL + SIGNAL_INTERNAL_MEDIA_TOKEN for CRM медиатека",
+        )
+    project_id = (voronka_project_id or "").strip()
+    kind = (content_kind or "").strip().lower() or "image"
+    if not project_id:
+        raise SignalMediaError("project_required", "voronka_project_id required")
+    if kind not in CONTENT_KINDS:
+        raise SignalMediaError("content_kind_required", f"Unknown content_kind: {kind}")
+    if not data:
+        raise SignalMediaError("empty_file", "Empty upload")
+    form: dict[str, str] = {
+        "voronka_project_id": project_id,
+        "content_kind": kind,
+    }
+    if title:
+        form["title"] = title.strip()[:255]
+    if body_text is not None:
+        form["body_text"] = body_text
+    bid = (brand_id or os.getenv("SIGNAL_MEDIA_DEFAULT_BRAND_ID") or "").strip()
+    if bid:
+        form["brand_id"] = bid
+    ctype = (content_type or "application/octet-stream").split(";")[0].strip()
+    files = {"file": (filename or "upload", data, ctype)}
+    url = f"{_signal_api_base()}/internal/media"
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(url, headers=_signal_internal_headers(), data=form, files=files)
+    except httpx.HTTPError as exc:
+        raise SignalMediaError("signal_internal_unreachable", str(exc)) from exc
+    if resp.status_code in {401, 403}:
+        raise SignalMediaError(
+            "signal_internal_unauthorized",
+            "Signal internal media token rejected",
+            status_code=resp.status_code,
+        )
+    if resp.status_code >= 400:
+        _raise_from_signal_response(resp, fallback_code="signal_upload_failed")
+    return resp.json() if resp.content else {}

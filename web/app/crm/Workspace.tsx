@@ -14,6 +14,7 @@ import { ActionConstructorSection } from './sections/ActionConstructorSection';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { ConnectionsVaultSection } from './sections/ConnectionsVaultSection';
+import { MediaLibrarySection } from './sections/MediaLibrarySection';
 import { PaymentsSection } from './sections/PaymentsSection';
 import { ProjectsBoardSection } from './sections/ProjectsBoardSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
@@ -226,6 +227,7 @@ export default function Workspace() {
           }
           if (hash === '#payments') setSection('payments');
           if (hash === '#connections') setSection('connections');
+          if (hash === '#media' || hash === '#mediathek') setSection('media');
           if (hash === '#chains' || hash === '#constructor') setSection('chains');
           if (hash === '#overview') setSection('overview');
           if (hash === '#home' || hash === '#projects') setSection('home');
@@ -1713,6 +1715,15 @@ export default function Workspace() {
                   isOwner={me.role === 'owner'}
                 />
               )}
+              {section === 'media' && (
+                <MediaLibrarySection
+                  api={api}
+                  pid={pid}
+                  busy={busy}
+                  onBusy={act}
+                  onNotice={setNotice}
+                />
+              )}
               {section === 'chains' && pid && (
                 <ActionConstructorSection
                   api={api}
@@ -1723,6 +1734,18 @@ export default function Workspace() {
                   busy={busy}
                   onBusy={act}
                   onNotice={setNotice}
+                  onOpenMediaLibrary={() => {
+                    setSection('media');
+                    setDetail(null);
+                    setError('');
+                    if (typeof window !== 'undefined') {
+                      window.history.replaceState(
+                        {},
+                        '',
+                        window.location.pathname + window.location.search + '#media',
+                      );
+                    }
+                  }}
                   onOpenConnections={() => {
                     setSection('connections');
                     setDetail(null);

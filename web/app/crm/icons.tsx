@@ -10,6 +10,7 @@ export function Icon({ name }: { name: string }) {
     orders: 'M8 21V3h6a5 5 0 010 10H5 M5 17h11',
     payments: 'M4 6h16v12H4z M4 10h16 M8 14h4',
     connections: 'M12 3v3 M12 18v3 M3 12h3 M18 12h3 M6.5 6.5l2 2 M15.5 15.5l2 2 M6.5 17.5l2-2 M15.5 8.5l2-2',
+    media: 'M4 5h16v14H4z M8 15l3-4 2 3 3-5 4 6',
     chains: 'M7 7h10v4H7z M7 13h10v4H7z M5 9h2 M17 15h2',
     campaigns: 'M5 19L19 5 M5 5h14v14',
     analytics: 'M4 19V5 M4 19h16 M8 15v-4 M12 15V9 M16 15v-7',
