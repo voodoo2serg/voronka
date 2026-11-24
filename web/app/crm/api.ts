@@ -19,7 +19,10 @@ export function createCrmApi(getToken: () => string, onUnauthorized: () => void)
         const data = await response.json();
         message = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
       } catch {}
-      if (response.status === 401 && !path.includes('/login')) {
+      // Only /me 401 clears the shell. A secondary endpoint 401 (misconfigured BFF,
+      // vault, media) must not bounce the whole CRM into OIDC — that flickers #overview
+      // and traps navigation.
+      if (response.status === 401 && (path === '/me' || path.startsWith('/me?'))) {
         sessionStorage.removeItem('crm-token');
         onUnauthorized();
       }

@@ -199,6 +199,9 @@ def test_portal_csp_allows_inline_scripts(ops):
     from app.main import _PORTAL_CSP
 
     assert "script-src 'self' 'unsafe-inline'" in _PORTAL_CSP
+    # VR-482: staff chrome fonts (Manrope/Literata) must not be CSP-blocked.
+    assert "https://fonts.googleapis.com" in _PORTAL_CSP
+    assert "https://fonts.gstatic.com" in _PORTAL_CSP
 
 
 def test_identities_and_campaign_by_identity(ops):
