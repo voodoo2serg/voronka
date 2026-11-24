@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { SIGNAL_MEDIA_LIBRARY_URL } from '../portals';
+import {
+  SIGNAL_MEDIA_LIBRARY_URL,
+  cmsChainCartHref,
+  signalMediaLibraryHref,
+} from '../portals';
 import type { ApiFn, Row } from '../types';
 
 type NodeRow = {
@@ -17,18 +21,40 @@ function uid() {
   return crypto.randomUUID();
 }
 
+/** Empty vault → short CTA to Подключения (no credential forms on #today). */
+function VaultEmptyCta({ onOpenConnections }: { onOpenConnections?: () => void }) {
+  if (onOpenConnections) {
+    return (
+      <p className="fine">
+        Нет настроенных подключений.{' '}
+        <button type="button" className="link" onClick={onOpenConnections}>
+          Настроить в Подключениях
+        </button>
+      </p>
+    );
+  }
+  return (
+    <p className="fine">
+      Нет настроенных подключений.{' '}
+      <a href="?section=connections">Настроить в Подключениях</a>
+    </p>
+  );
+}
+
 export function ActionConstructorSection({
   api,
   pid,
   busy,
   onBusy,
   onNotice,
+  onOpenConnections,
 }: {
   api: ApiFn;
   pid: string;
   busy: boolean;
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
+  onOpenConnections?: () => void;
 }) {
   const [meta, setMeta] = useState<Row | null>(null);
   const [chains, setChains] = useState<Row[]>([]);
@@ -121,14 +147,19 @@ export function ActionConstructorSection({
   }
 
   const current = nodes[selected];
-  const fromList = (meta?.from_identities as Row[] | undefined) || [];
   const vaultEmail = (meta?.vault_email as Row[] | undefined) || [];
   const vaultPayment = (meta?.vault_payment as Row[] | undefined) || [];
+  const vaultMessaging = (meta?.vault_messaging as Row[] | undefined) || [];
   const kinds = (meta?.node_kinds as Row[] | undefined) || [];
-  const mediaUrl = String(meta?.media_library_url || SIGNAL_MEDIA_LIBRARY_URL);
+  const mediaUrl = String(
+    meta?.media_library_url || signalMediaLibraryHref({ project: pid }) || SIGNAL_MEDIA_LIBRARY_URL,
+  );
+  const cartUrl = cmsChainCartHref(pid);
+  const needsChannel =
+    current && (current.kind === 'email' || current.kind === 'telegram' || current.kind === 'payment');
 
   return (
-    <div className="constructor-layout">
+    <div className="constructor-layout" id="action-constructor" data-cart-route="cms/#/admin/cart">
       <aside className="constructor-rail panel">
         <h2>Цепочки проекта</h2>
         <button
@@ -180,6 +211,20 @@ export function ActionConstructorSection({
             </button>
           </div>
         </div>
+
+        <div className="constructor-cart-ctas" role="group" aria-label="Корзина и медиатека">
+          <a className="primary" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+            Создать файл в Signal
+          </a>
+          <a className="constructor-cart-link" href={cartUrl} target="_blank" rel="noopener noreferrer">
+            Набрать корзину в CMS
+          </a>
+          <p className="fine">
+            Файлы — в Signal (kind + Project). Корзина цепочки — в CMS Solo-PR (
+            <code>/#/admin/cart</code>). Каналы (SMTP, боты, платежи) — в Подключениях.
+          </p>
+        </div>
+
         <div className="constructor-flow">
           <div className="constructor-fixed">
             <strong>Клиент получает</strong>
@@ -193,8 +238,8 @@ export function ActionConstructorSection({
               <button
                 type="button"
                 className="constructor-media"
-                title="Открыть медиатеку"
-                aria-label="Открыть медиатеку"
+                title="Создать файл в Signal"
+                aria-label="Создать файл в Signal"
                 onClick={() => window.open(mediaUrl, '_blank', 'noopener')}
               >
                 +
@@ -216,6 +261,19 @@ export function ActionConstructorSection({
             </button>
           ))}
         </div>
+        {!nodes.length && (
+          <div className="empty compact constructor-empty-cart">
+            <p>Корзина пока пуста для этого проекта. Сначала создайте файл в Signal, затем наберите корзину в CMS.</p>
+            <div className="row constructor-cart-ctas-inline">
+              <a className="primary" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                Создать файл в Signal
+              </a>
+              <a href={cartUrl} target="_blank" rel="noopener noreferrer">
+                Набрать корзину в CMS
+              </a>
+            </div>
+          </div>
+        )}
         {current && (
           <div className="constructor-config">
             <h3>Настройки шага</h3>
@@ -227,139 +285,136 @@ export function ActionConstructorSection({
               />
             </label>
             <label>
-              Текст / тело
-              <textarea
-                rows={4}
-                value={String(current.config.body || current.config.text || '')}
-                onChange={(e) =>
+              Пауза перед шагом (мин)
+              <input
+                type="number"
+                min={0}
+                value={String(current.config.wait_minutes ?? '')}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const wait = raw === '' ? undefined : Number(raw);
                   updateNode(selected, {
-                    config: { ...current.config, body: e.target.value },
-                  })
-                }
+                    config: {
+                      ...current.config,
+                      wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
+                    },
+                  });
+                }}
+                placeholder="0"
               />
             </label>
+
             {current.kind === 'email' && (
               <>
-                <label>
-                  Подключение (vault)
-                  <select
-                    value={String(current.config.from_vault_id || current.config.vault_id || '')}
-                    onChange={(e) => {
-                      const vid = e.target.value;
-                      const row = vaultEmail.find((v) => String(v.id) === vid);
-                      const addr = row ? String((row.meta as Row)?.from_address || '') : '';
-                      updateNode(selected, {
-                        from_address: addr || current.from_address || null,
-                        config: {
-                          ...current.config,
-                          from_vault_id: vid || null,
-                          vault_id: vid || null,
-                        },
-                      });
-                    }}
-                  >
-                    <option value="">Выбрать подключение…</option>
-                    {vaultEmail.map((v) => (
-                      <option key={String(v.id)} value={String(v.id)}>
-                        {String(v.label)}
-                        {(v.meta as Row)?.from_address ? ` · ${String((v.meta as Row).from_address)}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="fine">
-                  <a href="?section=connections">Создать новое в Подключениях</a>
-                </p>
-                <label>
-                  От кого
-                  <select
-                    value={current.from_address || ''}
-                    onChange={(e) => updateNode(selected, { from_address: e.target.value || null })}
-                  >
-                    <option value="">По умолчанию SMTP</option>
-                    {fromList.map((f) => (
-                      <option key={String(f.id)} value={String(f.address)}>
-                        {String(f.label)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {vaultEmail.length ? (
+                  <label>
+                    Подключение (From)
+                    <select
+                      value={String(current.config.from_vault_id || current.config.vault_id || '')}
+                      onChange={(e) => {
+                        const vid = e.target.value;
+                        const row = vaultEmail.find((v) => String(v.id) === vid);
+                        const addr = row ? String((row.meta as Row)?.from_address || '') : '';
+                        updateNode(selected, {
+                          from_address: addr || current.from_address || null,
+                          config: {
+                            ...current.config,
+                            from_vault_id: vid || null,
+                            vault_id: vid || null,
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">Выбрать подключение…</option>
+                      {vaultEmail.map((v) => (
+                        <option key={String(v.id)} value={String(v.id)}>
+                          {String(v.label)}
+                          {(v.meta as Row)?.from_address ? ` · ${String((v.meta as Row).from_address)}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                )}
               </>
             )}
+
+            {current.kind === 'telegram' && (
+              <>
+                {vaultMessaging.length ? (
+                  <label>
+                    Бот / канал
+                    <select
+                      value={String(current.config.vault_id || '')}
+                      onChange={(e) => {
+                        const vid = e.target.value;
+                        updateNode(selected, {
+                          config: { ...current.config, vault_id: vid || null },
+                        });
+                      }}
+                    >
+                      <option value="">Выбрать подключение…</option>
+                      {vaultMessaging.map((v) => (
+                        <option key={String(v.id)} value={String(v.id)}>
+                          {String(v.label)} · {String(v.type_label || v.type)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                )}
+              </>
+            )}
+
             {current.kind === 'payment' && (
               <>
-                <label>
-                  Подключение (vault)
-                  <select
-                    value={String(current.config.vault_id || '')}
-                    onChange={(e) => {
-                      const vid = e.target.value;
-                      const row = vaultPayment.find((v) => String(v.id) === vid);
-                      const provider = row ? String(row.type) : String(current.config.provider || 'robokassa');
-                      updateNode(selected, {
-                        config: {
-                          ...current.config,
-                          vault_id: vid || null,
-                          provider: provider === 'yookassa' ? 'yookassa' : provider === 'robokassa' ? 'robokassa' : current.config.provider,
-                        },
-                      });
-                    }}
-                  >
-                    <option value="">Выбрать подключение…</option>
-                    {vaultPayment.map((v) => (
-                      <option key={String(v.id)} value={String(v.id)}>
-                        {String(v.label)} · {String(v.type_label || v.type)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="fine">
-                  <a href="?section=connections">Создать новое в Подключениях</a>
-                </p>
-                <label>
-                  Провайдер
-                  <select
-                    value={String(current.config.provider || 'robokassa')}
-                    onChange={(e) =>
-                      updateNode(selected, {
-                        config: { ...current.config, provider: e.target.value },
-                      })
-                    }
-                  >
-                    <option value="robokassa">Robokassa</option>
-                    <option value="yookassa">ЮKassa</option>
-                  </select>
-                </label>
-                <label>
-                  Тариф
-                  <select
-                    value={String(current.config.tariff_mode || 'fixed')}
-                    onChange={(e) =>
-                      updateNode(selected, {
-                        config: { ...current.config, tariff_mode: e.target.value },
-                      })
-                    }
-                  >
-                    <option value="fixed">Фиксированный</option>
-                    <option value="open">Открытая сумма</option>
-                  </select>
-                </label>
+                {vaultPayment.length ? (
+                  <label>
+                    Платёжное подключение
+                    <select
+                      value={String(current.config.vault_id || '')}
+                      onChange={(e) => {
+                        const vid = e.target.value;
+                        const row = vaultPayment.find((v) => String(v.id) === vid);
+                        const provider = row ? String(row.type) : String(current.config.provider || 'robokassa');
+                        updateNode(selected, {
+                          config: {
+                            ...current.config,
+                            vault_id: vid || null,
+                            provider:
+                              provider === 'yookassa'
+                                ? 'yookassa'
+                                : provider === 'robokassa'
+                                  ? 'robokassa'
+                                  : current.config.provider,
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">Выбрать подключение…</option>
+                      {vaultPayment.map((v) => (
+                        <option key={String(v.id)} value={String(v.id)}>
+                          {String(v.label)} · {String(v.type_label || v.type)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <VaultEmptyCta onOpenConnections={onOpenConnections} />
+                )}
               </>
             )}
-            <p className="fine">
-              <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
-                Открыть медиатеку
-              </a>{' '}
-              (Signal SSO, без повторного пароля)
-            </p>
-            <label>
-              asset_id из медиатеки
-              <input
-                value={current.media_asset_id || ''}
-                onChange={(e) => updateNode(selected, { media_asset_id: e.target.value || null })}
-                placeholder="вставьте asset_id после выбора в Signal"
-              />
-            </label>
+
+            {needsChannel ? null : (
+              <p className="fine">Тело и медиа подтянутся из корзины CMS (CART-04).</p>
+            )}
+            {current.media_asset_id ? (
+              <p className="fine">
+                Привязанный asset: <code>{current.media_asset_id}</code>
+              </p>
+            ) : null}
           </div>
         )}
         <div className="constructor-dryrun">

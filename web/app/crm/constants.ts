@@ -42,7 +42,7 @@ export const sectionHints: Record<string, string> = {
   orders: 'Заказы, авансы, рассрочки и подтверждённые поступления.',
   payments: 'Robokassa и ЮKassa: статус, webhook, оповещения. Учётные данные — в Подключениях.',
   connections: 'Connection Vault: боты, каналы, SMTP, Robokassa/ЮKassa. Секреты только ••••last4.',
-  chains: 'Конструктор действий: шаги, медиатека Signal, проверка email/TG.',
+  chains: 'Конструктор цепочки (#today): шаги из корзины CMS, файлы в Signal, проверка email/TG.',
   campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
   imports: 'Клиенты (Profile) или аудитория IMPORT-101: Person + ContactPoint + Consent.',

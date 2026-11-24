@@ -168,6 +168,9 @@ def test_nav_and_media_constants_in_frontend():
     ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
         encoding="utf-8"
     )
-    assert "Открыть медиатеку" in ctor
+    assert "Создать файл в Signal" in ctor
+    assert "Набрать корзину в CMS" in ctor
     assert "Клиент получает" in ctor
     assert "SIGNAL_MEDIA_LIBRARY_URL" in ctor
+    assert "cmsChainCartHref" in ctor or "/#/admin/cart" in ctor
+    assert "Настроить в Подключениях" in ctor

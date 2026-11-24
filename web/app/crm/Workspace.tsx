@@ -202,9 +202,21 @@ export default function Workspace() {
         await loadHomeBoard().catch(() => setProjectBoard([]));
         if (typeof window !== 'undefined') {
           const hash = window.location.hash || '';
-          if (hash === '#today' || hash.startsWith('#today')) setSection('overview');
+          // CART-01: #today is constructor-only (not WorkToday sales contour).
+          // CART-03 deep-link stub: #today?project=&cart= — accept project; cart consume = CART-04.
+          if (hash === '#today' || hash.startsWith('#today')) {
+            setSection('chains');
+            const qIdx = hash.indexOf('?');
+            if (qIdx >= 0) {
+              const q = new URLSearchParams(hash.slice(qIdx + 1));
+              const project = (q.get('project') || '').trim();
+              if (project) setPid(project);
+            }
+          }
           if (hash === '#payments') setSection('payments');
+          if (hash === '#connections') setSection('connections');
           if (hash === '#chains' || hash === '#constructor') setSection('chains');
+          if (hash === '#overview') setSection('overview');
           if (hash === '#home' || hash === '#projects') setSection('home');
           if (hash === '#help' || hash.startsWith('#help')) setHelpOpen(true);
           const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
@@ -290,18 +302,19 @@ export default function Workspace() {
     setPid(id);
     setSection('overview');
     if (typeof window !== 'undefined') {
-      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
+      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#overview');
     }
   }
 
+  /** CART-01: «Работа сегодня» / #today → full-page Action Constructor (project pick if none). */
   function goToday() {
-    setSection('overview');
+    setSection('chains');
     setDetail(null);
     setError('');
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
       window.requestAnimationFrame(() => {
-        document.getElementById('work-today-contour')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('action-constructor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     }
   }
@@ -1678,11 +1691,38 @@ export default function Workspace() {
                 />
               )}
               {section === 'chains' && pid && (
-                <ActionConstructorSection api={api} pid={pid} busy={busy} onBusy={act} onNotice={setNotice} />
+                <ActionConstructorSection
+                  api={api}
+                  pid={pid}
+                  busy={busy}
+                  onBusy={act}
+                  onNotice={setNotice}
+                  onOpenConnections={() => {
+                    setSection('connections');
+                    setDetail(null);
+                    setError('');
+                    if (typeof window !== 'undefined') {
+                      window.history.replaceState(
+                        {},
+                        '',
+                        window.location.pathname + window.location.search + '#connections',
+                      );
+                    }
+                  }}
+                />
               )}
               {section === 'chains' && !pid && (
-                <section className="panel">
-                  <p className="muted">Выберите проект, чтобы открыть Конструктор действий.</p>
+                <section className="panel" id="action-constructor" aria-label="Выбор проекта для конструктора">
+                  <h2>Конструктор действий</h2>
+                  <p className="muted">
+                    Выберите проект в фильтре «ПРОЕКТ» слева или откройте карточку на доске проектов — затем
+                    соберите цепочку из корзины CMS.
+                  </p>
+                  <div className="row" style={{ gap: 10, marginTop: 12 }}>
+                    <button type="button" className="primary" onClick={() => setSection('home')}>
+                      Выбрать проект на доске
+                    </button>
+                  </div>
                 </section>
               )}
               {section === 'analytics' && (

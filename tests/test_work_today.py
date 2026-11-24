@@ -129,7 +129,10 @@ def test_work_today_paint_and_signal_actions():
     panel = (ROOT / "web" / "app" / "crm" / "sections" / "WorkTodayPanel.tsx").read_text(encoding="utf-8")
     actions = (ROOT / "web" / "app" / "crm" / "sections" / "SignalPersonActions.tsx").read_text(encoding="utf-8")
     portals_ts = (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
-    assert "WorkTodayPanel" in ws
+    ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "WorkTodayPanel" in ws  # secondary on overview; not #today
     assert "SignalPersonActions" in ws
     assert "work-today-contour" in panel
     assert "lead" in panel and "mail" in panel
@@ -137,8 +140,17 @@ def test_work_today_paint_and_signal_actions():
     assert "signalHref" in portals_ts
     assert "person" in portals_ts
     assert "копир" in actions
-    assert "setSection('overview')" in ws
-    assert "work-today-contour" in ws
+    # CART-01: #today / goToday → constructor, not overview contour scroll
+    assert "function goToday()" in ws
+    assert "setSection('chains')" in ws
+    assert "action-constructor" in ctor
+    assert "getElementById('work-today-contour')" not in ws
+    assert "getElementById('action-constructor')" in ws
     assert "ROBOKASSA_LIVE_READY" in panel
     assert "Открыть курс" in panel
     assert "lmsOpenCourseHref" in portals_ts or "/open" in portals_ts
+    assert "Создать файл в Signal" in ctor
+    assert "Набрать корзину в CMS" in ctor
+    assert "Настроить в Подключениях" in ctor
+    assert "smtp_password" not in ctor
+    assert "bot_token" not in ctor

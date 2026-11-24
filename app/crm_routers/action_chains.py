@@ -65,6 +65,7 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
                 from_list.append({"id": addr, "address": addr, "label": addr.split("@")[0] + "@"})
     vault_email: list[dict] = []
     vault_payment: list[dict] = []
+    vault_messaging: list[dict] = []
     if project_id:
         from app import connection_vault as cv
 
@@ -72,6 +73,9 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
             project_access(db, admin, project_id)
             vault_email = cv.list_for_picker(db, project_id, types=["email_smtp"])
             vault_payment = cv.list_for_picker(db, project_id, types=["robokassa", "yookassa"])
+            vault_messaging = cv.list_for_picker(
+                db, project_id, types=["telegram_bot", "max_bot", "telegram_channel"]
+            )
             # Enrich From list from vault email rows (address in meta).
             for item in vault_email:
                 addr = str((item.get("meta") or {}).get("from_address") or "").strip()
@@ -96,6 +100,7 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
         "from_identities": from_list,
         "vault_email": vault_email,
         "vault_payment": vault_payment,
+        "vault_messaging": vault_messaging,
         "media_library_url": media_url,
         "signal_base": signal_public_base(),
         "payment_providers": [
