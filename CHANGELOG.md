@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — B-04 / VR-473 One-click Mailu mailbox
+
+- `POST /api/crm/projects/{pid}/connection-vault/mailboxes` — domain (`solo-pr.ru` / `vodopetov.ru`) + local-part → Mailu user + app-token + vault `email_smtp` (platform SMTP host/port/secret; never owner form).
+- CRM **Подключения**: «Новая почта» UI; constructor `from_identities` / `vault_email` pick up new From.
+- Env: `MAILU_API_URL`, `MAILU_API_TOKEN`, `MAILU_SMTP_HOST`, `MAILU_SMTP_PORT`, `MAILU_ALLOWED_DOMAINS`.
+- Tests: `tests/test_mailu_mailbox_b04.py` (mocked Mailu).
+
 ## Unreleased — VR-454 CRM Connection Vault
 
 - Project-scoped `crm_connection_vault` (Alembic **0014**): types telegram_bot, telegram_channel, max_bot, email_smtp, robokassa, yookassa.

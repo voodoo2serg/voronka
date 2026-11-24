@@ -1,4 +1,7 @@
-"""VR-454 Connection Vault API — list/create/rotate; never return raw secrets."""
+"""VR-454 Connection Vault API — list/create/rotate; never return raw secrets.
+
+B-04 / VR-473: one-click Mailu mailbox → vault email_smtp (no owner SMTP form).
+"""
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -8,6 +11,7 @@ from pydantic import Field
 from sqlalchemy import select
 
 from app import connection_vault as vault
+from app import mailu_client
 from app.crm_deps import Body, Session, crm_actor, must, staff_owner
 from app.crm_models import Branch, ConnectionVault
 from app.crm_service import audit, project_access, uid
@@ -47,6 +51,15 @@ class VaultRotate(Body):
     meta: dict[str, Any] | None = None
 
 
+class MailboxCreate(Body):
+    """One-click Mailu mailbox — owner picks domain + local-part only."""
+
+    domain: str = Field(min_length=3, max_length=120)
+    local_part: str = Field(min_length=1, max_length=64)
+    label: str | None = Field(default=None, max_length=200)
+    branch_id: str | None = None
+
+
 def _assert_branch(db, project_id: str, branch_id: str | None) -> None:
     if not branch_id:
         return
@@ -84,6 +97,8 @@ def list_vault(
             "types": [{"id": t, "label": vault.type_label(t)} for t in vault.VAULT_TYPES],
             "secrets_exposed": False,
             "can_write": admin.role == "owner",
+            "mail_domains": list(mailu_client.allowed_domains()),
+            "mailu_configured": mailu_client.api_configured(),
         }
 
 
@@ -222,5 +237,105 @@ def sync_legacy(pid: str, admin=Depends(crm_actor)):
             "ok": True,
             "created": len(created),
             "items": [_scrub_response(vault.public_row(r)) for r in created],
+            "secrets_exposed": False,
+        }
+
+
+@router.post("/projects/{pid}/connection-vault/mailboxes")
+def create_mailbox(pid: str, body: MailboxCreate, admin=Depends(crm_actor)):
+    """B-04: create Mailu mailbox + vault email_smtp with platform SMTP secrets."""
+    staff_owner(admin)
+    try:
+        local = mailu_client.validate_local_part(body.local_part)
+        domain = mailu_client.validate_domain(body.domain)
+    except mailu_client.MailuError as exc:
+        raise HTTPException(422, exc.message_ru) from exc
+
+    email = f"{local}@{domain}"
+    with Session() as db:
+        project_access(db, admin, pid)
+        existing = list(
+            db.scalars(
+                select(ConnectionVault).where(
+                    ConnectionVault.project_id == pid,
+                    ConnectionVault.type == "email_smtp",
+                    ConnectionVault.active.is_(True),
+                )
+            )
+        )
+        for row in existing:
+            meta = row.meta if isinstance(row.meta, dict) else {}
+            if str(meta.get("from_address") or "").strip().lower() == email:
+                raise HTTPException(409, f"Подключение с From {email} уже есть в проекте")
+
+    try:
+        created_mb = mailu_client.create_mailbox(local, domain)
+    except mailu_client.MailuError as exc:
+        # Owner-facing RU; never leak tokens / env.
+        code = 503 if exc.status in {None, 401, 403} or "недоступна" in exc.message_ru else 502
+        if exc.status == 409:
+            code = 409
+        elif exc.status == 404:
+            code = 422
+        elif exc.status == 422:
+            code = 422
+        raise HTTPException(code, exc.message_ru) from exc
+
+    label = (body.label or "").strip() or f"{local}@"
+    secrets = {"smtp_password": created_mb.smtp_password}
+    meta = vault.sanitize_meta(
+        "email_smtp",
+        {
+            "from_address": created_mb.email,
+            "smtp_host": created_mb.smtp_host,
+            "smtp_user": created_mb.email,
+            "smtp_port": created_mb.smtp_port,
+        },
+    )
+
+    with Session.begin() as db:
+        project_access(db, admin, pid)
+        _assert_branch(db, pid, body.branch_id)
+        blob, masks, has = vault.seal_secrets(secrets)
+        row = ConnectionVault(
+            id=uid(),
+            project_id=pid,
+            branch_id=body.branch_id,
+            type="email_smtp",
+            label=label,
+            meta=meta,
+            secrets_blob=blob,
+            secret_masks=masks,
+            has_secret=has,
+            active=True,
+            legacy_source="mailu_one_click",
+            created_by=admin.telegram_id,
+            created_at=now(),
+            updated_at=now(),
+        )
+        db.add(row)
+        audit(
+            db,
+            admin,
+            "connection_vault.mailbox_created",
+            vault_id=row.id,
+            vault_type=row.type,
+            project_id=pid,
+            from_address=created_mb.email,
+            domain=domain,
+            mailu_user_created=created_mb.mailu_user_created,
+            mailu_token_created=created_mb.mailu_token_created,
+            has_secret=has,
+            secret_fields=sorted(masks.keys()),
+        )
+        payload = _scrub_response(vault.public_row(row))
+        # Defense: never echo smtp password / account secrets.
+        dumped = str(payload)
+        if created_mb.smtp_password and created_mb.smtp_password in dumped:
+            raise HTTPException(500, "Внутренняя ошибка: секрет в ответе")
+        return {
+            **payload,
+            "from_address": created_mb.email,
+            "mailu_created": True,
             "secrets_exposed": False,
         }
