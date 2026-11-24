@@ -161,6 +161,7 @@ def test_nav_and_media_constants_in_frontend():
     constants = (ROOT / "web" / "app" / "crm" / "constants.ts").read_text(encoding="utf-8")
     assert "['home', 'Проекты']" in constants
     assert "['chains', 'Конструктор']" in constants
+    assert "['media', 'Медиатека']" in constants
     assert "Прогрев" not in constants or "['outreach'" not in constants
     portals = (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
     assert "SIGNAL_MEDIA_LIBRARY_URL" in portals
@@ -168,7 +169,8 @@ def test_nav_and_media_constants_in_frontend():
     ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
         encoding="utf-8"
     )
-    assert "Создать файл в Signal" in ctor
+    assert "Из медиатеки" in ctor
+    assert "Открыть в Signal" in ctor
     assert "Набрать корзину в CMS" in ctor
     assert "Клиент получает" in ctor
     assert "SIGNAL_MEDIA_LIBRARY_URL" in ctor
@@ -178,3 +180,5 @@ def test_nav_and_media_constants_in_frontend():
     assert "constructor/cart" in ctor
     assert "addFromCartItem" in ctor
     assert "вставьте asset_id" not in ctor.lower()
+    # B-02: in-CRM media library CTA (not only external Signal tab)
+    assert "onOpenMediaLibrary" in ctor

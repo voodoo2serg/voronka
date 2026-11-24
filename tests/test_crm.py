@@ -16,9 +16,9 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, reconcile, oidc_staff, projects_board, action_chains, payment_settings, connection_vault  # noqa: F401
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, reconcile, oidc_staff, projects_board, action_chains, payment_settings, connection_vault, signal_media_bff  # noqa: F401
     from app.ops_routers import portal as ops_portal, wizards as ops_wizards
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, reconcile, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards, oidc_staff, projects_board, action_chains, payment_settings, connection_vault):
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, reconcile, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards, oidc_staff, projects_board, action_chains, payment_settings, connection_vault, signal_media_bff):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
