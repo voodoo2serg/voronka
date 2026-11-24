@@ -5,7 +5,7 @@ import { ACCESS_REQUEST } from '../portals';
 import type { ApiFn } from '../types';
 
 const IDP_MAIL_COPY = 'Отправили письмо! Проверьте почту!';
-/** Cutover: no peer «Аварийный вход» — break-glass only via hidden brandmark gesture. */
+/** Break-glass only via ?breakglass=1 or hidden brandmark gesture — no local auth island. */
 const BREAK_GLASS_CLICKS = 5;
 const BREAK_GLASS_WINDOW_MS = 2800;
 
@@ -42,48 +42,10 @@ export function LoginScreen({
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [cutover, setCutover] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
-  const [recoveryPath, setRecoveryPath] = useState('/api/crm/oidc/login?recover=1');
-  const [registerPath, setRegisterPath] = useState('/api/crm/oidc/login?register=1');
+  const [redirecting, setRedirecting] = useState(false);
+  const [statusReady, setStatusReady] = useState(false);
   const [accessReason, setAccessReason] = useState('');
   const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
-      .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then(
-        (result: {
-          enabled?: boolean;
-          cutover?: boolean;
-          recovery_path?: string | null;
-          register_path?: string | null;
-        }) => {
-          if (cancelled) return;
-          const enabled = result.enabled === true;
-          const nextCutover = result.cutover === true;
-          setSsoEnabled(enabled);
-          setCutover(nextCutover);
-          // Keycloak-only paint when cutover: hide local form until hidden gesture.
-          setShowLocal(!enabled || !nextCutover);
-          if (result.recovery_path) setRecoveryPath(result.recovery_path);
-          if (result.register_path) setRegisterPath(result.register_path);
-          if (enabled) {
-            setRecover(false);
-            setCode('');
-          }
-        },
-      )
-      .catch(() => {
-        if (!cancelled) {
-          setSsoEnabled(false);
-          setCutover(false);
-          setShowLocal(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -96,10 +58,60 @@ export function LoginScreen({
       const url = window.location.pathname + (next ? `?${next}` : '') + window.location.hash;
       window.history.replaceState({}, '', url);
     }
+    if (params.get('breakglass') === '1' || params.get('local') === '1') {
+      setShowLocal(true);
+    }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
+      .then((response) => (response.ok ? response.json() : { enabled: false }))
+      .then(
+        (result: {
+          enabled?: boolean;
+          cutover?: boolean;
+        }) => {
+          if (cancelled) return;
+          const enabled = result.enabled === true;
+          const nextCutover = result.cutover === true;
+          setSsoEnabled(enabled);
+          setCutover(nextCutover);
+          setStatusReady(true);
+        },
+      )
+      .catch(() => {
+        if (!cancelled) {
+          setSsoEnabled(false);
+          setCutover(false);
+          setShowLocal(true);
+          setStatusReady(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!statusReady || typeof window === 'undefined') return;
+    if (accessReason && ACCESS_HINTS[accessReason]) return;
+    if (showLocal) return;
+    if (!ssoEnabled) {
+      setShowLocal(true);
+      return;
+    }
+    // CRM-A1: no local auth island — immediate Keycloak.
+    setRedirecting(true);
+    const params = new URLSearchParams(window.location.search);
+    let href = '/api/crm/oidc/login';
+    if (params.get('register') === '1') href = '/api/crm/oidc/login?register=1';
+    else if (params.get('recover') === '1') href = '/api/crm/oidc/login?recover=1';
+    window.location.replace(href);
+  }, [statusReady, ssoEnabled, showLocal, accessReason]);
+
   function onBrandmarkGesture() {
-    if (!(cutover && ssoEnabled) || showLocal) return;
+    if (!ssoEnabled || showLocal) return;
     const now = Date.now();
     if (now - glassClicks.current.t > BREAK_GLASS_WINDOW_MS) glassClicks.current = { n: 0, t: now };
     glassClicks.current.n += 1;
@@ -107,13 +119,13 @@ export function LoginScreen({
     if (glassClicks.current.n >= BREAK_GLASS_CLICKS) {
       glassClicks.current = { n: 0, t: 0 };
       setShowLocal(true);
+      setRedirecting(false);
     }
   }
 
   const localRecover = !ssoEnabled && recover;
   const noAccess = Boolean(accessReason && ACCESS_HINTS[accessReason]);
 
-  // AUTH-L2: after green SSO without workspace/role — one empty-state, usable CTA.
   if (noAccess) {
     return (
       <main className="login-screen">
@@ -133,20 +145,9 @@ export function LoginScreen({
             Администратор выдаёт staff в{' '}
             <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
               CMS → Администраторы
-            </a>
-            {' '}(provision CRM + Signal).
+            </a>{' '}
+            (provision CRM + Signal).
           </p>
-          <button
-            type="button"
-            className="link"
-            onClick={() => {
-              setAccessReason('');
-              onError('');
-              onNotice('');
-            }}
-          >
-            Вернуться ко входу
-          </button>
           <a className="link" href="/api/crm/oidc/login">
             Войти
           </a>
@@ -155,36 +156,41 @@ export function LoginScreen({
     );
   }
 
-  // AUTH-M2: guest card = prefs RU — only login / register / forgot (≤3 CTA), no platform essay.
+  if (!statusReady || (ssoEnabled && !showLocal && redirecting)) {
+    return (
+      <main className="login-screen">
+        <section className="login-card" aria-labelledby="crm-login-title">
+          <div
+            className="brandmark"
+            onClick={onBrandmarkGesture}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') onBrandmarkGesture();
+            }}
+            role="presentation"
+          >
+            С
+          </div>
+          <p className="eyebrow">СОЛО-PR / CRM</p>
+          <h1 id="crm-login-title">Вход</h1>
+          <p className="muted" role="status">
+            Переход к единому входу…
+          </p>
+          <a className="link" href="/api/crm/oidc/login">
+            Продолжить
+          </a>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="login-screen">
       <section className="login-card" aria-labelledby="crm-login-title">
-        <div
-          className="brandmark"
-          onClick={onBrandmarkGesture}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') onBrandmarkGesture();
-          }}
-          role="presentation"
-        >
+        <div className="brandmark" role="presentation">
           С
         </div>
         <p className="eyebrow">СОЛО-PR / CRM</p>
-        <h1 id="crm-login-title">{localRecover ? 'Восстановление' : 'Вход'}</h1>
-        {ssoEnabled && !localRecover && (
-          <div className="auth-ctas">
-            {/* FE-U3: Войти = filled primary; Регистрация = outline secondary; forgot tertiary */}
-            <a className="primary full" href="/api/crm/oidc/login">
-              Войти
-            </a>
-            <a className="full auth-secondary" href={registerPath}>
-              Регистрация
-            </a>
-            <a className="link" href={recoveryPath}>
-              Забыли пароль?
-            </a>
-          </div>
-        )}
+        <h1 id="crm-login-title">{localRecover ? 'Восстановление' : cutover ? 'Аварийный вход' : 'Вход'}</h1>
         {(showLocal || localRecover) && (
           <form
             onSubmit={(e) => {

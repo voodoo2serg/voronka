@@ -318,9 +318,132 @@ def staff_cms_matrix(admin=Depends(crm_actor)):
 
 
 @router.post("/yookassa/webhook")
-async def yookassa_webhook_stub():
-    """Placeholder until YooKassa adapter ships. Always 501 — no silent accept."""
-    return JSONResponse(
-        status_code=501,
-        content={"detail": "YooKassa adapter не реализован", "adapter": "not_implemented"},
-    )
+async def yookassa_webhook(request: Request):
+    """ЮKassa notification webhook (sandbox-friendly). Live money still owner-gated."""
+    import hashlib
+    import hmac
+    import json
+    import os
+
+    from app.crm_models import Invoice, Order, Payment, ProviderEvent
+    from app.crm_service import uid
+    from app.db import now as db_now
+    from app.entitlement import queue_for_payment
+    from app import ledger
+    from app import staff_alerts
+
+    raw = await request.body()
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, "Неверный JSON") from exc
+
+    shop_ok = bool(os.getenv("YOOKASSA_SHOP_ID") and os.getenv("YOOKASSA_SECRET_KEY"))
+    if not shop_ok:
+        raise HTTPException(503, "ЮKassa не настроена")
+
+    # Optional shared secret header (when configured in кабинет ЮKassa / proxy).
+    expected = (os.getenv("YOOKASSA_WEBHOOK_SECRET") or "").strip()
+    if expected:
+        supplied = request.headers.get("x-yookassa-signature") or request.headers.get("authorization") or ""
+        if not hmac.compare_digest(supplied.strip(), expected):
+            raise HTTPException(403, "Неверная подпись webhook")
+
+    event_type = str(payload.get("event") or payload.get("type") or "")
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    external_id = str(obj.get("id") or payload.get("id") or "")
+    status = str(obj.get("status") or "")
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    invoice_id = str(metadata.get("invoice_id") or metadata.get("InvId") or "")
+    amount_obj = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
+    try:
+        amount_major = float(amount_obj.get("value") or 0)
+    except (TypeError, ValueError):
+        amount_major = 0.0
+    amount_minor = int(round(amount_major * 100))
+    event_key = f"yookassa:{external_id}:{event_type}:{status}"
+    paid = event_type in {"payment.succeeded", "payment.waiting_for_capture"} or status == "succeeded"
+
+    with Session.begin() as db:
+        prior = db.scalar(
+            select(ProviderEvent).where(ProviderEvent.provider == "yookassa", ProviderEvent.event_key == event_key)
+        )
+        if prior:
+            return {"ok": True, "duplicate": True}
+        order_id = None
+        invoice = db.get(Invoice, invoice_id) if invoice_id else None
+        if invoice:
+            order_id = invoice.order_id
+        row = ProviderEvent(
+            id=uid(),
+            provider="yookassa",
+            event_key=event_key,
+            order_id=order_id,
+            invoice_id=invoice.id if invoice else None,
+            payload_redacted={
+                "event": event_type,
+                "status": status,
+                "id": external_id,
+                "amount_minor": amount_minor,
+            },
+            payload_hash=hashlib.sha256(raw).hexdigest(),
+            state="received",
+            verified_at=db_now(),
+            created_at=db_now(),
+        )
+        db.add(row)
+        db.flush()
+        project_id = None
+        order_row = db.get(Order, order_id) if order_id else None
+        if order_row:
+            project_id = order_row.project_id
+        if paid and invoice and invoice.state != "paid" and amount_minor > 0:
+            # Payment row only when YOOKASSA_ENABLED=1; sandbox still audits ProviderEvent.
+            live_intent = os.getenv("YOOKASSA_ENABLED", "0") == "1"
+            if live_intent:
+                payment = Payment(
+                    id=uid(),
+                    order_id=invoice.order_id,
+                    provider="yookassa",
+                    external_id=external_id or event_key,
+                    amount_minor=amount_minor,
+                    evidence="verified yookassa webhook",
+                )
+                db.add(payment)
+                db.flush()
+                if order_row:
+                    ledger.allocate_payment(db, payment, order_row)
+                queue_for_payment(db, payment)
+            invoice.state = "paid"
+            staff_alerts.fire_payment_alerts(
+                db,
+                kind="paid",
+                project_id=project_id,
+                order_id=invoice.order_id,
+                amount_minor=amount_minor,
+                paid=True,
+                provider="yookassa",
+            )
+            if amount_minor:
+                staff_alerts.fire_payment_alerts(
+                    db,
+                    kind="amount_threshold",
+                    project_id=project_id,
+                    order_id=invoice.order_id,
+                    amount_minor=amount_minor,
+                    paid=True,
+                    provider="yookassa",
+                )
+        elif not paid and order_id:
+            staff_alerts.fire_payment_alerts(
+                db,
+                kind="not_paid",
+                project_id=project_id,
+                order_id=order_id,
+                amount_minor=amount_minor,
+                paid=False,
+                provider="yookassa",
+            )
+        row.state = "processed"
+        row.processed_at = db_now()
+    return {"ok": True}

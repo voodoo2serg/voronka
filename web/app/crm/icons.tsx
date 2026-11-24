@@ -1,6 +1,7 @@
 export function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
-    overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    home: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    overview: 'M4 4h16v4H4z M4 11h7v9H4z M13 11h7v9h-7z',
     contacts: 'M8 3h8 M5 7h14v14H5z M9 11h6 M9 15h6',
     inbox: 'M4 4h16v12H4z M4 16l8-5 8 5',
     deals: 'M3 4h5v16H3z M10 4h5v10h-5z M17 4h4v13h-4z',
@@ -8,6 +9,7 @@ export function Icon({ name }: { name: string }) {
     tasks: 'M5 12l4 4L20 5',
     orders: 'M8 21V3h6a5 5 0 010 10H5 M5 17h11',
     payments: 'M4 6h16v12H4z M4 10h16 M8 14h4',
+    chains: 'M7 7h10v4H7z M7 13h10v4H7z M5 9h2 M17 15h2',
     campaigns: 'M5 19L19 5 M5 5h14v14',
     analytics: 'M4 19V5 M4 19h16 M8 15v-4 M12 15V9 M16 15v-7',
     outreach: 'M12 3v18 M5 10l7-7 7 7 M8 21h8',

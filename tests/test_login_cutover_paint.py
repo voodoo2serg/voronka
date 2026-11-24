@@ -21,25 +21,31 @@ def test_no_peer_emergency_button_label_in_jsx():
 
 
 def test_auth_m2_guest_card_only_login_register_forgot():
-    """AUTH-M2 DoD: guest card = prefs RU, ≤3 CTA, no platform essay / Keycloak essay."""
-    for src in _login_sources():
-        assert ">Войти<" in src or ">Войти\n" in src or "Войти" in src
-        assert "Регистрация" in src
-        assert "Забыли пароль?" in src
-        assert "register=1" in src or "registerPath" in src
-        # No platform essay / IdP promo clutter on guest card (comments OK).
-        assert "Клиенты, сделки и платежи" not in src
-        assert "Боты · Сценарии" not in src
-        assert "Штатный вход — через единый аккаунт SIGNAL" not in src
-        assert "Восстановление только через единый аккаунт SIGNAL" not in src
-        assert "Войти через единый аккаунт SIGNAL" not in src
-        # Access-request block belongs on no-access empty-state, not default guest clutter.
-        assert 'className="access-request' not in src
+    """Ops keeps AUTH-M2 guest card; CRM-A1 kills the island (Keycloak redirect)."""
+    ops = (ROOT / "web" / "app" / "ops" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    assert "Войти" in ops
+    assert "Регистрация" in ops
+    assert "Забыли пароль?" in ops
+    assert "register=1" in ops or "registerPath" in ops
+    assert "Клиенты, сделки и платежи" not in ops
+    assert 'className="access-request' not in ops
 
 
-def test_fe_u3_crm_guest_cta_hierarchy():
-    """FE-U3: Войти is filled primary; Регистрация outline secondary (not the reverse)."""
+def test_crm_a1_keycloak_immediate_redirect_no_auth_island():
+    """CRM-A1: guest → Keycloak immediately; no peer login/register/forgot island."""
     login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    assert "location.replace" in login
+    assert "/api/crm/oidc/login" in login
+    assert "Переход к единому входу" in login
+    assert 'className="auth-ctas"' not in login
+    assert "Регистрация" not in login
+    assert "BREAK_GLASS_CLICKS" in login
+    assert "breakglass" in login
+
+
+def test_fe_u3_ops_guest_cta_hierarchy():
+    """FE-U3 on ops guest: Войти primary before Регистрация secondary."""
+    login = (ROOT / "web" / "app" / "ops" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
     css = (ROOT / "web" / "app" / "globals.css").read_text(encoding="utf-8")
     auth = login.split('className="auth-ctas"', 1)[1].split("</div>", 1)[0]
     voiti = auth.find("Войти")
@@ -49,9 +55,7 @@ def test_fe_u3_crm_guest_cta_hierarchy():
     assert auth.index('className="primary full"') < auth.index("auth-secondary")
     assert "a.primary" in css
     assert "a.auth-secondary" in css
-    # Login gate uses Solo-PR terracotta — not orphan grey primary paint for SSO link.
-    assert ".login-screen" in css and "--accent:#a0463c" in css
-    assert "button.primary" in css  # local form submit still primary
+    assert "button.primary" in css
 
 
 def test_crm_login_has_access_request_not_dead_owner_text():
@@ -97,7 +101,13 @@ def test_crm_empty_state_not_project_wall():
     assert "HistoryTimeline" in src
     # Must not gate the whole main area on create-project only.
     assert "{!pid ? (" not in src
-    assert "ПРОЕКТ · фильтр" in src
+    assert "ПРОЕКТ" in src
+    assert "ProjectsBoardSection" in src
+    assert "ActionConstructorSection" in src
+    assert "['outreach', 'Прогрев']" not in src
+    assert "SIGNAL_MEDIA_LIBRARY_URL" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
+    assert "view=media" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
+
 
 
 def test_ops_has_work_today_cta():

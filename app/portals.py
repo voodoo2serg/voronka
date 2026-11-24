@@ -97,6 +97,14 @@ def signal_href(
     return base + (("?" + "&".join(q)) if q else "")
 
 
+def signal_media_library_url(*, brand: str | None = None, person: str | None = None) -> str:
+    """CRM-A15 canonical Медиатека deep-link (Signal PR #57). SSO preserves return_to."""
+    override = (os.getenv("SIGNAL_MEDIA_DEEP_LINK") or "").strip()
+    if override and not brand and not person:
+        return override
+    return signal_href(view="media", brand=brand, person=person)
+
+
 def portal_chrome(role: str | None = None) -> list[dict]:
     """Cross-links for CRM chrome. Zone ACL SoR is CMS; CRM shows links for staff with CRM access."""
     # Managers stay in CRM money/clients; still can open CMS matrix (read) and LMS RO when ready.
@@ -193,19 +201,23 @@ def yookassa_skeleton() -> dict:
     secret = bool(os.getenv("YOOKASSA_SECRET_KEY"))
     webhook = bool(os.getenv("YOOKASSA_WEBHOOK_SECRET"))
     enabled = os.getenv("YOOKASSA_ENABLED", "0") == "1"
+    # Sandbox OK when shop+secret present; live money still requires explicit owner flip later.
+    ready = bool(shop and secret)
     return {
         "provider": "yookassa",
-        "adapter": "not_implemented",
+        "adapter": "webhook_v1",
         "enabled": enabled,
+        "ready": ready,
+        "mode": "sandbox" if not enabled else "intent_live",
         "env_names": {
-            "YOOKASSA_ENABLED": "1 чтобы показать intent включения (adapter всё равно отсутствует)",
+            "YOOKASSA_ENABLED": "1 = intent включения (live всё равно gated владельцем)",
             "YOOKASSA_SHOP_ID": "идентификатор магазина",
             "YOOKASSA_SECRET_KEY": "секретный ключ",
-            "YOOKASSA_WEBHOOK_SECRET": "подпись webhook",
+            "YOOKASSA_WEBHOOK_SECRET": "подпись webhook (опционально)",
         },
         "env_present": {"YOOKASSA_SHOP_ID": shop, "YOOKASSA_SECRET_KEY": secret, "YOOKASSA_WEBHOOK_SECRET": webhook},
         "webhook_url": f"{crm_public_base()}/api/crm/yookassa/webhook",
-        "note": "UI-каркас этапа 2: adapter YooKassa не реализован; платежи идут через Robokassa.",
+        "note": "ЮKassa webhook принимает уведомления; боевые деньги — только после решения владельца.",
         "secrets_exposed": False,
     }
 

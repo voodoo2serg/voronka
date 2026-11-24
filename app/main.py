@@ -20,6 +20,13 @@ app.include_router(media_router)
 from app.crm_api import router as crm_router
 app.include_router(crm_router)
 
+try:
+    from app import payment_vault
+
+    payment_vault.load_into_environ()
+except Exception:
+    pass
+
 @app.exception_handler(IntegrityError)
 async def constraint_conflict(request: Request, exception: IntegrityError):
     from fastapi.responses import JSONResponse
@@ -244,6 +251,7 @@ def connections(admin=Depends(actor)):
 class ProjectBody(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     goal: str = Field(default="", max_length=400)
+    description: str = Field(default="", max_length=800)
 
 @app.get("/api/projects")
 def list_projects(admin=Depends(actor)):
@@ -268,7 +276,15 @@ def list_projects(admin=Depends(actor)):
 def add_project(body: ProjectBody, admin=Depends(actor)):
     permit(admin, edit=True)
     with Session.begin() as db:
-        project = Project(id=uid(), name=body.name, goal=body.goal.strip())
+        project = Project(
+            id=uid(),
+            name=body.name,
+            goal=body.goal.strip(),
+            description=(body.description or body.goal or "").strip(),
+            status="active",
+            is_system=False,
+            created_at=now(),
+        )
         db.add(project)
         event(db, "project.created", actor_id=admin.telegram_id, project=project.id)
     return {"id": project.id}

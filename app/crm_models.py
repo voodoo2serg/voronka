@@ -31,6 +31,8 @@ class Profile(Base):
     contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id"))
     person_id: Mapped[str | None] = mapped_column(ForeignKey("crm_persons.id"), nullable=True, index=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("crm_branches.id"), nullable=True, index=True)
+    person_role: Mapped[str] = mapped_column(String(30), default="lead")  # lead | client | alumni
     name: Mapped[str] = mapped_column(String(200))
     email: Mapped[str] = mapped_column(String(250), default="")
     phone: Mapped[str] = mapped_column(String(80), default="")
@@ -686,3 +688,96 @@ class OidcLink(Base):
     email_hint: Mapped[str] = mapped_column(String(250), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+# --- CRM redesign: Branch, Course M2M, ActionChain, payment alerts ---
+
+
+class Branch(Base):
+    """Owner-defined slice inside a Project (one client, campaign, recurring meet, …)."""
+    __tablename__ = "crm_branches"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(800), default="")
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ProjectCourse(Base):
+    """M2M: LMS course_id (Product.config.course_id / AccessGrant resource) ↔ Project."""
+    __tablename__ = "crm_project_courses"
+    __table_args__ = (UniqueConstraint("project_id", "course_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    course_id: Mapped[str] = mapped_column(String(200))
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("crm_branches.id"), nullable=True)
+    label: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ActionChain(Base):
+    """Staff Action Constructor output — base layer replacing fixed funnel as source of truth."""
+    __tablename__ = "crm_action_chains"
+    __table_args__ = (
+        CheckConstraint("state IN ('draft', 'published', 'archived')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("crm_branches.id"), nullable=True, index=True)
+    course_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(800), default="")
+    state: Mapped[str] = mapped_column(String(30), default="draft")
+    # Ordered nodes [{id, kind, title, config, media_asset_id?, from_address?}, …]
+    nodes: Mapped[list] = mapped_column(JSON, default=list)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    # Optional Funnel id when published into legacy runtime graph.
+    funnel_id: Mapped[str | None] = mapped_column(ForeignKey("funnels.id"), nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("admins.telegram_id"), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ActionChainDryRun(Base):
+    """Audit of Constructor «Проверить» dry-runs (email + Telegram test)."""
+    __tablename__ = "crm_action_chain_dry_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    chain_id: Mapped[str] = mapped_column(ForeignKey("crm_action_chains.id"), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("admins.telegram_id"))
+    email: Mapped[str] = mapped_column(String(250), default="")
+    telegram: Mapped[str] = mapped_column(String(120), default="")
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class StaffAlertRule(Base):
+    """Notify owner on paid / not paid / amount threshold."""
+    __tablename__ = "crm_staff_alert_rules"
+    __table_args__ = (
+        CheckConstraint("kind IN ('paid', 'not_paid', 'amount_threshold')"),
+        CheckConstraint("channel IN ('telegram', 'email', 'both')"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    channel: Mapped[str] = mapped_column(String(20), default="telegram")
+    amount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class StaffAlertEvent(Base):
+    """Deduped staff payment alerts already sent."""
+    __tablename__ = "crm_staff_alert_events"
+    __table_args__ = (UniqueConstraint("rule_id", "dedupe_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(ForeignKey("crm_staff_alert_rules.id"), index=True)
+    dedupe_key: Mapped[str] = mapped_column(String(200))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String(30), default="sent")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

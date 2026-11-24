@@ -6,13 +6,15 @@ import { FormModal } from './components/FormModal';
 import { HistoryTimeline } from './components/HistoryTimeline';
 import { LoginScreen } from './components/LoginScreen';
 import { SystemHelpModal } from './components/SystemHelpModal';
-import { sections, sectionHints, stateNames } from './constants';
+import { CLIENT_PAGE_SIZES, sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
 import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } from './portals';
+import { ActionConstructorSection } from './sections/ActionConstructorSection';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
 import { PaymentsSection } from './sections/PaymentsSection';
+import { ProjectsBoardSection } from './sections/ProjectsBoardSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
 import { SignalPersonActions } from './sections/SignalPersonActions';
 import { WorkTodayPanel } from './sections/WorkTodayPanel';
@@ -27,8 +29,13 @@ export default function Workspace() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [me, setMe] = useState<Row | null>(null);
   const [pid, setPid] = useState('');
-  const [section, setSection] = useState('overview');
+  const [section, setSection] = useState('home');
   const [overview, setOverview] = useState<Row>({});
+  const [projectBoard, setProjectBoard] = useState<Row[]>([]);
+  const [dashboard, setDashboard] = useState<Row | null>(null);
+  const [branches, setBranches] = useState<Row[]>([]);
+  const [branchFilter, setBranchFilter] = useState('');
+  const [pageSize, setPageSize] = useState(50);
   const [contacts, setContacts] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
   const [inbox, setInbox] = useState<Row[]>([]);
@@ -115,9 +122,15 @@ export default function Workspace() {
     if (filters.unread) inboxQs.set('unread', 'true');
     if (filters.delivery_errors) inboxQs.set('delivery_errors', 'true');
     if (filters.mine && me?.id) inboxQs.set('owner_id', String(me.id));
-    const contactQs = new URLSearchParams({ q: query, offset: String(offset), limit: '100' });
+    const contactQs = new URLSearchParams({
+      q: query,
+      offset: String(offset),
+      limit: String(pageSize),
+    });
     if (source) contactQs.set('source', source);
-    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en, hub, assets, ai, portalsRes, pay, mail, matrix] = await Promise.all([
+    if (branchFilter) contactQs.set('branch_id', branchFilter);
+    const [o, c, d, pr, t, ord, ca, ob, pc, st, ib, en, hub, assets, ai, portalsRes, pay, mail, matrix, dash, br] =
+      await Promise.all([
       api(`/projects/${p}/overview`),
       api(`/projects/${p}/contacts?${contactQs.toString()}`),
       api(`/projects/${p}/deals`),
@@ -125,7 +138,7 @@ export default function Workspace() {
       api(`/projects/${p}/tasks`),
       api(`/projects/${p}/orders`),
       api(`/projects/${p}/campaigns`),
-      api(`/projects/${p}/outreach-batches`),
+      api(`/projects/${p}/outreach-batches`).catch(() => []),
       api(`/projects/${p}/promos`),
       api('/staff'),
       api(`/projects/${p}/inbox?${inboxQs.toString()}`),
@@ -137,9 +150,13 @@ export default function Workspace() {
       api(`/projects/${p}/payment-providers`).catch(() => null),
       api(`/projects/${p}/mail-status`).catch(() => null),
       api('/staff/cms-matrix').catch(() => null),
+      api(`/projects/${p}/dashboard`).catch(() => null),
+      api(`/projects/${p}/branches`).catch(() => ({ items: [] })),
     ]);
     if (version !== loadVersion.current) return;
     setOverview(o);
+    setDashboard(dash);
+    setBranches(br.items || []);
     setContacts(c.items);
     setTotal(c.total);
     setDeals(d);
@@ -147,7 +164,7 @@ export default function Workspace() {
     setTasks(t);
     setOrders(ord);
     setCampaigns(ca);
-    setOutreach(ob);
+    setOutreach(Array.isArray(ob) ? ob : []);
     setPromos(pc);
     setStaff(st);
     setInbox(ib.items || []);
@@ -168,18 +185,26 @@ export default function Workspace() {
     setAnalytics(await api(`/projects/${pid}/analytics?${qs.toString()}`));
   }
 
+  async function loadHomeBoard() {
+    const board = await api('/home/projects');
+    setProjectBoard(board.items || []);
+  }
+
   useEffect(() => {
     if (!ready) return;
     void act(async () => {
       try {
         const m = await api('/me');
         setMe(m);
-        // Project is an optional filter: keep current if still allowed, else first project, else ''.
-        setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : m.projects[0]?.id || ''));
+        // Keep current project if still allowed; otherwise leave empty until staff picks from board.
+        setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : ''));
+        await loadHomeBoard().catch(() => setProjectBoard([]));
         if (typeof window !== 'undefined') {
           const hash = window.location.hash || '';
           if (hash === '#today' || hash.startsWith('#today')) setSection('overview');
           if (hash === '#payments') setSection('payments');
+          if (hash === '#chains' || hash === '#constructor') setSection('chains');
+          if (hash === '#home' || hash === '#projects') setSection('home');
           if (hash === '#help' || hash.startsWith('#help')) setHelpOpen(true);
           const personMatch = hash.match(/person=([0-9a-fA-F-]{8,})/);
           if (personMatch) {
@@ -238,7 +263,7 @@ export default function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [pid, me, offset, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pid, me, offset, sourceFilter, pageSize, branchFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function openCreateProject() {
     setForm({
@@ -246,14 +271,26 @@ export default function Workspace() {
       fields: [
         { key: 'name', label: 'Название', required: true },
         { key: 'goal', label: 'Задача проекта' },
+        { key: 'description', label: 'Краткое описание' },
       ],
       save: async (v) => {
         const p = await api('/api/projects', 'POST', v);
         const m = await api('/me');
         setMe(m);
         setPid(p.id);
+        setSection('overview');
+        await loadHomeBoard().catch(() => undefined);
       },
     });
+  }
+
+  function openProject(id: string) {
+    setOffset(0);
+    setPid(id);
+    setSection('overview');
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', window.location.pathname + window.location.search + '#today');
+    }
   }
 
   function goToday() {
@@ -645,7 +682,7 @@ export default function Workspace() {
         setNotice(
           `Партия прогрева создана. С телефоном и без отказа: ${eligible} из ${selected.length}. Dry_run не пишет в Outbox и не шлёт через PyMax.`,
         );
-        setSection('outreach');
+        setSection('campaigns');
         setSelected([]);
         await load();
       },
@@ -692,19 +729,23 @@ export default function Workspace() {
           </div>
         )}
         <label className="project-label">
-          ПРОЕКТ · фильтр
+          ПРОЕКТ
           <select
             aria-label="Проект"
             value={pid}
             onChange={(e) => {
               setOffset(0);
-              setPid(e.target.value);
+              const next = e.target.value;
+              setPid(next);
+              if (next) setSection('overview');
+              else setSection('home');
             }}
           >
-            {!me.projects.length && <option value="">Все / без проекта</option>}
+            <option value="">Все проекты (доска)</option>
             {me.projects.map((p: Row) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+                {p.is_system ? ' · система' : ''}
               </option>
             ))}
           </select>
@@ -919,14 +960,30 @@ export default function Workspace() {
             </div>
           )}
           <>
+              {section === 'home' && (
+                <ProjectsBoardSection
+                  items={projectBoard.length ? projectBoard : me.projects || []}
+                  busy={busy}
+                  onOpen={openProject}
+                  onCreate={openCreateProject}
+                />
+              )}
               {section === 'overview' && (
                 <>
+                  {!pid && (
+                    <section className="panel">
+                      <p className="muted">Выберите проект на доске «Проекты» или в фильтре слева.</p>
+                      <button type="button" className="link" onClick={() => setSection('home')}>
+                        К доске проектов →
+                      </button>
+                    </section>
+                  )}
                   <div className="metrics">
                     {[
-                      ['Клиенты', String(overview.contacts || 0)],
-                      ['Сделки', String(overview.deals || 0)],
+                      ['Клиенты', String(dashboard?.contacts_count ?? overview.contacts ?? 0)],
+                      ['Сделки', String(dashboard?.deals_count ?? overview.deals ?? 0)],
                       ['В работе', money(overview.pipeline_minor)],
-                      ['Получено, за вычетом возвратов', money(overview.received_minor)],
+                      ['Получено, за вычетом возвратов', money(dashboard?.received_minor ?? overview.received_minor)],
                     ].map(([label, value]) => (
                       <article key={label}>
                         <p>{label}</p>
@@ -934,6 +991,52 @@ export default function Workspace() {
                       </article>
                     ))}
                   </div>
+                  {!!dashboard?.branches?.length && (
+                    <section className="panel" style={{ marginTop: 16 }}>
+                      <div className="panel-title">
+                        <h2>Ветки</h2>
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() =>
+                            setForm({
+                              title: 'Новая ветка',
+                              fields: [
+                                { key: 'name', label: 'Название', required: true },
+                                { key: 'description', label: 'Описание' },
+                              ],
+                              save: async (v) => {
+                                await api(`/projects/${pid}/branches`, 'POST', v);
+                                await load();
+                              },
+                            })
+                          }
+                        >
+                          + Ветка
+                        </button>
+                      </div>
+                      <ul className="branch-list">
+                        {(dashboard.branches as Row[]).map((b) => (
+                          <li key={String(b.id)}>
+                            <b>{String(b.name)}</b>
+                            <small>{String(b.description || '')}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                  {!!dashboard?.courses?.length && (
+                    <section className="panel" style={{ marginTop: 16 }}>
+                      <h2>Курсы LMS</h2>
+                      <ul className="checklist">
+                        {(dashboard.courses as Row[]).map((c) => (
+                          <li key={String(c.id)}>
+                            <code>{String(c.course_id)}</code> {String(c.label || '')}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
                   <div className="two-column work-today-layout">
                     <WorkTodayPanel
                       data={workToday}
@@ -1057,6 +1160,37 @@ export default function Workspace() {
                       </button>
                     ))}
                   </div>
+                  <div className="source-filters" role="group" aria-label="Ветка и размер страницы">
+                    <select
+                      aria-label="Ветка"
+                      value={branchFilter}
+                      onChange={(e) => {
+                        setOffset(0);
+                        setBranchFilter(e.target.value);
+                      }}
+                    >
+                      <option value="">Все ветки</option>
+                      <option value="__none__">Без ветки</option>
+                      {branches.map((b) => (
+                        <option key={String(b.id)} value={String(b.id)}>
+                          {String(b.name)}
+                        </option>
+                      ))}
+                    </select>
+                    {CLIENT_PAGE_SIZES.map((sz) => (
+                      <button
+                        key={sz.label}
+                        type="button"
+                        className={pageSize === sz.value ? 'active' : undefined}
+                        onClick={() => {
+                          setOffset(0);
+                          setPageSize(sz.value);
+                        }}
+                      >
+                        {sz.label}
+                      </button>
+                    ))}
+                  </div>
                   {selected.length > 0 && (
                     <div className="selection">
                       Выбрано: {selected.length}
@@ -1078,6 +1212,8 @@ export default function Workspace() {
                             />
                           </th>
                           <th>Клиент</th>
+                          <th>Проект</th>
+                          <th>Ветка</th>
                           <th>Компания</th>
                           <th>Контакты</th>
                           <th>Последний результат</th>
@@ -1086,8 +1222,15 @@ export default function Workspace() {
                         </tr>
                       </thead>
                       <tbody>
-                        {contacts.map((c) => (
-                          <tr key={c.id}>
+                        {contacts.map((c) => {
+                          const projectName =
+                            me.projects.find((p: Row) => p.id === c.project_id)?.name || c.project_id;
+                          const branchName =
+                            branches.find((b) => b.id === c.branch_id)?.name ||
+                            (c.branch_id ? String(c.branch_id).slice(0, 8) : '—');
+                          const startHighlight = me.start_project_id && c.project_id === me.start_project_id;
+                          return (
+                          <tr key={c.id} className={startHighlight ? 'start-client' : undefined}>
                             <td>
                               <input
                                 aria-label={'Выбрать ' + c.name}
@@ -1103,9 +1246,12 @@ export default function Workspace() {
                                   {c.name}
                                   {c.stopped && <small>Отказ от сообщений</small>}
                                   {c.is_purchaser && <small>Покупатель</small>}
+                                  {startHighlight && <small>Старт</small>}
                                 </span>
                               </button>
                             </td>
+                            <td>{String(projectName)}</td>
+                            <td>{String(branchName)}</td>
                             <td>{c.company || '—'}</td>
                             <td>
                               <div>{c.email || '—'}</div>
@@ -1117,14 +1263,15 @@ export default function Workspace() {
                             </td>
                             <td>{c.source}</td>
                             <td>
-                              {c.tags.map((t: string) => (
+                              {(c.tags || []).map((t: string) => (
                                 <span key={t} className="tag">
                                   {t}
                                 </span>
                               ))}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1135,11 +1282,18 @@ export default function Workspace() {
                     </div>
                   )}
                   <footer className="table-footer">
-                    {total} клиентов · показано {contacts.length}
-                    <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}>
+                    {total} клиентов · на странице {contacts.length} ·{' '}
+                    {pageSize === 0 ? 'все' : `по ${pageSize}`}
+                    <button
+                      disabled={offset === 0 || pageSize === 0}
+                      onClick={() => setOffset(Math.max(0, offset - (pageSize || 50)))}
+                    >
                       ←
                     </button>
-                    <button disabled={offset + 100 >= total} onClick={() => setOffset(offset + 100)}>
+                    <button
+                      disabled={pageSize === 0 || offset + pageSize >= total}
+                      onClick={() => setOffset(offset + pageSize)}
+                    >
                       →
                     </button>
                   </footer>
@@ -1502,7 +1656,24 @@ export default function Workspace() {
                   </section>
                 </>
               )}
-              {section === 'payments' && <PaymentsSection data={paymentProviders} />}
+              {section === 'payments' && (
+                <PaymentsSection
+                  data={paymentProviders}
+                  api={api}
+                  busy={busy}
+                  onBusy={act}
+                  onNotice={setNotice}
+                  isOwner={me.role === 'owner'}
+                />
+              )}
+              {section === 'chains' && pid && (
+                <ActionConstructorSection api={api} pid={pid} busy={busy} onBusy={act} onNotice={setNotice} />
+              )}
+              {section === 'chains' && !pid && (
+                <section className="panel">
+                  <p className="muted">Выберите проект, чтобы открыть Конструктор действий.</p>
+                </section>
+              )}
               {section === 'analytics' && (
                 <AnalyticsSection
                   report={analytics}

@@ -16,9 +16,9 @@ from app.crm_service import password_hash
 @pytest.fixture
 def crm(system, monkeypatch):
     from app import crm_deps, observability
-    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, reconcile, oidc_staff  # noqa: F401
+    from app.crm_routers import auth_staff, contacts, commerce, campaigns, outreach, integrations, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, reconcile, oidc_staff, projects_board, action_chains, payment_settings  # noqa: F401
     from app.ops_routers import portal as ops_portal, wizards as ops_wizards
-    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, reconcile, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards, oidc_staff):
+    for mod in (crm_api, crm_deps, auth_staff, contacts, commerce, campaigns, outreach, integrations, reconcile, connections_hub, ai_config, llm_drafts, portal, m2m_communications, customer_graph, audience_import, company_setup, observability, ops_portal, ops_wizards, oidc_staff, projects_board, action_chains, payment_settings):
         monkeypatch.setattr(mod, 'Session', system.db)
     with system.db.begin() as db:
         db.add(Project(id='p', name='Соло-PR', goal='Продажи'))
@@ -262,10 +262,13 @@ def test_migration_0004_matches_models_and_downgrades(crm):
         'crm_consents','crm_interactions','crm_communications','crm_delivery_events','crm_replies',
         'crm_journeys','crm_journey_steps','crm_agreements','crm_order_lines','crm_receivables',
         'crm_payment_allocations','crm_refunds','crm_oidc_links',
+        # CRM redesign (0012)
+        'crm_branches','crm_project_courses','crm_action_chains','crm_action_chain_dry_runs',
+        'crm_staff_alert_rules','crm_staff_alert_events',
     }
     later_columns={
         'crm_campaigns': {'asset_id'},
-        'crm_profiles': {'person_id'},
+        'crm_profiles': {'person_id', 'branch_id', 'person_role'},
         'crm_orders': {'person_id', 'agreement_id'},
         'crm_deals': {'person_id'},
     }
@@ -690,9 +693,15 @@ def test_portal_payment_providers_mail_analytics_and_filters(crm, monkeypatch):
     assert '/api/crm/robokassa/result' in providers['robokassa']['result_url']
     assert any(i['id'] == 'receipt_payload' and i['done'] for i in providers['robokassa']['fiscalization_checklist'])
     assert providers['robokassa']['live_ready'] is False or providers['robokassa']['mode'] == 'test'
-    assert providers['yookassa']['adapter'] == 'not_implemented'
+    assert providers['yookassa']['adapter'] == 'webhook_v1'
     assert providers['stats']['source'] == 'Payment/Order'
-    assert crm.client.post('/api/crm/yookassa/webhook').status_code == 501
+    # Without shop credentials webhook is 503; with them accepts JSON.
+    monkeypatch.delenv('YOOKASSA_SHOP_ID', raising=False)
+    monkeypatch.delenv('YOOKASSA_SECRET_KEY', raising=False)
+    assert crm.client.post('/api/crm/yookassa/webhook', json={}).status_code == 503
+    monkeypatch.setenv('YOOKASSA_SHOP_ID', 'shop')
+    monkeypatch.setenv('YOOKASSA_SECRET_KEY', 'secret')
+    assert crm.client.post('/api/crm/yookassa/webhook', json={'event': 'payment.waiting_for_capture', 'object': {'id': 'yk-1', 'status': 'pending'}}).status_code == 200
 
     mail = crm.client.get('/api/crm/projects/p/mail-status').json()
     assert mail['smtp_configured'] is True
