@@ -177,7 +177,8 @@ def create_user(email: str, *, raw_password: str, comment: str = "crm-one-click"
     )
 
 
-def create_app_token(email: str, *, comment: str = "crm-smtp") -> str:
+def create_app_token(email: str, *, comment: str = "crm-smtp") -> str | None:
+    """Return SMTP app-token when Mailu exposes /v1/token; None if API lacks tokens (older builds)."""
     status, body = _request(
         "POST",
         "/v1/token",
@@ -187,6 +188,9 @@ def create_app_token(email: str, *, comment: str = "crm-smtp") -> str:
         token = str(body.get("token") or "").strip()
         if token:
             return token
+    # Older Mailu (no token namespace in swagger) — caller falls back to account password.
+    if status == 404:
+        return None
     msg = _message_from_body(body)
     if status in {401, 403}:
         raise MailuError("Почта Mailu недоступна: ошибка авторизации API.", status=status, detail=msg)
@@ -198,7 +202,7 @@ def create_app_token(email: str, *, comment: str = "crm-smtp") -> str:
 
 
 def create_mailbox(local_part: str, domain: str) -> MailboxCreated:
-    """Create Mailu user + app-token; return SMTP secrets for vault seal (never log)."""
+    """Create Mailu user + app-token (or account password fallback); vault SMTP secret never logged."""
     if not api_configured():
         raise MailuError(
             "Почта Mailu недоступна: на VPS не заданы MAILU_API_URL и MAILU_API_TOKEN."
@@ -207,15 +211,16 @@ def create_mailbox(local_part: str, domain: str) -> MailboxCreated:
     dom = validate_domain(domain)
     email = f"{local}@{dom}"
     host, port = smtp_defaults()
-    # Account password (webmail); SMTP uses app-token below.
+    # Account password (webmail). Prefer Mailu app-token for SMTP when API supports it.
     account_password = secrets.token_urlsafe(24)
     create_user(email, raw_password=account_password, comment="crm-one-click-mailbox")
-    smtp_password = create_app_token(email, comment="crm-smtp-vault")
+    app_token = create_app_token(email, comment="crm-smtp-vault")
+    smtp_password = app_token or account_password
     return MailboxCreated(
         email=email,
         smtp_password=smtp_password,
         smtp_host=host,
         smtp_port=port,
         mailu_user_created=True,
-        mailu_token_created=True,
+        mailu_token_created=bool(app_token),
     )

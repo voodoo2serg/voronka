@@ -46,6 +46,19 @@ def _mock_mailu_ok(monkeypatch, *, token="aabbccddeeff00112233445566778899"):
     return token
 
 
+def _mock_mailu_no_token_api(monkeypatch):
+    """Older Mailu: user create works, /v1/token is 404 → fall back to account password."""
+
+    def fake_request(method, path, *, json=None):
+        if method == "POST" and path == "/v1/user":
+            return 200, {"code": 200, "message": "User " + json["email"] + " has been created"}
+        if method == "POST" and path == "/v1/token":
+            return 404, "<html>Not Found</html>"
+        return 500, {"message": f"unexpected {method} {path}"}
+
+    monkeypatch.setattr(mailu_client, "_request", fake_request)
+
+
 def test_mailbox_create_shape_and_masks(crm, monkeypatch):
     token = _mock_mailu_ok(monkeypatch)
     r = crm.client.post(
@@ -195,3 +208,21 @@ def test_client_validate_helpers():
         mailu_client.validate_domain("gmail.com")
     with pytest.raises(mailu_client.MailuError):
         mailu_client.validate_local_part("")
+
+
+def test_mailbox_falls_back_when_token_api_missing(crm, monkeypatch):
+    _mock_mailu_no_token_api(monkeypatch)
+    r = crm.client.post(
+        "/api/crm/projects/p/connection-vault/mailboxes",
+        json={"domain": "vodopetov.ru", "local_part": "legacybox"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["from_address"] == "legacybox@vodopetov.ru"
+    assert body["has_secret"] is True
+    assert body["mailu_created"] is True
+    with crm.db() as db:
+        row = db.get(ConnectionVault, body["id"])
+        secrets = secret_box.decrypt_mapping(row.secrets_blob)
+        assert secrets.get("smtp_password")
+        assert len(secrets["smtp_password"]) >= 16
