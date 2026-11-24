@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { voronkaOpsBotsHref } from '../portals';
 import type { ApiFn, Row } from '../types';
 
 const TYPE_OPTIONS: { id: string; label: string }[] = [
@@ -222,31 +223,46 @@ export function ConnectionsVaultSection({
                       ))}
                   </div>
                 </div>
-                {isOwner && (
+                {(String(row.type) === 'telegram_bot' || isOwner) && (
                   <div className="constructor-actions">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setRotateId(String(row.id));
-                        setRotateSecrets({});
-                      }}
-                    >
-                      Сменить секрет
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void onBusy(async () => {
-                          await api(`/connection-vault/${row.id}`, 'PATCH', { active: !row.active });
-                          onNotice(row.active ? 'Отключено' : 'Включено');
-                          await refresh();
-                        })
-                      }
-                    >
-                      {row.active ? 'Выкл.' : 'Вкл.'}
-                    </button>
+                    {String(row.type) === 'telegram_bot' && (
+                      <a
+                        className="primary"
+                        href={voronkaOpsBotsHref(pid)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Открыть ops → Боты (Activate webhook)"
+                      >
+                        Активировать webhook
+                      </a>
+                    )}
+                    {isOwner && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setRotateId(String(row.id));
+                            setRotateSecrets({});
+                          }}
+                        >
+                          Сменить секрет
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void onBusy(async () => {
+                              await api(`/connection-vault/${row.id}`, 'PATCH', { active: !row.active });
+                              onNotice(row.active ? 'Отключено' : 'Включено');
+                              await refresh();
+                            })
+                          }
+                        >
+                          {row.active ? 'Выкл.' : 'Вкл.'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </li>

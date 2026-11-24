@@ -13,7 +13,7 @@ export const sections: [string, string][] = [
   ['campaigns', 'Рассылки'],
   ['analytics', 'Аналитика'],
   ['imports', 'Импорт данных'],
-  ['settings', 'Команда и подключения'],
+  ['settings', 'Команда'],
 ];
 
 /** Page sizes for clients list (CRM-A6): 10 / 50 / Все. */
@@ -46,5 +46,5 @@ export const sectionHints: Record<string, string> = {
   campaigns: 'Email-кампании здесь; мессенджер-blasts — на voronka.solo-pr.ru/ops/.',
   analytics: 'Периодный отчёт: деньги, контакты, обучение (RO), коммуникации.',
   imports: 'Клиенты (Profile) или аудитория IMPORT-101: Person + ContactPoint + Consent.',
-  settings: 'Люди, каналы, Mailu/SMTP и согласование ролей с CMS.',
+  settings: 'Люди проекта и согласование ролей с CMS. Каналы и SMTP — в Подключениях.',
 };

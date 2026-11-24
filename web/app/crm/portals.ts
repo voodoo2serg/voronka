@@ -108,8 +108,19 @@ export function isCrmHost(host = typeof window !== 'undefined' ? window.location
   return h === 'crm.solo-pr.ru' || h.startsWith('crm.');
 }
 
-export function voronkaOpsHref(): string {
-  if (typeof window === 'undefined') return PORTAL_URLS.voronka + '/ops/';
-  if (isCrmHost()) return PORTAL_URLS.voronka + '/ops/';
-  return '/ops/';
+export function voronkaOpsHref(opts: { project?: string | null; section?: string } = {}): string {
+  let base: string;
+  if (typeof window === 'undefined') base = PORTAL_URLS.voronka + '/ops/';
+  else if (isCrmHost()) base = PORTAL_URLS.voronka + '/ops/';
+  else base = '/ops/';
+  const q = new URLSearchParams();
+  if (opts.project) q.set('project', opts.project);
+  const qs = q.toString();
+  const hash = opts.section ? `#${opts.section}` : '';
+  return base.replace(/\/?$/, '/') + (qs ? `?${qs}` : '') + hash;
+}
+
+/** Vault telegram_bot row → ops Боты (Activate webhook) with project context. */
+export function voronkaOpsBotsHref(project?: string | null): string {
+  return voronkaOpsHref({ project, section: 'bots' });
 }

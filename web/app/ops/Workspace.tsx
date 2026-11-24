@@ -101,7 +101,18 @@ export default function Workspace() {
           return;
         }
         setMe(m);
-        setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : m.projects[0]?.id || ''));
+        // B-01: Vault «Активировать webhook» → /ops/?project=<uuid>#bots
+        let deepProject = '';
+        if (typeof window !== 'undefined') {
+          const hash = (window.location.hash || '').replace(/^#/, '');
+          if (hash && sections.some(([id]) => id === hash)) setSection(hash);
+          deepProject = new URLSearchParams(window.location.search).get('project') || '';
+        }
+        setPid((current) => {
+          if (deepProject && m.projects.some((p: Row) => p.id === deepProject)) return deepProject;
+          if (m.projects.some((p: Row) => p.id === current)) return current;
+          return m.projects[0]?.id || '';
+        });
       } catch {
         setMe(null);
         setToken('');
@@ -184,7 +195,7 @@ export default function Workspace() {
           </select>
         </label>
         <a className="work-today" href={crmTodayHref()} target="_blank" rel="noreferrer">
-          Работа сегодня
+          Запустить цепочку
         </a>
         <nav aria-label="Разделы ops">
           {sections.map(([id, label]) => {

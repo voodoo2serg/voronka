@@ -329,7 +329,7 @@ export default function Workspace() {
     }
   }
 
-  /** CART-01: «Работа сегодня» / #today → full-page Action Constructor (project pick if none). */
+  /** B-01 / CART-01: «Запустить цепочку» / #today → full-page Action Constructor (project pick if none). */
   function goToday() {
     setSection('chains');
     setDetail(null);
@@ -788,7 +788,7 @@ export default function Workspace() {
           </select>
         </label>
         <button type="button" className="work-today" onClick={goToday}>
-          Работа сегодня
+          Запустить цепочку
         </button>
         <nav aria-label="Разделы CRM">
           {sections.map(([id, label]) => {
@@ -815,8 +815,8 @@ export default function Workspace() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
-            Voronka ops / боты ↗
+          <a href={voronkaOpsHref({ section: 'bots' })} target="_blank" rel="noreferrer">
+            Боты / Ops ↗
           </a>
           <div className="user">
             <span className="avatar">{me.role === 'owner' ? 'С' : 'М'}</span>
@@ -888,7 +888,7 @@ export default function Workspace() {
           </div>
           <nav className="staff-chrome__strip" data-visible="true" aria-label="Быстрые ссылки">
             <button type="button" className="linkish" onClick={goToday}>
-              Работа сегодня
+              Запустить цепочку
             </button>
             {/* History lives in the contact drawer (z-40). Hide strip link while drawer open so chrome
                 need not sit above the drawer (that blocked «Закрыть карточку»). */}
@@ -984,7 +984,7 @@ export default function Workspace() {
                       { id: 'signal', label: 'SIGNAL', url: PORTAL_URLS.signal + '/' },
                       ...(me.role === 'manager'
                         ? []
-                        : [{ id: 'voronka', label: 'Voronka ops', url: voronkaOpsHref() }]),
+                        : [{ id: 'voronka', label: 'Боты / Ops', url: voronkaOpsHref({ section: 'bots' }) }]),
                     ]
                 )
                   .filter((link: Row) => link.id !== 'crm')
@@ -1766,8 +1766,8 @@ export default function Workspace() {
                 <section className="panel">
                   <div className="panel-title">
                     <h2>Рассылки / Email</h2>
-                    <a href={voronkaOpsHref()} target="_blank" rel="noreferrer">
-                      Мессенджер-blasts → Voronka ↗
+                    <a href={voronkaOpsHref({ section: 'bots' })} target="_blank" rel="noreferrer">
+                      Мессенджер-blasts → Боты / Ops ↗
                     </a>
                   </div>
                   {mailStatus && (

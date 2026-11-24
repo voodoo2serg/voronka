@@ -26,7 +26,7 @@ def test_crm_workspace_authed_chrome_slots():
     assert "Выйти" in src
     assert "SignalLauncher" in src
     assert "staff-chrome__strip" in src
-    assert "Работа сегодня" in src
+    assert "Запустить цепочку" in src
     # Chrome only after authed `me` gate — LoginScreen is the guest path.
     assert "if (!me)" in src
     assert "<LoginScreen" in src
