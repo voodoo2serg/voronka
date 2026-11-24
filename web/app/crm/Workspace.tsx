@@ -13,6 +13,7 @@ import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } f
 import { ActionConstructorSection } from './sections/ActionConstructorSection';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
+import { ConnectionsVaultSection } from './sections/ConnectionsVaultSection';
 import { PaymentsSection } from './sections/PaymentsSection';
 import { ProjectsBoardSection } from './sections/ProjectsBoardSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
@@ -1660,6 +1661,16 @@ export default function Workspace() {
                 <PaymentsSection
                   data={paymentProviders}
                   api={api}
+                  busy={busy}
+                  onBusy={act}
+                  onNotice={setNotice}
+                  isOwner={me.role === 'owner'}
+                />
+              )}
+              {section === 'connections' && (
+                <ConnectionsVaultSection
+                  api={api}
+                  pid={pid}
                   busy={busy}
                   onBusy={act}
                   onNotice={setNotice}

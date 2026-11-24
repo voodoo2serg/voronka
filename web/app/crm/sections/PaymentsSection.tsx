@@ -79,6 +79,13 @@ export function PaymentsSection({
 
   return (
     <div className="two-column">
+      <section className="panel" style={{ gridColumn: '1 / -1' }}>
+        <p className="fine">
+          Учётные данные касс и ботов хранятся в{' '}
+          <a href="?section=connections">Подключениях (Connection Vault)</a>. Здесь — статус провайдеров,
+          ping и оповещения. Формы ниже dual-write в legacy payment vault на один релиз.
+        </p>
+      </section>
       <section className="panel">
         <div className="panel-title">
           <h2>Robokassa</h2>

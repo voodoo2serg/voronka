@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — VR-454 CRM Connection Vault
+
+- Project-scoped `crm_connection_vault` (Alembic **0014**): types telegram_bot, telegram_channel, max_bot, email_smtp, robokassa, yookassa.
+- Fernet-sealed secrets (`app/secret_box.py`); list API returns `has_secret` + `••••last4` only; owner write + rotate audit.
+- Staff UI **Подключения**; Constructor From/payment pickers use vault ids; dual-read sync from Connection / payment_vault / SMTP.
+- Tests: `tests/test_connection_vault_vr454.py`.
+
 ## Unreleased — VR-452 Person Timeline (История)
 
 - Persisted `crm_person_timeline_events` (Alembic **0013**) with category correspondence/technical.

@@ -180,12 +180,17 @@ def validate_action_nodes(nodes: list) -> list:
         media = raw.get("media_asset_id")
         media_asset_id = str(media).strip()[:80] if media else None
         from_address = str(raw.get("from_address") or "").strip()[:250] or None
+        # VR-454: vault refs live in config (vault_id / from_vault_id) — keep opaque string ids only.
+        cfg = dict(config)
+        for key in ("vault_id", "from_vault_id"):
+            if key in cfg and cfg[key] is not None:
+                cfg[key] = str(cfg[key]).strip()[:36] or None
         cleaned.append(
             {
                 "id": nid,
                 "kind": kind,
                 "title": title or kind,
-                "config": config,
+                "config": cfg,
                 "media_asset_id": media_asset_id,
                 "from_address": from_address,
             }
