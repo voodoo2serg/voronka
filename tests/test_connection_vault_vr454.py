@@ -157,12 +157,23 @@ def test_constructor_meta_includes_vault_pickers(crm):
             "secrets": {"secret_key": "yk-zzzz"},
         },
     )
+    crm.client.post(
+        "/api/crm/projects/p/connection-vault",
+        json={
+            "type": "telegram_bot",
+            "label": "TG pick",
+            "meta": {"bot_username": "@pick_bot"},
+            "secrets": {"bot_token": "123:AAAsecret-zzzz"},
+        },
+    )
     meta = crm.client.get("/api/crm/constructor/meta?project_id=p").json()
     assert meta["secrets_exposed"] is False
     assert any(v.get("type") == "email_smtp" for v in meta["vault_email"])
     assert any(v.get("type") == "yookassa" for v in meta["vault_payment"])
+    assert any(v.get("type") == "telegram_bot" for v in meta.get("vault_messaging") or [])
     assert "yk-zzzz" not in str(meta)
     assert "pwd-9999" not in str(meta)
+    assert "AAAsecret" not in str(meta)
 
 
 def test_sync_legacy_payment_and_smtp(crm, monkeypatch):
@@ -229,11 +240,17 @@ def test_frontend_nav_and_vault_section():
     ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
         encoding="utf-8"
     )
+    # CART-01: pickers for already-configured vault only; no credential forms on #today
     assert "Выбрать подключение" in ctor
     assert "from_vault_id" in ctor or "vault_id" in ctor
+    assert "Настроить в Подключениях" in ctor
+    assert "smtp_password" not in ctor
+    assert "bot_token" not in ctor
+    assert "Сменить секрет" not in ctor
     ws = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
     assert "ConnectionsVaultSection" in ws
     assert "section === 'connections'" in ws
+    assert "onOpenConnections" in ws
 
 
 def test_secrets_not_in_db_plaintext(crm):

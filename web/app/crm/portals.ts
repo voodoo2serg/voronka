@@ -54,8 +54,26 @@ export function signalHref(opts: {
 /** CRM-A15: Constructor «Медиатека» — SSO preserves return_to (Signal PR #57). */
 export const SIGNAL_MEDIA_LIBRARY_URL = PORTAL_URLS.signal + '/?view=media';
 
-export function signalMediaLibraryHref(opts: { brand?: string | null; person?: string | null } = {}): string {
-  return signalHref({ view: 'media', brand: opts.brand, person: opts.person });
+export function signalMediaLibraryHref(opts: {
+  brand?: string | null;
+  person?: string | null;
+  project?: string | null;
+} = {}): string {
+  const base = signalHref({ view: 'media', brand: opts.brand, person: opts.person });
+  if (!opts.project) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}project=${encodeURIComponent(opts.project)}`;
+}
+
+/**
+ * CART-01 ↔ CART-03: Solo-PR CMS «Корзина цепочки».
+ * Canonical route (CART-03): `/#/admin/cart/<project_id>` or `/#/admin/cart`.
+ */
+export function cmsChainCartHref(projectId?: string | null): string {
+  const path = projectId
+    ? `/#/admin/cart/${encodeURIComponent(projectId)}`
+    : '/#/admin/cart';
+  return `${PORTAL_URLS.cms}${path}`;
 }
 
 /** Open Signal CE (регламенты / campaigns) or message-set for a Person. */
