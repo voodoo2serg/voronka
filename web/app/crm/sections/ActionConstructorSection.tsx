@@ -79,6 +79,7 @@ export function ActionConstructorSection({
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
   onOpenConnections?: () => void;
+  /** B-02/B-03: open CRM media panel (Workspace overlay keeps canvas mounted). */
   onOpenMediaLibrary?: () => void;
 }) {
   const [meta, setMeta] = useState<Row | null>(null);
@@ -206,6 +207,14 @@ export function ActionConstructorSection({
     });
   }
 
+  function openMedia() {
+    if (onOpenMediaLibrary) {
+      onOpenMediaLibrary();
+      return;
+    }
+    window.open(mediaUrl, '_blank', 'noopener');
+  }
+
   const current = nodes[selected];
   const vaultEmail = (meta?.vault_email as Row[] | undefined) || [];
   const vaultPayment = (meta?.vault_payment as Row[] | undefined) || [];
@@ -218,6 +227,7 @@ export function ActionConstructorSection({
   const cartEmpty = !cartItems.length;
   const needsChannel =
     current && (current.kind === 'email' || current.kind === 'telegram' || current.kind === 'payment');
+  const showEmptyGuide = cartEmpty || !nodes.length;
 
   function PlusMenu({ menuKey, below }: { menuKey: string; below?: boolean }) {
     const open = plusOpenAt === menuKey;
@@ -270,20 +280,25 @@ export function ActionConstructorSection({
   return (
     <div className="constructor-layout" id="action-constructor" data-cart-route="cms/#/admin/cart">
       <aside className="constructor-rail panel">
-        <h2>Цепочки проекта</h2>
-        <button
-          type="button"
-          className="link"
-          onClick={() => {
-            setChainId('');
-            setRevision(1);
-            setName('Новая цепочка');
-            setNodes([]);
-            setSelected(0);
-          }}
-        >
-          + Новая
-        </button>
+        <div className="panel-title">
+          <div>
+            <h2>Цепочки</h2>
+            <p className="muted">Черновики и публикации</p>
+          </div>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              setChainId('');
+              setRevision(1);
+              setName('Новая цепочка');
+              setNodes([]);
+              setSelected(0);
+            }}
+          >
+            + Новая
+          </button>
+        </div>
         <ul className="constructor-list">
           {chains.map((c) => (
             <li key={String(c.id)}>
@@ -303,16 +318,19 @@ export function ActionConstructorSection({
               </button>
             </li>
           ))}
+          {!chains.length && <li className="muted">Пока нет цепочек — создайте новую.</li>}
         </ul>
 
         <div className="constructor-cart-rail" aria-label="Корзина цепочки">
-          <h3>Корзина CMS</h3>
+          <div className="panel-title constructor-rail-subhead">
+            <h3>Корзина CMS</h3>
+            <a className="link" href={cartUrl} target="_blank" rel="noopener noreferrer">
+              Открыть
+            </a>
+          </div>
           {cartEmpty ? (
             <p className="fine">
-              Пусто.{' '}
-              <a href={cartUrl} target="_blank" rel="noopener noreferrer">
-                Набрать в CMS
-              </a>
+              Пусто. Сначала наберите материалы в CMS — меню «+» появится по типам из корзины.
             </p>
           ) : (
             <ul className="constructor-cart-items">
@@ -330,12 +348,16 @@ export function ActionConstructorSection({
           )}
         </div>
       </aside>
+
       <section className="panel constructor-canvas">
         <div className="panel-title">
-          <label>
-            Название
-            <input value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
+          <div className="constructor-name-block">
+            <h2>Холст</h2>
+            <label className="constructor-name-field">
+              Название цепочки
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          </div>
           <div className="constructor-actions">
             <button type="button" disabled={busy} onClick={() => void saveChain()}>
               Сохранить
@@ -346,28 +368,43 @@ export function ActionConstructorSection({
           </div>
         </div>
 
-        <div className="constructor-cart-ctas" role="group" aria-label="Корзина и медиатека">
-          {onOpenMediaLibrary ? (
-            <button type="button" className="primary" onClick={onOpenMediaLibrary}>
-              Из медиатеки
+        <div className="constructor-next-steps" role="group" aria-label="Корзина и медиатека">
+          <button type="button" className="constructor-step-card" onClick={openMedia}>
+            <span className="eyebrow">1</span>
+            <b>Медиатека CRM</b>
+            <small>Создать файл и подписать kind + Project</small>
+          </button>
+          <a
+            className="constructor-step-card"
+            href={cartUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span className="eyebrow">2</span>
+            <b>Корзина CMS</b>
+            <small>Набрать ассеты проекта до сборки цепочки</small>
+          </a>
+          {onOpenConnections ? (
+            <button type="button" className="constructor-step-card" onClick={onOpenConnections}>
+              <span className="eyebrow">3</span>
+              <b>Подключения</b>
+              <small>Почта From, боты и платежи — только из vault</small>
             </button>
           ) : (
-            <a className="primary" href="?section=media#media">
-              Из медиатеки
+            <a className="constructor-step-card" href="#connections">
+              <span className="eyebrow">3</span>
+              <b>Подключения</b>
+              <small>Почта From, боты и платежи — только из vault</small>
             </a>
           )}
-          <a className="constructor-cart-link" href={cartUrl} target="_blank" rel="noopener noreferrer">
-            Набрать корзину в CMS
-          </a>
-          <a className="constructor-cart-link" href={mediaUrl} target="_blank" rel="noopener noreferrer">
-            Открыть в Signal
-          </a>
-          <p className="fine">
-            «+» собирает шаги только из корзины CMS (
-            <code>/#/admin/cart</code>
-            ). Медиатека — в CRM; Signal — запасной путь. Каналы — в Подключениях.
-          </p>
         </div>
+        <p className="fine constructor-hint">
+          «+» собирает шаги только из корзины CMS. Медиатека — в CRM;{' '}
+          <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+            Открыть в Signal
+          </a>{' '}
+          — запасной путь. Каналы — в Подключениях, без форм на этом экране.
+        </p>
 
         <div className="constructor-flow">
           <div className="constructor-fixed">
@@ -380,12 +417,9 @@ export function ActionConstructorSection({
               <button
                 type="button"
                 className="constructor-media"
-                title="Из медиатеки"
-                aria-label="Из медиатеки"
-                onClick={() => {
-                  if (onOpenMediaLibrary) onOpenMediaLibrary();
-                  else window.open(mediaUrl, '_blank', 'noopener');
-                }}
+                title="Открыть медиатеку CRM"
+                aria-label="Открыть медиатеку CRM"
+                onClick={openMedia}
               >
                 +
               </button>
@@ -416,28 +450,27 @@ export function ActionConstructorSection({
           </div>
         )}
 
-        {cartEmpty && (
+        {showEmptyGuide && cartEmpty && (
           <div className="empty compact constructor-empty-cart">
+            <h3>С чего начать</h3>
             <p>
-              Корзина пуста для этого проекта. Создайте материал в медиатеке CRM, наберите корзину в CMS —
-              меню «+» появится по типам из корзины.
+              Корзина пуста для этого проекта. Создайте файл в медиатеке, наберите корзину в CMS — затем
+              меню «+» появится по типам из корзины. Каналы настраиваются в Подключениях.
             </p>
             <div className="row constructor-cart-ctas-inline">
-              {onOpenMediaLibrary ? (
-                <button type="button" className="primary" onClick={onOpenMediaLibrary}>
-                  Из медиатеки
-                </button>
-              ) : (
-                <a className="primary" href="?section=media#media">
-                  Из медиатеки
-                </a>
-              )}
+              <button type="button" className="primary" onClick={openMedia}>
+                Из медиатеки
+              </button>
               <a href={cartUrl} target="_blank" rel="noopener noreferrer">
                 Набрать корзину в CMS
               </a>
-              <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
-                Открыть в Signal
-              </a>
+              {onOpenConnections ? (
+                <button type="button" className="link" onClick={onOpenConnections}>
+                  Настроить в Подключениях
+                </button>
+              ) : (
+                <a href="#connections">Настроить в Подключениях</a>
+              )}
             </div>
           </div>
         )}
@@ -533,6 +566,14 @@ export function ActionConstructorSection({
                 ) : (
                   <VaultEmptyCta onOpenConnections={onOpenConnections} />
                 )}
+                {vaultMessaging.length > 0 && onOpenConnections && (
+                  <p className="fine">
+                    Webhook бота:{' '}
+                    <button type="button" className="link" onClick={onOpenConnections}>
+                      Activate в Подключениях
+                    </button>
+                  </p>
+                )}
               </>
             )}
 
@@ -593,8 +634,10 @@ export function ActionConstructorSection({
             )}
           </div>
         )}
+
         <div className="constructor-dryrun">
           <h3>Проверить</h3>
+          <p className="fine">Dry-run по сохранённой цепочке — email и/или Telegram получатель.</p>
           <label>
             Email
             <input value={dryEmail} onChange={(e) => setDryEmail(e.target.value)} placeholder="you@example.ru" />

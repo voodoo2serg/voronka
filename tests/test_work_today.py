@@ -150,7 +150,9 @@ def test_work_today_paint_and_signal_actions():
     assert "Открыть курс" in panel
     assert "lmsOpenCourseHref" in portals_ts or "/open" in portals_ts
     assert "Из медиатеки" in ctor
+    assert "Медиатека CRM" in ctor
     assert "Открыть в Signal" in ctor
+    assert "onOpenMediaLibrary" in ctor
     assert "Набрать корзину в CMS" in ctor
     assert "Настроить в Подключениях" in ctor
     assert "smtp_password" not in ctor
