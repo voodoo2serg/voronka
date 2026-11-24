@@ -265,6 +265,9 @@ def test_frontend_no_paste_asset_id_and_cart_driven_plus():
     ws = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
     assert "cartId" in ws
     assert "q.get('cart')" in ws
+    # Codex P2: deep-linked cart must not stick after project switch
+    assert "cartForProject" in ws
+    assert "setCartId('')" in ws or 'setCartId("")' in ws
 
 
 def test_meta_exposes_cart_kind_map(crm):
