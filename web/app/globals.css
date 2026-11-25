@@ -19,10 +19,12 @@
 .work-today{display:block;width:calc(100% - 18px);margin:0 9px 14px;text-align:center;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:6px;padding:9px 10px;font-size:12px;font-weight:650;text-decoration:none}
 .work-today:hover{background:#444;color:#fff;text-decoration:none}
 .nav-secondary{opacity:.72;font-size:12px}
-.project-optional .access-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:12px 0 4px}
-.project-optional .access-actions a.primary{display:inline-block;padding:8px 12px;border-radius:6px;background:var(--accent);color:#fff;border:1px solid var(--accent);font-weight:600}
-.project-optional .access-actions a.primary:hover{background:#444;text-decoration:none}
+.project-optional .access-actions,.project-pick .access-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:12px 0 4px}
+.project-optional .access-actions a.primary,.project-pick .access-actions a.primary{display:inline-block;padding:8px 12px;border-radius:6px;background:var(--accent);color:#fff;border:1px solid var(--accent);font-weight:600}
+.project-optional .access-actions a.primary:hover,.project-pick .access-actions a.primary:hover{background:#444;text-decoration:none}
 .project-optional .empty-world{justify-content:center;margin-top:16px}
+.project-pick{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.project-pick p{margin:0;flex:1 1 220px}
 .access-request{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
 .access-request p{margin:0 0 10px}
 .access-cta{display:inline-flex;align-items:center;justify-content:center;margin:6px 0 12px;text-decoration:none}
