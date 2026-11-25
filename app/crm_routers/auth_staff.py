@@ -214,7 +214,12 @@ def recovery_finish(body: RecoveryFinish, request: Request):
         account = db.scalar(select(Account).where(Account.login == body.login.strip().lower()).with_for_update())
         digest = hashlib.sha256(f"{account.id if account else ''}:{body.purpose}:{body.code}".encode()).hexdigest()
         row = db.scalar(select(Recovery).where(Recovery.token_hash == digest).with_for_update())
-        if not account or not row or row.consumed or row.expires_at.replace(tzinfo=timezone.utc) <= now():
+        if not account or not row or row.consumed:
+            raise HTTPException(400, "Код недействителен")
+        expires_at = row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= now():
             raise HTTPException(400, "Код недействителен")
         row.consumed = True
         if body.purpose == "verify":

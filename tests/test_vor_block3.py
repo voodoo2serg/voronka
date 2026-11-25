@@ -824,6 +824,10 @@ def test_completion_accepts_lms_fields_and_x_lms_hmac(crm, monkeypatch):
 
 
 def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
+    import httpx
+    from app.db import now
+    from app.integrations import DEST_LMS, DEST_SIGNAL, DEST_SOLO
+
     monkeypatch.setenv("SOLO_PR_EVENTS_URL", "https://solo.example/api/integrations/voronka")
     monkeypatch.setenv("SOLO_PR_WEBHOOK_SECRET", "solo-secret")
     monkeypatch.setenv("LMS_END_ENROLLMENT_URL", "https://lms.example/api/integrations/voronka/enrollment")
@@ -844,16 +848,36 @@ def test_outbound_deal_paid_and_enrollment_dual_emit(crm, monkeypatch):
     }).status_code == 200
     captured = []
 
+    applied = False
+
     def fake_post(url, content=None, headers=None, **kwargs):
         captured.append({"url": url, "body": json.loads(content), "headers": headers})
-        class Resp:
-            status_code = 200
-        return Resp()
+        result = {"ok": True}
+        if url.endswith("/status"):
+            result = {"event_id": json.loads(content)["event_id"],
+                      "status": "active" if applied else "apply_error", "confirmed_at": now().isoformat()}
+        elif "signal.example" in url:
+            result = {"status": "queued"}
+        return httpx.Response(200, json=result, request=httpx.Request("POST", url))
 
     with crm.db.begin() as db:
         assert process_pending(db) >= 1
-        with patch("httpx.Client.post", side_effect=fake_post):
-            assert drain_outbox(db) >= 1
+    with patch("httpx.Client.post", side_effect=fake_post), crm.db.begin() as db:
+        assert drain_outbox(db, destination=DEST_LMS) == 1
+        assert drain_outbox(db, destination=DEST_SOLO) >= 1
+        assert drain_outbox(db, destination=DEST_SIGNAL) == 1
+        notification = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.destination == DEST_SIGNAL))
+        assert notification.state == "pending"
+        assert notification.last_error == "enrollment_apply_error"
+        assert not any("signal.example" in c["url"] for c in captured)
+        applied = True
+        notification.next_attempt_at = now()
+        db.flush()
+        assert drain_outbox(db, destination=DEST_SIGNAL) == 1
+        assert notification.state == "sent"
+        assert notification.payload["enrollment_confirmed_at"]
+
+    with crm.db() as db:
         rows = list(db.scalars(select(IntegrationOutbox)))
         kinds = {r.kind for r in rows}
         assert {"deal.paid", "access.granted", "enrollment.desired", "course.access_granted"} <= kinds

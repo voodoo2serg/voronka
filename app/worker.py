@@ -1,5 +1,6 @@
 import os, time
 from datetime import timedelta, timezone
+from threading import Thread
 from sqlalchemy import select, exists, and_
 from sqlalchemy.orm import aliased
 from app.db import Session, Inbox, Connection, Identity, Run, Version, Outbox, Asset, now
@@ -194,18 +195,30 @@ def sweep():
             event(db, "message.unknown", row.connection_id, run_id=row.run_id, outbox_id=row.id)
 
 def integrations_tick():
-    """Entitlement jobs + signed neighbor outbox. Failures never delete Payments."""
+    """Commit entitlement decisions independently of remote delivery."""
     from app.entitlement import process_pending
-    from app.integrations import drain_outbox
     from app.observability import queue_metrics, metrics_log_line
-    did = False
     with Session.begin() as db:
-        did = process_pending(db) > 0 or did
-        did = drain_outbox(db) > 0 or did
+        did = process_pending(db) > 0
         # Periodic structured metrics line (no secrets).
         if int(time.time()) % 60 < 2:
             print(metrics_log_line(queue_metrics(db)), flush=True)
     return did
+
+
+def integration_delivery_loop(destination):
+    from app.integrations import drain_outbox
+
+    while True:
+        try:
+            # Each direction holds at most one outbox row during its HTTP call.
+            with Session.begin() as db:
+                delivered = drain_outbox(db, limit=1, destination=destination)
+            if not delivered:
+                time.sleep(0.5)
+        except Exception as error:
+            print("integration_delivery_error", destination, type(error).__name__, flush=True)
+            time.sleep(2)
 
 
 def main():
@@ -217,6 +230,11 @@ def main():
         if not lock.execute(text("SELECT pg_try_advisory_lock(730191)")).scalar():
             raise SystemExit("Another worker is already running")
         lock.commit()
+    from app.integrations import DEST_LMS, DEST_SIGNAL, DEST_SOLO
+
+    for destination in (DEST_LMS, DEST_SIGNAL, DEST_SOLO):
+        Thread(target=integration_delivery_loop, args=(destination,),
+               name=f"integration-{destination}", daemon=True).start()
     while True:
         if lock is not None:
             # Exit on a lost DB session: its advisory lock may have been released.
