@@ -212,11 +212,8 @@ def detect_enrollment(db, project_id: str | None = None, limit: int = 100) -> li
                 ))
                 continue
             rows = [latest] if latest else []
-            sent = [r for r in rows if r.state == "sent"]
             dead = [r for r in rows if r.state == "dead"]
             pending = [r for r in rows if r.state in {"pending", "failed"}]
-            if sent:
-                continue
             if dead and not pending:
                 primary = dead[0]
                 findings.append(
@@ -273,6 +270,16 @@ def detect_enrollment(db, project_id: str | None = None, limit: int = 100) -> li
                 )
             # Signal CE: modern course_access_granted:{grant} + legacy dotted key.
             signal_rows = integrations.signal_access_outbox_for_grant(db, grant.id)
+            for notification in signal_rows:
+                if notification.state == "pending" and notification.last_error == "enrollment_apply_error":
+                    findings.append(_finding(
+                        finding_id=f"enrollment_apply_error:{notification.event_id}",
+                        scope="enrollment", code="enrollment_apply_error",
+                        summary="OpenOlat enrollment failed. Retry the enrollment job in LMS.",
+                        correlation_id=order.id,
+                        refs={"grant_id": grant.id, "order_id": order.id,
+                              "job_id": (notification.payload or {}).get("enrollment_job_id")},
+                    ))
             dead_signal = [r for r in signal_rows if r.state == "dead"]
             if dead_signal:
                 primary = dead_signal[0]

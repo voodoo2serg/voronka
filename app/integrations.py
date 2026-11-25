@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -350,10 +350,9 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
             **hints,
         },
     )
-    # CJ-107: transactional «доступ открыт» via Signal CE (idempotent per grant).
+    # Keep the notification intent durable. Delivery waits for LMS confirmation.
     if kind == "access.granted":
         enqueue_signal_access_granted(db, grant=grant, order=order, profile=profile, hints=hints)
-        _record_access_interaction(db, grant=grant, order=order, profile=profile, hints=hints)
 
 
 def signal_access_granted_event_id(grant_id: str) -> str:
@@ -698,6 +697,74 @@ def delivery_headers(destination: str, secret: str, body: bytes, event_id: str) 
     return headers
 
 
+def _defer_delivery(row: IntegrationOutbox, reason: str, *, seconds: int = 30) -> bool:
+    row.last_error = reason
+    row.updated_at = now()
+    row.next_attempt_at = row.updated_at + timedelta(seconds=seconds)
+    return True
+
+
+def _confirm_enrollment(db, row: IntegrationOutbox) -> bool:
+    """Fail closed until the LMS reports that OpenOlat applied current membership."""
+    grant_id = str((row.payload or {}).get("grant_id") or "")
+    history = (_enrollment_rows_for_grant(db, grant_id)
+               + _enrollment_rows_for_grant(db, grant_id, revoke=True)) if grant_id else []
+    command = max(history, key=lambda item: (
+        int((item.payload or {}).get("revision") or 1), item.created_at, item.event_id,
+    ), default=None)
+    if command is None:
+        _defer_delivery(row, "enrollment_command_missing")
+        return False
+    if command.kind == "enrollment.revoked":
+        row.state, row.last_error, row.updated_at = "dead", "enrollment_revoked", now()
+        return False
+    if command.state != "sent":
+        _defer_delivery(row, "enrollment_command_" + command.state)
+        return False
+    url, secret = _url(DEST_LMS), _secret(DEST_LMS)
+    if not url or not secret:
+        _defer_delivery(row, "enrollment_status_not_configured")
+        return False
+    request_body = json.dumps({"event_id": command.event_id}).encode()
+    headers = delivery_headers(DEST_LMS, secret, request_body, command.event_id)
+    try:
+        with httpx.Client(timeout=10) as client:
+            response = client.post(url.rstrip("/") + "/status", content=request_body, headers=headers)
+        response.raise_for_status()
+        evidence = response.json()
+        status = evidence.get("status") if evidence.get("event_id") == command.event_id else None
+        if status == "apply_error" and isinstance(evidence.get("job_id"), str):
+            row.payload = {**row.payload, "enrollment_job_id": evidence["job_id"][:80]}
+        if status == "active":
+            confirmed = datetime.fromisoformat(evidence["confirmed_at"])
+            if confirmed.tzinfo is None:
+                raise ValueError("missing confirmation timezone")
+            from app.crm_models import Payment
+
+            paid_at = db.scalar(select(Payment.created_at).where(
+                Payment.order_id == row.correlation_id, Payment.kind == "payment",
+                Payment.created_at <= command.created_at,
+            ).order_by(Payment.created_at.desc()).limit(1))
+            created = paid_at or command.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            row.payload = {
+                **row.payload,
+                "enrollment_event_id": command.event_id,
+                "enrollment_confirmed_at": confirmed.isoformat(),
+                "payment_to_enrollment_seconds": max(0, int((confirmed - created).total_seconds())),
+            }
+            return True
+    except (httpx.HTTPError, ValueError, KeyError, AttributeError, TypeError):
+        status = None
+    if status == "superseded":
+        row.state, row.last_error, row.updated_at = "dead", "enrollment_superseded", now()
+    else:
+        reason = status if status in ("pending", "apply_error") else "status_unavailable"
+        _defer_delivery(row, "enrollment_" + reason)
+    return False
+
+
 def deliver_one(db, row: IntegrationOutbox) -> bool:
     """Attempt HTTP delivery. Returns True if work was done."""
     url = _url(row.destination)
@@ -716,6 +783,8 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
         row.updated_at = now()
         return True
     if row.destination == DEST_SIGNAL:
+        if not _confirm_enrollment(db, row):
+            return True
         # CE intake expects a slim event body (not dual solo/lms envelope).
         payload = {
             "event_id": row.event_id,
@@ -734,6 +803,24 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
         with httpx.Client(timeout=20) as client:
             response = client.post(url, content=body, headers=headers)
         if 200 <= response.status_code < 300:
+            if row.destination == DEST_SIGNAL:
+                status = response.json().get("status")
+                if status in {"no_enabled_rule", "template_unapproved", "delivery_not_enabled",
+                              "send_policy_unavailable"}:
+                    return _defer_delivery(row, status, seconds=60)
+                if status != "queued":
+                    row.state = "dead"
+                    row.last_error = "signal_event_not_queued"
+                    return True
+                from app.crm_models import AccessGrant, Order, Profile
+                grant = db.get(AccessGrant, row.payload.get("grant_id"))
+                if grant:
+                    order = db.get(Order, grant.order_id)
+                    if order:
+                        profile = db.get(Profile, order.profile_id)
+                        if profile:
+                            _record_access_interaction(db, grant=grant, order=order, profile=profile,
+                                                       hints=_product_hints(order))
             row.state = "sent"
             row.last_error = ""
             return True
@@ -752,12 +839,15 @@ def deliver_one(db, row: IntegrationOutbox) -> bool:
         return True
 
 
-def drain_outbox(db, limit: int = 20) -> int:
+def drain_outbox(db, limit: int = 20, *, destination: str | None = None) -> int:
+    query = select(IntegrationOutbox).where(
+        IntegrationOutbox.state == "pending", IntegrationOutbox.next_attempt_at <= now(),
+    )
+    if destination is not None:
+        query = query.where(IntegrationOutbox.destination == destination)
     rows = list(
         db.scalars(
-            select(IntegrationOutbox)
-            .where(IntegrationOutbox.state == "pending", IntegrationOutbox.next_attempt_at <= now())
-            .order_by(IntegrationOutbox.created_at)
+            query.order_by(IntegrationOutbox.created_at, IntegrationOutbox.id)
             .with_for_update(skip_locked=True)
             .limit(limit)
         )
