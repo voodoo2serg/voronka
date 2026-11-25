@@ -4,24 +4,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _login_sources():
-    return [
-        (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8"),
-        (ROOT / "web" / "app" / "ops" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8"),
-    ]
-
-
 def test_no_peer_emergency_button_label_in_jsx():
-    for src in _login_sources():
-        # Visible peer CTA removed; form submit label may still say аварийный after gesture.
+    crm = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    ops = (ROOT / "web" / "app" / "ops" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
+    for src in (crm, ops):
+        # Visible peer CTA removed; form submit label may still say аварийный in JS strings.
         assert "Аварийный вход\n" not in src
         assert ">Аварийный вход<" not in src
         assert "onClick={() => setShowLocal(true)}" not in src or "BREAK_GLASS" in src
-        assert "BREAK_GLASS_CLICKS" in src
+    # Ops keeps hidden brandmark gesture; CRM-R1 is query-flag only.
+    assert "BREAK_GLASS_CLICKS" in ops
+    assert "BREAK_GLASS_CLICKS" not in crm
+    assert "breakglass" in crm
 
 
 def test_auth_m2_guest_card_only_login_register_forgot():
-    """Ops keeps AUTH-M2 guest card; CRM-A1 kills the island (Keycloak redirect)."""
+    """Ops keeps AUTH-M2 guest card; CRM-R1 kills the island (Keycloak redirect)."""
     ops = (ROOT / "web" / "app" / "ops" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
     assert "Войти" in ops
     assert "Регистрация" in ops
@@ -31,16 +29,20 @@ def test_auth_m2_guest_card_only_login_register_forgot():
     assert 'className="access-request' not in ops
 
 
-def test_crm_a1_keycloak_immediate_redirect_no_auth_island():
-    """CRM-A1: guest → Keycloak immediately; no peer login/register/forgot island."""
+def test_crm_r1_keycloak_immediate_redirect_no_auth_island():
+    """CRM-R1: guest → Keycloak immediately; no «Переход…» / local island; break-glass = ?breakglass=1."""
     login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
     assert "location.replace" in login
     assert "/api/crm/oidc/login" in login
-    assert "Переход к единому входу" in login
+    assert "Переход к единому входу" not in login
+    assert "единому входу" not in login
     assert 'className="auth-ctas"' not in login
     assert "Регистрация" not in login
-    assert "BREAK_GLASS_CLICKS" in login
-    assert "breakglass" in login
+    assert "BREAK_GLASS_CLICKS" not in login
+    assert "onBrandmarkGesture" not in login
+    assert "params.get('breakglass') === '1'" in login
+    assert "params.get('local')" not in login
+    assert 'className="loading"' in login
 
 
 def test_fe_u3_ops_guest_cta_hierarchy():
