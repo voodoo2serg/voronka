@@ -7,6 +7,14 @@
 - Docs: OUTREACH / OPERATIONS mark product deprecated; legacy outreach API retained for ops/tests.
 - Tests: `tests/test_crm_r8_drop_progrev.py`.
 
+## Unreleased — CRM-R7 «Старт» + Project dashboard
+
+- Unassigned inbound leads (no `project_id`) land in system Project **«Старт»**; `DEFAULT_PROJECT_ID` is no longer a silent sink.
+- Project overview = sales dashboard (clients / deals / money) with «Старт» inbox metrics and convert-to-project.
+- `POST /contacts/{id}/convert` soft-converts a «Старт» lead into a commercial Project (+ optional Branch).
+- Clients and deals table: pagination **10 / 50 / Все**.
+- Tests: `tests/test_crm_r7_start_dashboard.py`, `tests/test_crm_r7_dashboard_browser.py`.
+
 ## Unreleased — CRM-R4 Constructor «Проверить» end-to-end
 
 - Dry-run sends real test email via vault Mailu SMTP (`email_smtp`) and Telegram via vault `telegram_bot` (env SMTP/bot fallback).

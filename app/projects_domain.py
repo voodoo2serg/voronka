@@ -13,6 +13,7 @@ START_PROJECT_DESCRIPTION = (
     "Системный проект для людей, которые оставили заявку или email, "
     "но ещё не привязаны к коммерческому Project / Branch."
 )
+CONVERTED_TAG = "converted"
 
 # CRM-R8: ordinary commercial project — not a special module / not is_system.
 # system_key is a stable seed marker only (unique); staff may rename the display name.
@@ -201,6 +202,192 @@ def project_board_row(db, project: Project) -> dict:
         "chains_count": int(chains),
         "next_tasks": next_tasks,
     }
+
+
+def is_start_project(project: Project | None) -> bool:
+    return bool(project and getattr(project, "system_key", None) == START_SYSTEM_KEY)
+
+
+def profile_converted_extra(profile) -> dict:
+    extra = profile.extra if isinstance(getattr(profile, "extra", None), dict) else {}
+    return extra
+
+
+def is_converted_start_profile(profile) -> bool:
+    extra = profile_converted_extra(profile)
+    if extra.get("converted_to_project_id"):
+        return True
+    tags = profile.tags if isinstance(getattr(profile, "tags", None), list) else []
+    return CONVERTED_TAG in tags
+
+
+def start_inbox_metrics(db, project: Project) -> dict:
+    """CRM-R7: contacted / open / converted for system Project «Старт»."""
+    from app.crm_models import Activity, Profile
+
+    if not is_start_project(project):
+        return {
+            "start_inbox": False,
+            "start_open_count": 0,
+            "start_contacted_count": 0,
+            "start_converted_count": 0,
+            "start_leads": [],
+        }
+    profiles = list(
+        db.scalars(
+            select(Profile)
+            .where(Profile.project_id == project.id)
+            .order_by(Profile.created_at.desc(), Profile.id)
+        )
+    )
+    open_rows: list = []
+    converted_rows: list = []
+    for row in profiles:
+        if is_converted_start_profile(row):
+            converted_rows.append(row)
+        else:
+            open_rows.append(row)
+    contacted = 0
+    lead_items: list[dict] = []
+    for row in open_rows:
+        last = db.scalar(
+            select(Activity)
+            .where(Activity.profile_id == row.id)
+            .order_by(Activity.created_at.desc(), Activity.id.desc())
+            .limit(1)
+        )
+        if last:
+            contacted += 1
+        if len(lead_items) < 12:
+            extra = profile_converted_extra(row)
+            lead_items.append(
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "email": row.email or "",
+                    "phone": row.phone or "",
+                    "source": row.source or "",
+                    "person_role": row.person_role or "lead",
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "last_action": (last.outcome if last else "") or (last.kind if last else ""),
+                    "last_action_at": last.created_at.isoformat() if last and last.created_at else None,
+                    "contacted": bool(last),
+                    "service": str(extra.get("service") or "")[:200],
+                }
+            )
+    return {
+        "start_inbox": True,
+        "start_open_count": len(open_rows),
+        "start_contacted_count": contacted,
+        "start_converted_count": len(converted_rows),
+        "start_leads": lead_items,
+    }
+
+
+def convert_profile_from_start(
+    db,
+    profile,
+    *,
+    target_project_id: str,
+    branch_id: str | None = None,
+    person_role: str | None = None,
+):
+    """Attach a «Старт» lead to a commercial Project (+ optional Branch).
+
+    Soft-convert: keeps the Старт Profile marked converted; creates/reuses a Profile
+    on the target Project sharing the same Contact; reassigns open Deals.
+    """
+    from app.crm_models import Branch, Deal, Profile
+
+    source = db.get(Project, profile.project_id)
+    if not is_start_project(source):
+        raise ValueError("Конвертация только из системного проекта «Старт»")
+    if is_converted_start_profile(profile):
+        raise ValueError("Лид уже конвертирован")
+    target = db.get(Project, target_project_id)
+    if not target:
+        raise ValueError("Проект не найден")
+    if is_start_project(target):
+        raise ValueError("Нельзя конвертировать обратно в «Старт»")
+    if target_project_id == profile.project_id:
+        raise ValueError("Укажите другой проект")
+
+    resolved_branch: str | None = None
+    if branch_id:
+        br = db.get(Branch, branch_id)
+        if not br or br.project_id != target_project_id:
+            raise ValueError("Ветка другого проекта")
+        resolved_branch = br.id
+
+    role = (person_role or profile.person_role or "lead").strip()
+    if role not in PERSON_ROLES:
+        raise ValueError("Неизвестная роль")
+
+    dest = db.scalar(
+        select(Profile).where(
+            Profile.contact_id == profile.contact_id,
+            Profile.project_id == target_project_id,
+        )
+    )
+    if dest is None:
+        dest = Profile(
+            id=uid(),
+            contact_id=profile.contact_id,
+            person_id=profile.person_id,
+            project_id=target_project_id,
+            branch_id=resolved_branch,
+            person_role=role,
+            name=profile.name,
+            email=profile.email or "",
+            phone=profile.phone or "",
+            company=profile.company or "",
+            source=profile.source or "start_convert",
+            tags=list(profile.tags or []),
+            extra={
+                **(profile_converted_extra(profile)),
+                "converted_from_start": True,
+                "start_profile_id": profile.id,
+            },
+            owner_id=profile.owner_id,
+            stopped=bool(profile.stopped),
+        )
+        db.add(dest)
+        db.flush()
+    else:
+        if resolved_branch is not None:
+            dest.branch_id = resolved_branch
+        dest.person_role = role
+        if profile.person_id and not dest.person_id:
+            dest.person_id = profile.person_id
+        dest.revision = int(getattr(dest, "revision", 1) or 1) + 1
+
+    open_deals = list(
+        db.scalars(
+            select(Deal).where(
+                Deal.profile_id == profile.id,
+                Deal.stage.notin_(["won", "lost"]),
+            )
+        )
+    )
+    for deal in open_deals:
+        deal.profile_id = dest.id
+        deal.project_id = target_project_id
+        deal.revision = int(getattr(deal, "revision", 1) or 1) + 1
+
+    stamp = now().isoformat()
+    extra = dict(profile_converted_extra(profile))
+    extra["converted_to_project_id"] = target_project_id
+    extra["converted_to_profile_id"] = dest.id
+    extra["converted_at"] = stamp
+    if resolved_branch:
+        extra["converted_to_branch_id"] = resolved_branch
+    profile.extra = extra
+    tags = list(profile.tags or [])
+    if CONVERTED_TAG not in tags:
+        tags.append(CONVERTED_TAG)
+    profile.tags = tags
+    profile.revision = int(getattr(profile, "revision", 1) or 1) + 1
+    return dest
 
 
 def validate_action_nodes(nodes: list) -> list:

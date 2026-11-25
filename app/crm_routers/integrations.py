@@ -415,16 +415,20 @@ def _grant_lead_consent(db, contact_point_id: str, *, source: str, event_id: str
 
 
 def _apply_inbound_lead(body: LeadBody) -> dict[str, Any]:
-    """Upsert Person/Profile/Deal from any marketing lead source (solo_pr / RAGA)."""
-    project_id = body.project_id or os.getenv("DEFAULT_PROJECT_ID", "")
+    """Upsert Person/Profile/Deal from any marketing lead source (solo_pr / RAGA).
+
+    CRM-R7: unassigned leads (no body.project_id) always land in system Project «Старт».
+    Explicit project_id in the payload still wins. DEFAULT_PROJECT_ID is not used as a sink.
+    """
+    project_id = (body.project_id or "").strip()
     if not project_id:
-        # CRM redesign: raw interest lands in system Project «Старт».
+        # CRM redesign / CRM-R7: raw interest → system Project «Старт».
         with Session.begin() as db:
             from app.projects_domain import start_project_id
 
             project_id = start_project_id(db)
     if not project_id:
-        raise HTTPException(503, "DEFAULT_PROJECT_ID не задан для входящих лидов")
+        raise HTTPException(503, "Системный проект «Старт» недоступен для входящих лидов")
     email, phone, telegram, max_value = _lead_channel_values(body)
     source = body.source
     default_name = {

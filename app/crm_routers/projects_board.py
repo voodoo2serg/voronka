@@ -24,10 +24,13 @@ from app.db import Project, now
 from app.projects_domain import (
     PERSON_ROLES,
     base_chain_summary,
+    convert_profile_from_start,
     ensure_progrev_project,
     ensure_start_project,
     get_base_action_chain,
+    is_start_project,
     project_board_row,
+    start_inbox_metrics,
     start_project_id,
 )
 
@@ -59,6 +62,14 @@ class CourseBind(Body):
 
 
 class ProfileBranchBody(Body):
+    branch_id: str | None = None
+    person_role: Literal["lead", "client", "alumni"] | None = None
+
+
+class ConvertBody(Body):
+    """CRM-R7: move a «Старт» lead into a commercial Project (+ optional Branch)."""
+
+    project_id: str = Field(min_length=1, max_length=36)
     branch_id: str | None = None
     person_role: Literal["lead", "client", "alumni"] | None = None
 
@@ -144,9 +155,15 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
         )
         courses = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
         base = get_base_action_chain(db, pid, None)
-        start_clients = 0
-        if project.system_key == "start":
-            start_clients = board["contacts_count"]
+        recent_deals = list(
+            db.scalars(
+                select(Deal)
+                .where(Deal.project_id == pid)
+                .order_by(Deal.created_at.desc(), Deal.id.desc())
+                .limit(8)
+            )
+        )
+        start_extra = start_inbox_metrics(db, project)
         return {
             **board,
             "deals_count": int(deals),
@@ -157,8 +174,8 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             "chains": [encode(c) for c in chains],
             # CRM-R5: SoR for project steps = saved constructor base, not fixed funnel template.
             "base_chain": base_chain_summary(base),
-            "start_inbox": project.system_key == "start",
-            "start_open_count": int(start_clients),
+            "recent_deals": [encode(d) for d in recent_deals],
+            **start_extra,
         }
 
 
@@ -286,3 +303,41 @@ def place_contact(profile_id: str, body: ProfileBranchBody, admin=Depends(crm_ac
         row.revision += 1
         audit(db, admin, "profile.placement", project_id=row.project_id, profile_id=profile_id)
         return encode(row)
+
+
+@router.post("/contacts/{profile_id}/convert")
+def convert_contact(profile_id: str, body: ConvertBody, admin=Depends(crm_actor)):
+    """CRM-R7: convert a «Старт» lead into a commercial Project / Branch."""
+    target_project_id = body.project_id.strip()
+    with Session.begin() as db:
+        row = must(db.get(Profile, profile_id))
+        project_access(db, admin, row.project_id)
+        project_access(db, admin, target_project_id)
+        source = must(db.get(Project, row.project_id))
+        if not is_start_project(source):
+            raise HTTPException(422, "Конвертация только из системного проекта «Старт»")
+        try:
+            dest = convert_profile_from_start(
+                db,
+                row,
+                target_project_id=target_project_id,
+                branch_id=(body.branch_id.strip() if body.branch_id else None),
+                person_role=body.person_role,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        audit(
+            db,
+            admin,
+            "profile.converted_from_start",
+            project_id=target_project_id,
+            profile_id=dest.id,
+            start_profile_id=profile_id,
+        )
+        return {
+            "ok": True,
+            "start_profile": encode(row),
+            "profile": encode(dest),
+            "project_id": dest.project_id,
+            "branch_id": dest.branch_id,
+        }

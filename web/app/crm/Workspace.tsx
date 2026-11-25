@@ -16,6 +16,7 @@ import { InboxSection } from './sections/InboxSection';
 import { ConnectionsVaultSection } from './sections/ConnectionsVaultSection';
 import { MediaLibrarySection } from './sections/MediaLibrarySection';
 import { PaymentsSection } from './sections/PaymentsSection';
+import { ProjectSalesDashboard } from './sections/ProjectSalesDashboard';
 import { ProjectsBoardSection } from './sections/ProjectsBoardSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
 import { SignalPersonActions } from './sections/SignalPersonActions';
@@ -38,6 +39,8 @@ export default function Workspace() {
   const [branches, setBranches] = useState<Row[]>([]);
   const [branchFilter, setBranchFilter] = useState('');
   const [pageSize, setPageSize] = useState(50);
+  const [dealPageSize, setDealPageSize] = useState(50);
+  const [dealOffset, setDealOffset] = useState(0);
   const [contacts, setContacts] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
   const [inbox, setInbox] = useState<Row[]>([]);
@@ -388,6 +391,7 @@ export default function Workspace() {
 
   function openProject(id: string) {
     setOffset(0);
+    setDealOffset(0);
     setPid(id);
     setCartId('');
     setCartForProject('');
@@ -428,6 +432,59 @@ export default function Workspace() {
   const stages = Object.entries(me?.stages || {}) as [string, string][];
   const kinds = Object.entries(me?.product_kinds || {}) as [string, string][];
   const clientName = (id: string) => contacts.find((c) => c.id === id)?.name || id.slice(0, 8);
+
+  function convertLeadForm(lead: Row) {
+    const targets = (me?.projects || []).filter(
+      (p: Row) => p.id !== me?.start_project_id && !p.is_system,
+    ) as Row[];
+    if (!targets.length) {
+      setError('Нет коммерческого проекта для конвертации. Создайте проект на доске.');
+      return;
+    }
+    setForm({
+      title: `В проект · ${lead.name || 'лид'}`,
+      fields: [
+        {
+          key: 'project_id',
+          label: 'Проект',
+          type: 'select',
+          required: true,
+          options: targets.map((p) => [String(p.id), String(p.name)]) as [string, string][],
+        },
+        {
+          key: 'person_role',
+          label: 'Роль',
+          type: 'select',
+          value: 'lead',
+          options: [
+            ['lead', 'Лид'],
+            ['client', 'Клиент'],
+            ['alumni', 'Alumni'],
+          ],
+        },
+      ],
+      save: async (v) => {
+        const res = await api(`/contacts/${lead.id}/convert`, 'POST', {
+          project_id: v.project_id,
+          person_role: v.person_role || 'lead',
+        });
+        setNotice(`Перенесено в проект`);
+        setDetail(null);
+        if (res?.project_id) {
+          openProject(String(res.project_id));
+          await load(String(res.project_id));
+          if (res.profile?.id) await showContact(String(res.profile.id));
+        } else {
+          await load();
+        }
+      },
+    });
+  }
+
+  const pagedDeals =
+    dealPageSize === 0
+      ? deals
+      : deals.slice(dealOffset, dealOffset + dealPageSize);
   async function refreshDetail() {
     await load();
     if (detail) await showContact(detail.id);
@@ -1005,19 +1062,21 @@ export default function Workspace() {
                       </button>
                     </section>
                   )}
-                  <div className="metrics">
-                    {[
-                      ['Клиенты', String(dashboard?.contacts_count ?? overview.contacts ?? 0)],
-                      ['Сделки', String(dashboard?.deals_count ?? overview.deals ?? 0)],
-                      ['В работе', money(overview.pipeline_minor)],
-                      ['Получено, за вычетом возвратов', money(dashboard?.received_minor ?? overview.received_minor)],
-                    ].map(([label, value]) => (
-                      <article key={label}>
-                        <p>{label}</p>
-                        <strong>{value}</strong>
-                      </article>
-                    ))}
-                  </div>
+                  {!!pid && (
+                    <ProjectSalesDashboard
+                      dashboard={dashboard}
+                      overview={overview}
+                      deals={deals}
+                      startProjectId={typeof me.start_project_id === 'string' ? me.start_project_id : undefined}
+                      busy={busy}
+                      onOpenClients={() => goSection('contacts')}
+                      onOpenDeals={() => goSection('deals')}
+                      onOpenChains={() => goSection('chains')}
+                      onOpenContact={(id) => void act(() => showContact(id))}
+                      onConvertLead={(lead) => convertLeadForm(lead)}
+                      clientName={clientName}
+                    />
+                  )}
                   <section className="panel" style={{ marginTop: 16 }} data-testid="overview-base-chain">
                     <div className="panel-title">
                       <h2>Базовая цепочка</h2>
@@ -1092,20 +1151,11 @@ export default function Workspace() {
                       </ul>
                     </section>
                   )}
-                  <div className="two-column work-today-layout">
-                    <WorkTodayPanel
-                      data={workToday}
-                      busy={busy}
-                      onOpenPerson={(id) => void act(() => showContact(id))}
-                      onRefresh={() => void act(() => loadWorkToday())}
-                    />
-                    <SalesRunbookPanel data={salesRunbook} />
-                  </div>
                   {tasks.some((t) => t.state === 'open') && (
                     <section className="panel" style={{ marginTop: 22 }}>
                       <div className="panel-title">
                         <h2>Открытые задачи</h2>
-                        <button type="button" className="link" onClick={() => setSection('tasks')}>
+                        <button type="button" className="link" onClick={() => goSection('tasks')}>
                           Все задачи →
                         </button>
                       </div>
@@ -1133,10 +1183,25 @@ export default function Workspace() {
                         <small>{products.filter((p) => p.kind === kind).length} в каталоге</small>
                       </div>
                     ))}
-                    <button className="link" onClick={() => setSection('products')}>
+                    <button className="link" onClick={() => goSection('products')}>
                       Перейти к продуктам →
                     </button>
                   </div>
+                  <section className="panel work-today-secondary" style={{ marginTop: 22 }} aria-label="Очередь дня">
+                    <div className="panel-title">
+                      <h2>Очередь дня</h2>
+                      <span className="muted">вторично · продажи выше</span>
+                    </div>
+                    <div className="two-column work-today-layout" style={{ marginTop: 12 }}>
+                      <WorkTodayPanel
+                        data={workToday}
+                        busy={busy}
+                        onOpenPerson={(id) => void act(() => showContact(id))}
+                        onRefresh={() => void act(() => loadWorkToday())}
+                      />
+                      <SalesRunbookPanel data={salesRunbook} />
+                    </div>
+                  </section>
                 </>
               )}
               {section === 'inbox' && (
@@ -1363,6 +1428,21 @@ export default function Workspace() {
                       Таблица
                     </button>
                   </div>
+                  <div className="source-filters" role="group" aria-label="Размер страницы сделок">
+                    {CLIENT_PAGE_SIZES.map((sz) => (
+                      <button
+                        key={`deal-${sz.label}`}
+                        type="button"
+                        className={dealPageSize === sz.value ? 'active' : undefined}
+                        onClick={() => {
+                          setDealOffset(0);
+                          setDealPageSize(sz.value);
+                        }}
+                      >
+                        {sz.label}
+                      </button>
+                    ))}
+                  </div>
                   {board ? (
                     <div className="board">
                       {stages.map(([key, label]) => (
@@ -1453,7 +1533,7 @@ export default function Workspace() {
                           </tr>
                         </thead>
                         <tbody>
-                          {deals.map((d) => (
+                          {pagedDeals.map((d) => (
                             <tr key={d.id}>
                               <td>
                                 <button className="link" onClick={() => void act(() => showContact(d.profile_id))}>
@@ -1470,6 +1550,26 @@ export default function Workspace() {
                       </table>
                     </div>
                   )}
+                  <footer className="table-footer">
+                    {deals.length} сделок · на странице {board ? deals.length : pagedDeals.length} ·{' '}
+                    {dealPageSize === 0 ? 'все' : `по ${dealPageSize}`}
+                    {!board && (
+                      <>
+                        <button
+                          disabled={dealOffset === 0 || dealPageSize === 0}
+                          onClick={() => setDealOffset(Math.max(0, dealOffset - (dealPageSize || 50)))}
+                        >
+                          ←
+                        </button>
+                        <button
+                          disabled={dealPageSize === 0 || dealOffset + dealPageSize >= deals.length}
+                          onClick={() => setDealOffset(dealOffset + dealPageSize)}
+                        >
+                          →
+                        </button>
+                      </>
+                    )}
+                  </footer>
                 </>
               )}
               {section === 'products' && (
@@ -2412,6 +2512,14 @@ export default function Workspace() {
               <button disabled={!productOptions.length} onClick={() => orderForm(detail)}>
                 + Заказ
               </button>
+              {me.start_project_id &&
+                detail.project_id === me.start_project_id &&
+                !(detail.tags || []).includes('converted') &&
+                !detail.extra?.converted_to_project_id && (
+                  <button className="primary" onClick={() => convertLeadForm(detail)}>
+                    В проект
+                  </button>
+                )}
             </div>
             <SignalPersonActions personId={typeof detail.person_id === 'string' ? detail.person_id : null} />
             <dl>
