@@ -46,6 +46,21 @@ _PORTAL_CSP = (
 )
 
 
+def _portal_cache_control(path: str) -> str | None:
+    """Kill sticky pre-soft-protocol CRM shells; hashed chunks stay immutable."""
+    if not (path.startswith("/crm") or path.startswith("/ops")):
+        return None
+    # Next hashed assets under /_next/static/ — safe to cache forever (name changes on build).
+    if "/_next/static/" in path:
+        return "public, max-age=31536000, immutable"
+    # HTML shells + Flight/RSC text — never sticky. Stale index was the live + → CMS cart hop
+    # after tip 72bd73e (browser kept pre-#81 constructor-plus-cta → #/admin/cart/{pid}).
+    name = path.rsplit("/", 1)[-1]
+    if (not name) or name.endswith(".html") or "." not in name or name.endswith(".txt"):
+        return "no-store, must-revalidate"
+    return "no-cache"
+
+
 @app.middleware("http")
 async def portal_host_and_security(request: Request, call_next):
     # crm.solo-pr.ru → Workspace at /crm/; voronka.* keeps Mini App at / (webhooks/Telegram URL stable).
@@ -59,6 +74,9 @@ async def portal_host_and_security(request: Request, call_next):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Frame-Options", "DENY")
+        cc = _portal_cache_control(path)
+        if cc:
+            response.headers["Cache-Control"] = cc
     return response
 
 # Built Next.js static exports share the same origin and authenticated API.
