@@ -16,6 +16,7 @@ import { InboxSection } from './sections/InboxSection';
 import { ConnectionsVaultSection } from './sections/ConnectionsVaultSection';
 import { MediaLibrarySection } from './sections/MediaLibrarySection';
 import { PaymentsSection } from './sections/PaymentsSection';
+import { ProjectCoursesPanel } from './sections/ProjectCoursesPanel';
 import { ProjectSalesDashboard } from './sections/ProjectSalesDashboard';
 import { ProjectsBoardSection } from './sections/ProjectsBoardSection';
 import { SalesRunbookPanel } from './sections/SalesRunbookPanel';
@@ -1142,17 +1143,43 @@ export default function Workspace() {
                       </ul>
                     </section>
                   )}
-                  {!!dashboard?.courses?.length && (
-                    <section className="panel" style={{ marginTop: 16 }}>
-                      <h2>Курсы LMS</h2>
-                      <ul className="checklist">
-                        {(dashboard.courses as Row[]).map((c) => (
-                          <li key={String(c.id)}>
-                            <code>{String(c.course_id)}</code> {String(c.label || '')}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
+                  {!!pid && (
+                    <ProjectCoursesPanel
+                      courses={Array.isArray(dashboard?.courses) ? (dashboard.courses as Row[]) : []}
+                      projectName={
+                        typeof dashboard?.name === 'string'
+                          ? dashboard.name
+                          : String(me.projects?.find((p: Row) => p.id === pid)?.name || '')
+                      }
+                      busy={busy}
+                      canEdit={me.role === 'owner' || me.role === 'editor'}
+                      onBind={() =>
+                        setForm({
+                          title: 'Привязать курс LMS',
+                          fields: [
+                            {
+                              key: 'course_id',
+                              label: 'Курс LMS · externalId',
+                              required: true,
+                            },
+                            { key: 'label', label: 'Подпись (необязательно)' },
+                          ],
+                          save: async (v) => {
+                            await api(`/projects/${pid}/courses`, 'POST', {
+                              course_id: (v.course_id || '').trim(),
+                              label: (v.label || '').trim(),
+                            });
+                            await load();
+                          },
+                        })
+                      }
+                      onUnbind={(courseId) =>
+                        void act(async () => {
+                          await api(`/projects/${pid}/courses/${encodeURIComponent(courseId)}`, 'DELETE');
+                          await load();
+                        })
+                      }
+                    />
                   )}
                   {tasks.some((t) => t.state === 'open') && (
                     <section className="panel" style={{ marginTop: 22 }}>
@@ -1596,11 +1623,24 @@ export default function Workspace() {
                   <div className="product-grid">
                     {products.map((p) => {
                       const courseId =
-                        p.config && typeof p.config === 'object' && typeof p.config.course_id === 'string'
+                        (typeof p.course_id === 'string' && p.course_id.trim()) ||
+                        (p.config && typeof p.config === 'object' && typeof p.config.course_id === 'string'
                           ? p.config.course_id.trim()
-                          : '';
+                          : '');
+                      const courseProjects = Array.isArray(p.course_projects)
+                        ? (p.course_projects as Row[])
+                        : [];
+                      const otherNames = courseProjects
+                        .filter((x) => String(x.project_id) !== pid)
+                        .map((x) => String(x.project_name || ''))
+                        .filter(Boolean);
+                      const ownProjectName =
+                        courseProjects.find((x) => String(x.project_id) === pid)?.project_name ||
+                        dashboard?.name ||
+                        me.projects?.find((pr: Row) => pr.id === pid)?.name ||
+                        '';
                       return (
-                      <article className="panel product-card" key={p.id}>
+                      <article className="panel product-card" key={p.id} data-crm-r11="product-course">
                         <div className="row">
                           <span className="tag">{me.product_kinds[p.kind]}</span>
                           <span className={p.active ? 'badge good' : 'badge'}>{p.active ? 'Активен' : 'Черновик'}</span>
@@ -1608,9 +1648,19 @@ export default function Workspace() {
                         <h2>{p.name}</h2>
                         <p className="muted">{p.description || 'Описание пока не добавлено'}</p>
                         {courseId ? (
-                          <p className="fine">
-                            Курс LMS: <code>{courseId}</code>
-                          </p>
+                          <>
+                            <p className="fine">
+                              Курс LMS: <code>{courseId}</code>
+                            </p>
+                            {ownProjectName ? (
+                              <p className="fine">
+                                Проект: <b>{String(ownProjectName)}</b>
+                              </p>
+                            ) : null}
+                            {otherNames.length > 0 ? (
+                              <p className="fine muted">Также в проектах: {otherNames.join(', ')}</p>
+                            ) : null}
+                          </>
                         ) : (
                           <p className="fine muted">Курс LMS не привязан</p>
                         )}

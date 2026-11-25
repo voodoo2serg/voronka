@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — CRM-R11 Course ↔ Project M2M polish
+
+- Course binds to many Projects via `crm_project_courses`; list/dashboard/bind return `project_name` + sibling `projects[]`.
+- Reverse lookup `GET /api/crm/courses/{course_id}/projects` (Project names for staff).
+- Product create/update with `config.course_id` auto-ensures M2M bind; product cards show Project name + «Также в проектах».
+- Overview: always-visible «Курсы LMS» panel with bind/unbind.
+- Tests: `tests/test_crm_r11_course_m2m.py`.
+
 ## Unreleased — CRM-R9 Payments vault + notify
 
 - Payment vault `ensure_runtime(force=True)` before ResultURL / FailURL / ЮKassa webhook / status / ping so credentials from CRM save apply across workers.

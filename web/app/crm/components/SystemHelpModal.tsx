@@ -102,8 +102,10 @@ export function SystemHelpModal({ onClose }: { onClose: () => void }) {
               </li>
               <li>
                 <strong>Продукт → курс LMS</strong> — в «Продукты» → «+ Продукт» / «Изменить» поле{' '}
-                <em>Курс LMS · externalId</em> пишется в <code>config.course_id</code>. При «Право
-                доступа» на заказе ключ ресурса подставляется из этой привязки.
+                <em>Курс LMS · externalId</em> пишется в <code>config.course_id</code> и в M2M
+                «проект ↔ курс». Один курс может висеть на нескольких проектах; на Обзоре и в
+                продуктах видно <em>имя Project</em>. При «Право доступа» на заказе ключ ресурса
+                подставляется из этой привязки.
               </li>
               <li>
                 <strong>AccessGrant</strong> — право на курс после оплаты/заказа. CRM выдаёт грант →

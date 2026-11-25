@@ -14,10 +14,11 @@ from sqlalchemy import select
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner, robokassa_ready
 from app.crm_models import Product, Promo, Order, Payment, Invoice, AccessGrant, Profile, ProviderEvent, EntitlementJob
 from app.crm_service import (
-    uid, KINDS, project_access, get_profile, audit, balance, money_minor, manager_scope,
+    uid, KINDS, project_access, get_profile, audit, balance, money_minor, manager_scope, project_ids,
 )
 from app.db import now as db_now
 from app.entitlement import queue_for_payment, redact_robokassa_params
+from app.projects_domain import course_projects_payload, ensure_project_course
 from app import integrations
 from app import ledger
 from app import person_graph
@@ -56,11 +57,36 @@ def _normalize_product_config(config: dict) -> dict:
     return out
 
 
+def _encode_product(db, row, accessible_ids: set[str] | None = None) -> dict:
+    """Product payload + CRM-R11 course→projects (Project name visible on product UI)."""
+    out = encode(row)
+    cfg = row.config if isinstance(row.config, dict) else {}
+    cid = cfg.get("course_id")
+    if isinstance(cid, str) and cid.strip():
+        out["course_id"] = cid.strip()
+        out["course_projects"] = course_projects_payload(db, cid.strip(), accessible_ids=accessible_ids)
+    else:
+        out["course_id"] = None
+        out["course_projects"] = []
+    return out
+
+
+def _sync_product_course_bind(db, project_id: str, config: dict, product_name: str = "") -> None:
+    """When Product.config.course_id is set, ensure M2M ProjectCourse row (course may hang on many Projects)."""
+    cid = config.get("course_id") if isinstance(config, dict) else None
+    if isinstance(cid, str) and cid.strip():
+        ensure_project_course(db, project_id, cid.strip(), label=(product_name or "").strip())
+
+
 @router.get("/projects/{pid}/products")
 def products(pid: str, admin=Depends(crm_actor)):
     with Session() as db:
         project_access(db, admin, pid)
-        return [encode(x) for x in db.scalars(select(Product).where(Product.project_id == pid))]
+        access_ids = set(project_ids(db, admin))
+        return [
+            _encode_product(db, x, accessible_ids=access_ids)
+            for x in db.scalars(select(Product).where(Product.project_id == pid))
+        ]
 
 
 @router.post("/projects/{pid}/products")
@@ -73,9 +99,12 @@ def add_product(pid: str, body: ProductBody, admin=Depends(crm_actor)):
     with Session.begin() as db:
         project_access(db, admin, pid)
         row = Product(id=uid(), project_id=pid, **data)
-        db.add(row); db.flush()
+        db.add(row)
+        db.flush()
+        _sync_product_course_bind(db, pid, row.config or {}, product_name=row.name)
         audit(db, admin, "product.created", product_id=row.id)
-        return encode(row)
+        access_ids = set(project_ids(db, admin))
+        return _encode_product(db, row, accessible_ids=access_ids)
 
 
 @router.put("/products/{product_id}")
@@ -88,8 +117,10 @@ def update_product(product_id: str, body: ProductBody, admin=Depends(crm_actor))
     with Session.begin() as db:
         row = must(db.get(Product, product_id)); project_access(db, admin, row.project_id)
         for key, value in data.items(): setattr(row, key, value)
+        _sync_product_course_bind(db, row.project_id, row.config or {}, product_name=row.name)
         audit(db, admin, "product.updated", product_id=row.id)
-        return encode(row)
+        access_ids = set(project_ids(db, admin))
+        return _encode_product(db, row, accessible_ids=access_ids)
 
 
 @router.post("/projects/{pid}/catalog-template")
