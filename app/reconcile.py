@@ -132,7 +132,7 @@ def detect_payment(db, project_id: str | None = None, limit: int = 100) -> list[
             )
         deal_id = f"deal.paid:{payment.id}"
         deal = db.scalar(select(IntegrationOutbox).where(IntegrationOutbox.event_id == deal_id))
-        if job.state == "applied" and not deal:
+        if payment.kind == "payment" and job.state == "applied" and not deal:
             findings.append(
                 _finding(
                     finding_id=f"deal_paid_missing:{payment.id}",
