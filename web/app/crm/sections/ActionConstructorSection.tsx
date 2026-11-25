@@ -523,6 +523,7 @@ export function ActionConstructorSection({
               setSelected(null);
               setEditorOpen(false);
               setPlusOpenAt(null);
+              setDryResult(null);
             }}
           >
             + Новая
@@ -543,6 +544,7 @@ export function ActionConstructorSection({
                   setSelected(loaded.length ? 0 : null);
                   setEditorOpen(Boolean(loaded.length));
                   setPlusOpenAt(null);
+                  setDryResult(null);
                 }}
               >
                 {String(c.name)}

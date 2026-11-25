@@ -333,11 +333,27 @@ def _reason_ru(code: str, detail: str | None = None) -> str:
         "vault_inactive": "Подключение выключено — включите его в Подключениях",
         "vault_secret_missing": "В подключении нет секрета — откройте Подключения и сохраните пароль/токен",
         "recipient_missing": "Укажите адрес получателя",
+        "smtp_port_invalid": "Некорректный SMTP порт в Подключениях",
+        "starttls_failed": "SMTP не поднял STARTTLS — пароль не отправляем по открытому каналу",
     }
     base = known.get(code) or code
     if detail:
         return f"{base}: {detail}"[:280]
     return base[:280]
+
+
+def _parse_smtp_port(raw: str | int | None, *, default: int = 587) -> tuple[int | None, str | None]:
+    """Return (port, error_code). Non-numeric / out-of-range → structured fail, not 500."""
+    if raw is None or str(raw).strip() == "":
+        return default, None
+    text = str(raw).strip()
+    try:
+        port = int(text)
+    except (TypeError, ValueError):
+        return None, "smtp_port_invalid"
+    if port < 1 or port > 65535:
+        return None, "smtp_port_invalid"
+    return port, None
 
 
 def _active_vault(db, project_id: str, vault_type: str):
@@ -415,7 +431,7 @@ def _email_transport(db, project_id: str, node: dict | None) -> dict[str, Any]:
         meta = row.meta if isinstance(row.meta, dict) else {}
         secrets = cv.reveal_secrets(row)
         host = str(meta.get("smtp_host") or "").strip()
-        port = str(meta.get("smtp_port") or "587").strip() or "587"
+        port_raw = meta.get("smtp_port")
         user = str(meta.get("smtp_user") or meta.get("from_address") or "").strip()
         password = str(secrets.get("smtp_password") or "").strip()
         frm = str(
@@ -425,27 +441,35 @@ def _email_transport(db, project_id: str, node: dict | None) -> dict[str, Any]:
             or ""
         ).strip()
         if not host:
-            host, port = mailu_client.smtp_defaults()
+            host, default_port = mailu_client.smtp_defaults()
+            if port_raw is None or str(port_raw).strip() == "":
+                port_raw = default_port
         if not host or not frm:
             return {"ok": False, "reason": "smtp_or_address_missing"}
         if not password:
             return {"ok": False, "reason": "vault_secret_missing", "vault_id": row.id}
+        port, port_err = _parse_smtp_port(port_raw)
+        if port_err:
+            return {"ok": False, "reason": port_err, "vault_id": row.id}
         return {
             "ok": True,
             "host": host,
-            "port": int(port or "587"),
+            "port": port,
             "user": user or frm,
             "password": password,
             "from": frm,
             "vault_id": row.id,
             "source": "vault",
+            "require_starttls": True,
         }
     # Legacy env SMTP (pre-vault / dual-read).
     host = (os.getenv("SMTP_HOST") or os.getenv("MAILU_SMTP_HOST") or "").strip()
     frm = str((node or {}).get("from_address") or os.getenv("SMTP_FROM") or "").strip()
     user = (os.getenv("SMTP_USER") or "").strip()
     password = (os.getenv("SMTP_PASSWORD") or "").strip()
-    port = int(os.getenv("SMTP_PORT") or os.getenv("MAILU_SMTP_PORT") or "587")
+    port, port_err = _parse_smtp_port(os.getenv("SMTP_PORT") or os.getenv("MAILU_SMTP_PORT") or "587")
+    if port_err:
+        return {"ok": False, "reason": port_err}
     if not host or not frm:
         return {"ok": False, "reason": "smtp_or_address_missing"}
     return {
@@ -457,6 +481,7 @@ def _email_transport(db, project_id: str, node: dict | None) -> dict[str, Any]:
         "from": frm,
         "vault_id": None,
         "source": "env",
+        "require_starttls": bool(user and password),
     }
 
 
@@ -508,6 +533,7 @@ def _dry_run_email(
     port = int(transport["port"])
     user = str(transport.get("user") or "")
     password = str(transport.get("password") or "")
+    require_tls = bool(transport.get("require_starttls") or (user and password))
     msg = EmailMessage()
     msg["Subject"] = f"[Проверка] {subject}"
     msg["From"] = frm
@@ -519,8 +545,18 @@ def _dry_run_email(
             try:
                 smtp.starttls()
                 smtp.ehlo()
-            except smtplib.SMTPException:
-                pass
+            except smtplib.SMTPException as tls_exc:
+                if require_tls:
+                    detail = str(tls_exc)[:160]
+                    return {
+                        "ok": False,
+                        "channel": "email",
+                        "reason": "starttls_failed",
+                        "message": _reason_ru("starttls_failed", detail),
+                        "preview": preview,
+                        "vault_id": transport.get("vault_id"),
+                        "source": transport.get("source"),
+                    }
             if user and password:
                 smtp.login(user, password)
             smtp.send_message(msg)

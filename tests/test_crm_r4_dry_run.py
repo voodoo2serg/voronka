@@ -272,12 +272,87 @@ def test_dry_run_telegram_api_fail_message(crm, monkeypatch):
     assert "chat not found" in delivery["message"]
 
 
+def test_dry_run_invalid_smtp_port_is_fail_not_500(crm):
+    crm.client.post(
+        "/api/crm/projects/p/connection-vault",
+        json={
+            "type": "email_smtp",
+            "label": "bad-port@",
+            "meta": {
+                "from_address": "badport@vodopetov.ru",
+                "smtp_host": "mail.vodopetov.ru",
+                "smtp_user": "badport@vodopetov.ru",
+                "smtp_port": "not-a-port",
+            },
+            "secrets": {"smtp_password": "x"},
+        },
+    )
+    created = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "Bad port",
+            "nodes": [{"id": "n1", "kind": "email", "title": "Письмо", "config": {"body": "x"}}],
+        },
+    ).json()
+    dry = crm.client.post(
+        f"/api/crm/action-chains/{created['id']}/dry-run",
+        json={"email": "me@example.ru", "telegram": ""},
+    )
+    assert dry.status_code == 200, dry.text
+    body = dry.json()
+    assert body["ok"] is False
+    assert body["status"] == "fail"
+    delivery = body["report"]["steps"][0]["deliveries"][0]
+    assert delivery["reason"] == "smtp_port_invalid"
+
+
+def test_dry_run_starttls_fail_does_not_login_plaintext(crm, monkeypatch):
+    class _TlsFailSMTP(_FakeSMTP):
+        def starttls(self):
+            raise smtplib.SMTPNotSupportedError("STARTTLS extension not supported")
+
+        def login(self, user, password):
+            raise AssertionError("login must not run after STARTTLS failure")
+
+    monkeypatch.setattr(smtplib, "SMTP", _TlsFailSMTP)
+    crm.client.post(
+        "/api/crm/projects/p/connection-vault",
+        json={
+            "type": "email_smtp",
+            "label": "tls@",
+            "meta": {
+                "from_address": "tls@vodopetov.ru",
+                "smtp_host": "mail.vodopetov.ru",
+                "smtp_user": "tls@vodopetov.ru",
+                "smtp_port": "587",
+            },
+            "secrets": {"smtp_password": "secret"},
+        },
+    )
+    created = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "TLS fail",
+            "nodes": [{"id": "n1", "kind": "email", "title": "Письмо", "config": {"body": "x"}}],
+        },
+    ).json()
+    dry = crm.client.post(
+        f"/api/crm/action-chains/{created['id']}/dry-run",
+        json={"email": "me@example.ru", "telegram": ""},
+    ).json()
+    assert dry["ok"] is False
+    delivery = dry["report"]["steps"][0]["deliveries"][0]
+    assert delivery["reason"] == "starttls_failed"
+    assert "STARTTLS" in delivery["message"]
+
+
 def test_frontend_shows_dryrun_status():
     ctor = (ROOT / "web" / "app/crm/sections/ActionConstructorSection.tsx").read_text(encoding="utf-8")
     assert "constructor-dryrun-status" in ctor
     assert "status_message" in ctor
     assert "Не доставлено" in ctor
     assert "Доставлено" in ctor
+    assert ctor.count("setDryResult(null)") >= 3  # inputs + chain switch / new
     css = (ROOT / "web/app/globals.css").read_text(encoding="utf-8")
     assert ".constructor-dryrun-status.is-ok" in css
     assert ".constructor-dryrun-status.is-fail" in css
