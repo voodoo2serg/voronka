@@ -337,6 +337,7 @@ def record_money(oid: str, body: MoneyBody, admin=Depends(crm_actor)):
                     )
             else:
                 ledger.record_refund_ledger(db, payment, order, reason=body.evidence)
+                queue_for_payment(db, payment)
             audit(db, admin, "money.recorded", order_id=oid, amount_minor=body.amount_minor, payment_kind=body.kind)
         return balance(db, order)
 
@@ -353,7 +354,7 @@ class GrantBody(Body):
 def grant_access(oid: str, body: GrantBody, admin=Depends(crm_actor)):
     staff_owner(admin)
     with Session.begin() as db:
-        order = must(db.get(Order, oid)); project_access(db, admin, order.project_id)
+        order = must(db.scalar(select(Order).where(Order.id == oid).with_for_update())); project_access(db, admin, order.project_id)
         prior = db.scalar(select(AccessGrant).where(AccessGrant.order_id == oid, AccessGrant.resource == body.resource, AccessGrant.capability == body.capability))
         if prior:
             raise HTTPException(409, "Такое назначение уже существует")
