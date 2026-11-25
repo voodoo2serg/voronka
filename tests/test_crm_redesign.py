@@ -200,6 +200,51 @@ def test_constructor_save_base_copy_in_frontend():
     assert "Базовая цепочка проекта" in wt or "базовой цепочки" in wt.lower()
 
 
+def test_action_chain_base_unique_per_project_scope(crm):
+    """CRM-R5: DB rejects two project-level is_base rows (Codex P1)."""
+    from sqlalchemy.exc import IntegrityError
+
+    first = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "Base A",
+            "nodes": [{"id": "u1", "kind": "finish", "title": "Готово", "config": {}}],
+        },
+    ).json()
+    assert first["is_base"] is True
+    with crm.db() as db:
+        twin = ActionChain(
+            id="dup-base-project",
+            project_id="p",
+            branch_id=None,
+            name="Dup base",
+            description="",
+            state="draft",
+            is_base=True,
+            nodes=[],
+            revision=1,
+        )
+        db.add(twin)
+        try:
+            db.commit()
+            raised = False
+        except IntegrityError:
+            db.rollback()
+            raised = True
+        assert raised is True
+        survivors = list(
+            db.scalars(
+                select(ActionChain).where(
+                    ActionChain.project_id == "p",
+                    ActionChain.branch_id.is_(None),
+                    ActionChain.is_base.is_(True),
+                )
+            )
+        )
+        assert len(survivors) == 1
+        assert survivors[0].id == first["id"]
+
+
 def test_chain_to_funnel_graph_validates():
     nodes = validate_action_nodes(
         [

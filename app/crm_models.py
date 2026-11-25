@@ -1,6 +1,6 @@
 """Additive CRM schema. Existing funnel tables and identifiers stay intact."""
 from datetime import datetime
-from sqlalchemy import String, Integer, BigInteger, Boolean, DateTime, JSON, ForeignKey, Text, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Integer, BigInteger, Boolean, DateTime, JSON, ForeignKey, Text, UniqueConstraint, CheckConstraint, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base, now
 
@@ -726,6 +726,22 @@ class ActionChain(Base):
     __tablename__ = "crm_action_chains"
     __table_args__ = (
         CheckConstraint("state IN ('draft', 'published', 'archived')"),
+        # CRM-R5: at most one base per Project (NULL branch) and per Branch.
+        Index(
+            "uq_crm_action_chains_project_base",
+            "project_id",
+            unique=True,
+            sqlite_where=text("is_base = 1 AND branch_id IS NULL"),
+            postgresql_where=text("is_base IS true AND branch_id IS NULL"),
+        ),
+        Index(
+            "uq_crm_action_chains_branch_base",
+            "project_id",
+            "branch_id",
+            unique=True,
+            sqlite_where=text("is_base = 1 AND branch_id IS NOT NULL"),
+            postgresql_where=text("is_base IS true AND branch_id IS NOT NULL"),
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)

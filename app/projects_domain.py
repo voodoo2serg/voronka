@@ -267,20 +267,30 @@ def get_base_action_chain(db, project_id: str, branch_id: str | None = None):
 
 
 def promote_action_chain_as_base(db, row) -> None:
-    """CRM-R5: Сохранить → this chain becomes the base for its Project/Branch scope."""
+    """CRM-R5: Сохранить → this chain becomes the base for its Project/Branch scope.
+
+    Locks existing base rows in-scope (FOR UPDATE) before flipping flags.
+    DB partial unique indexes enforce one base even under concurrent Save.
+    """
     from app.crm_models import ActionChain
 
-    q = select(ActionChain).where(
-        ActionChain.project_id == row.project_id,
-        ActionChain.is_base.is_(True),
-        ActionChain.id != row.id,
+    q = (
+        select(ActionChain)
+        .where(
+            ActionChain.project_id == row.project_id,
+            ActionChain.is_base.is_(True),
+        )
+        .with_for_update()
     )
     if row.branch_id:
         q = q.where(ActionChain.branch_id == row.branch_id)
     else:
         q = q.where(ActionChain.branch_id.is_(None))
     for other in db.scalars(q):
-        other.is_base = False
+        if other.id != row.id:
+            other.is_base = False
+    # Flush demotions first — SQLite enforces unique indexes per statement.
+    db.flush()
     row.is_base = True
 
 
