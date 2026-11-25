@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run from a parent directory containing clean checkouts of the release candidates.
-# Each Python checkout needs .venv from requirements-dev.txt. Solo-Pr needs npm ci.
+# Each Python checkout needs .venv from requirements-dev.txt. Install the locked
+# npm dependencies in solo_pr and voronka/web, and install Playwright Chromium.
 set -euo pipefail
 
 root="$(cd "${1:-.}" && pwd -P)"
@@ -29,6 +30,15 @@ for repo in voronka lms_end signal; do
         .venv/bin/python -m pytest -q --basetemp="$scratch/$repo"
     )
 done
+(
+    cd "$root/voronka"
+    PORTAL_BASE=/crm NEXT_PUBLIC_PORTAL=crm npm run --prefix web build
+    DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 MEDIA_ROOT="$scratch/media-voronka" RUN_BROWSER=1 \
+        .venv/bin/python -m pytest -q --basetemp="$scratch/voronka-browser" \
+        tests/test_editor_browser.py tests/test_crm_browser.py tests/test_crm_square_constructor_ia_browser.py
+    PORTAL_BASE=/ops NEXT_PUBLIC_PORTAL=ops npm run --prefix web build
+    npm run --prefix web typecheck
+)
 (
     cd "$root/solo_pr"
     npm run build:vps

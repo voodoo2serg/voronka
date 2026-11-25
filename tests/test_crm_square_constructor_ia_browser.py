@@ -14,14 +14,14 @@ from test_operational import system  # noqa: F401
 pytestmark = pytest.mark.skipif(os.getenv("RUN_BROWSER") != "1", reason="Browser job only")
 
 
-def test_start_plus_opens_kind_menu_not_cms(crm):
+def test_start_plus_opens_kind_menu_not_cms(crm, tmp_path):
     from playwright.sync_api import expect, sync_playwright
 
     root = Path("web/out").resolve()
     if not root.is_dir():
         pytest.fail("Run npm ci && npm run build:crm in web first")
 
-    shot_dir = Path(os.getenv("CRM_SCREENSHOT_DIR", "/opt/cursor/artifacts/square-ia"))
+    shot_dir = Path(os.getenv("CRM_SCREENSHOT_DIR") or tmp_path / "square-ia")
     shot_dir.mkdir(parents=True, exist_ok=True)
     errors: list[str] = []
     navigated_cms: list[str] = []
@@ -121,9 +121,12 @@ def test_start_plus_opens_kind_menu_not_cms(crm):
         expect(page.locator("#action-constructor")).to_be_visible()
 
         # Save / Проверить chrome present
-        expect(page.get_by_role("button", name="Сохранить", exact=True)).to_be_visible()
+        save = page.get_by_role("button", name="Сохранить", exact=True)
+        expect(save).to_be_visible()
         expect(page.get_by_role("button", name="Проверить", exact=True)).to_be_visible()
-        expect(page.get_by_text("базовая цепочка", exact=False)).to_be_visible()
+        expect(page.get_by_text("Сохранить сделает эту цепочку базой выбранного проекта/ветки", exact=True)).to_be_visible()
+        save.click()
+        expect(page.get_by_text("Сейчас базовая цепочка проекта", exact=True)).to_be_visible()
 
         assert not navigated_cms, navigated_cms
         assert not errors, errors
