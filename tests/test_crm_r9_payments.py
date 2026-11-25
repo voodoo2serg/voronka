@@ -64,6 +64,60 @@ def test_vault_force_reload_overrides_stale_environ(monkeypatch, tmp_path):
     payment_vault.ensure_runtime(force=True)
     assert os.getenv("ROBOKASSA_LOGIN") == "shop-b"
     assert os.getenv("ROBOKASSA_TEST_PASSWORD1") == "ccc333333333"
+    # Revoke password2 in file → force must unset process env.
+    path.write_text(
+        "\n".join(
+            [
+                "ROBOKASSA_LOGIN=shop-b",
+                "ROBOKASSA_TEST=1",
+                "ROBOKASSA_TEST_PASSWORD1=ccc333333333",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    payment_vault.ensure_runtime(force=True)
+    assert os.getenv("ROBOKASSA_TEST_PASSWORD2") in (None, "")
+
+
+def test_invalid_project_does_not_write_vault(crm, tmp_path, monkeypatch):
+    path = tmp_path / "guard.env"
+    monkeypatch.setenv("CRM_PAYMENT_SECRETS_PATH", str(path))
+    denied = crm.client.put(
+        "/api/crm/payment-providers/credentials",
+        json={
+            "provider": "robokassa",
+            "project_id": "no-such-project",
+            "fields": {"login": "should-not-persist", "test_password1": "x" * 12},
+        },
+    )
+    assert denied.status_code in {403, 404}
+    assert not path.is_file() or "should-not-persist" not in path.read_text(encoding="utf-8")
+
+
+def test_clear_credentials_clears_project_vault(crm):
+    saved = crm.client.put(
+        "/api/crm/payment-providers/credentials",
+        json={
+            "provider": "yookassa",
+            "project_id": "p",
+            "fields": {"shop_id": "keep-me", "secret_key": "secret-to-clear-ZZZZ"},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    cleared = crm.client.put(
+        "/api/crm/payment-providers/credentials",
+        json={
+            "provider": "yookassa",
+            "project_id": "p",
+            "fields": {"secret_key": ""},
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert os.getenv("YOOKASSA_SECRET_KEY") in (None, "")
+    listed = crm.client.get("/api/crm/projects/p/connection-vault").json()
+    yk = next(i for i in listed["items"] if i["type"] == "yookassa")
+    assert "secret_key" not in (yk.get("secret_masks") or {})
 
 
 def test_payments_credentials_upsert_vault_and_ping(crm):
@@ -267,14 +321,29 @@ def test_alert_rule_test_and_toggle(crm, monkeypatch):
         "/api/crm/staff-alert-rules",
         json={"kind": "paid", "channel": "telegram", "amount_minor": 0},
     ).json()
+    sibling = crm.client.post(
+        "/api/crm/staff-alert-rules",
+        json={"kind": "paid", "channel": "email", "amount_minor": 0},
+    ).json()
     tested = crm.client.post(f"/api/crm/staff-alert-rules/{rule['id']}/test")
     assert tested.status_code == 200, tested.text
-    assert tested.json()["ok"] is True
+    body = tested.json()
+    assert body["ok"] is True
+    assert len(body["results"]) == 1
+    assert body["results"][0]["rule_id"] == rule["id"]
+    with crm.db() as db:
+        events = list(db.scalars(select(StaffAlertEvent)))
+        assert all(ev.rule_id == rule["id"] for ev in events)
+        assert sibling["id"]  # sibling exists but was not fired
     patched = crm.client.patch(
         f"/api/crm/staff-alert-rules/{rule['id']}",
         json={"active": False},
     ).json()
     assert patched["active"] is False
+    # Inactive rule can still be tested in isolation.
+    retest = crm.client.post(f"/api/crm/staff-alert-rules/{rule['id']}/test")
+    assert retest.status_code == 200
+    assert len(retest.json()["results"]) == 1
 
 
 def test_payment_providers_expose_fail_and_webhook(crm):

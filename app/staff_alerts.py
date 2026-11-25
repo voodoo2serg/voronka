@@ -64,6 +64,58 @@ def _notify_telegram(text: str) -> dict[str, Any]:
         return {"channel": "telegram", "ok": False, "reason": str(exc)[:200]}
 
 
+def _deliver_rule(
+    db,
+    rule: StaffAlertRule,
+    *,
+    kind: str,
+    project_id: str | None,
+    order_id: str,
+    amount_minor: int,
+    paid: bool,
+    provider: str,
+    skip_dedupe: bool = False,
+) -> dict | None:
+    if rule.project_id and project_id and rule.project_id != project_id:
+        return None
+    if kind == "amount_threshold" and amount_minor < int(rule.amount_minor or 0):
+        return None
+    if kind == "paid" and not paid:
+        return None
+    if kind == "not_paid" and paid:
+        return None
+    dedupe = f"{kind}:{order_id}:{amount_minor}:{provider}"
+    if not skip_dedupe:
+        prior = db.scalar(
+            select(StaffAlertEvent).where(
+                StaffAlertEvent.rule_id == rule.id,
+                StaffAlertEvent.dedupe_key == dedupe,
+            )
+        )
+        if prior:
+            return None
+    subject = f"CRM платёж · {kind} · {amount_minor / 100:.2f} ₽"
+    body = (
+        f"Событие: {kind}\nЗаказ: {order_id}\nПроект: {project_id or '—'}\n"
+        f"Сумма (коп.): {amount_minor}\nПровайдер: {provider}\nОплачено: {paid}"
+    )
+    deliveries = []
+    if rule.channel in {"telegram", "both"}:
+        deliveries.append(_notify_telegram(f"{subject}\n{body}"))
+    if rule.channel in {"email", "both"}:
+        deliveries.append(_notify_email(subject, body))
+    row = StaffAlertEvent(
+        id=uid(),
+        rule_id=rule.id,
+        dedupe_key=dedupe if not skip_dedupe else f"test:{dedupe}:{uid()}",
+        payload={"deliveries": deliveries, "order_id": order_id, "amount_minor": amount_minor},
+        state="sent" if any(d.get("ok") for d in deliveries) else "failed",
+        created_at=now(),
+    )
+    db.add(row)
+    return {"rule_id": rule.id, "state": row.state, "deliveries": deliveries}
+
+
 def fire_payment_alerts(
     db,
     *,
@@ -85,41 +137,40 @@ def fire_payment_alerts(
     )
     results = []
     for rule in rules:
-        if rule.project_id and project_id and rule.project_id != project_id:
-            continue
-        if kind == "amount_threshold" and amount_minor < int(rule.amount_minor or 0):
-            continue
-        if kind == "paid" and not paid:
-            continue
-        if kind == "not_paid" and paid:
-            continue
-        dedupe = f"{kind}:{order_id}:{amount_minor}:{provider}"
-        prior = db.scalar(
-            select(StaffAlertEvent).where(
-                StaffAlertEvent.rule_id == rule.id,
-                StaffAlertEvent.dedupe_key == dedupe,
-            )
+        item = _deliver_rule(
+            db,
+            rule,
+            kind=kind,
+            project_id=project_id,
+            order_id=order_id,
+            amount_minor=amount_minor,
+            paid=paid,
+            provider=provider,
         )
-        if prior:
-            continue
-        subject = f"CRM платёж · {kind} · {amount_minor / 100:.2f} ₽"
-        body = (
-            f"Событие: {kind}\nЗаказ: {order_id}\nПроект: {project_id or '—'}\n"
-            f"Сумма (коп.): {amount_minor}\nПровайдер: {provider}\nОплачено: {paid}"
-        )
-        deliveries = []
-        if rule.channel in {"telegram", "both"}:
-            deliveries.append(_notify_telegram(f"{subject}\n{body}"))
-        if rule.channel in {"email", "both"}:
-            deliveries.append(_notify_email(subject, body))
-        row = StaffAlertEvent(
-            id=uid(),
-            rule_id=rule.id,
-            dedupe_key=dedupe,
-            payload={"deliveries": deliveries, "order_id": order_id, "amount_minor": amount_minor},
-            state="sent" if any(d.get("ok") for d in deliveries) else "failed",
-            created_at=now(),
-        )
-        db.add(row)
-        results.append({"rule_id": rule.id, "state": row.state, "deliveries": deliveries})
+        if item:
+            results.append(item)
     return results
+
+
+def fire_single_rule(
+    db,
+    rule: StaffAlertRule,
+    *,
+    order_id: str,
+    amount_minor: int,
+    paid: bool,
+    provider: str = "test",
+) -> list[dict]:
+    """CRM-R9: test/fire exactly one rule (even if inactive); never fan-out to siblings."""
+    item = _deliver_rule(
+        db,
+        rule,
+        kind=rule.kind,
+        project_id=rule.project_id,
+        order_id=order_id,
+        amount_minor=amount_minor,
+        paid=paid,
+        provider=provider,
+        skip_dedupe=True,
+    )
+    return [item] if item else []

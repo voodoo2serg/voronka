@@ -491,7 +491,10 @@ async def robokassa_result(request: Request):
 
 @router.api_route("/robokassa/fail", methods=["GET", "POST"])
 async def robokassa_fail(request: Request):
-    """FailURL landing — CRM-R9 not_paid staff alert (no money movement; SuccessURL still not SoR)."""
+    """FailURL landing — CRM-R9 not_paid staff alert (no money movement; SuccessURL still not SoR).
+
+    Browser redirect is unsigned — never trust OutSum; use stored invoice.amount_minor.
+    """
     from app import payment_vault
     from app import staff_alerts
 
@@ -500,11 +503,6 @@ async def robokassa_fail(request: Request):
     number = str(params.get("InvId") or params.get("inv_id") or "").strip()
     if not number:
         raise HTTPException(400, "InvId обязателен")
-    try:
-        value_raw = str(params.get("OutSum") or params.get("out_sum") or "0")
-        amount = money_minor(value_raw) if value_raw not in {"", "0"} else 0
-    except Exception:  # noqa: BLE001 — soft parse for browser FailURL
-        amount = 0
     with Session.begin() as db:
         invoice = db.scalar(select(Invoice).where(Invoice.number == number).with_for_update())
         if not invoice:
@@ -513,10 +511,9 @@ async def robokassa_fail(request: Request):
             return {"ok": True, "state": "paid", "ignored": True}
         if invoice.state != "failed":
             invoice.state = "failed"
-        if amount <= 0:
-            amount = int(invoice.amount_minor or 0)
+        amount = int(invoice.amount_minor or 0)
         order_row = db.get(Order, invoice.order_id)
-        event_key = f"robokassa-fail:{number}:{amount}"
+        event_key = f"robokassa-fail:{number}"
         prior = db.scalar(
             select(ProviderEvent).where(ProviderEvent.provider == "robokassa", ProviderEvent.event_key == event_key)
         )
@@ -527,7 +524,7 @@ async def robokassa_fail(request: Request):
                 event_key=event_key,
                 order_id=invoice.order_id,
                 invoice_id=invoice.id,
-                payload_redacted={"InvId": number, "OutSum": amount, "kind": "fail"},
+                payload_redacted={"InvId": number, "amount_minor": amount, "kind": "fail"},
                 payload_hash=hashlib.sha256(event_key.encode()).hexdigest(),
                 state="processed",
                 verified_at=db_now(),

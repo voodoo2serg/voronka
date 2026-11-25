@@ -275,11 +275,20 @@ def ensure_runtime_connection(db, row: ConnectionVault, secrets: dict[str, str])
     return conn
 
 
-def dual_write_payment(row: ConnectionVault, secrets: dict[str, str], meta: dict) -> None:
+def dual_write_payment(
+    row: ConnectionVault,
+    secrets: dict[str, str],
+    meta: dict,
+    *,
+    clear_secrets: list[str] | None = None,
+    clear_meta: list[str] | None = None,
+) -> None:
     """CRM-R9: vault row → global payment_vault file + process env (sandbox-safe)."""
     updates: dict[str, str | None] = {}
     if row.type == "robokassa":
-        if meta.get("login"):
+        if "login" in (clear_meta or []):
+            updates["ROBOKASSA_LOGIN"] = None
+        elif meta.get("login"):
             updates["ROBOKASSA_LOGIN"] = str(meta["login"])
         # Default sandbox when staff stores test passwords without an explicit mode flag.
         if "test_mode" in meta:
@@ -292,6 +301,13 @@ def dual_write_payment(row: ConnectionVault, secrets: dict[str, str], meta: dict
             updates["ROBOKASSA_RECEIPT_TAX"] = str(meta["receipt_tax"])
         if meta.get("receipt_sno"):
             updates["ROBOKASSA_RECEIPT_SNO"] = str(meta["receipt_sno"])
+        for key in clear_meta or []:
+            if key == "hash":
+                updates["ROBOKASSA_HASH"] = None
+            elif key == "receipt_tax":
+                updates["ROBOKASSA_RECEIPT_TAX"] = None
+            elif key == "receipt_sno":
+                updates["ROBOKASSA_RECEIPT_SNO"] = None
         mapping = {
             "password1": "ROBOKASSA_PASSWORD1",
             "password2": "ROBOKASSA_PASSWORD2",
@@ -299,16 +315,24 @@ def dual_write_payment(row: ConnectionVault, secrets: dict[str, str], meta: dict
             "test_password2": "ROBOKASSA_TEST_PASSWORD2",
         }
         for src, env_key in mapping.items():
-            if src in secrets:
+            if src in (clear_secrets or []):
+                updates[env_key] = None
+            elif src in secrets:
                 updates[env_key] = secrets[src]
     elif row.type == "yookassa":
-        if meta.get("shop_id"):
+        if "shop_id" in (clear_meta or []):
+            updates["YOOKASSA_SHOP_ID"] = None
+        elif meta.get("shop_id"):
             updates["YOOKASSA_SHOP_ID"] = str(meta["shop_id"])
         if "enabled" in meta:
             updates["YOOKASSA_ENABLED"] = "1" if meta.get("enabled") in (True, "1", "true", 1) else "0"
-        if "secret_key" in secrets:
+        if "secret_key" in (clear_secrets or []):
+            updates["YOOKASSA_SECRET_KEY"] = None
+        elif "secret_key" in secrets:
             updates["YOOKASSA_SECRET_KEY"] = secrets["secret_key"]
-        if "webhook_secret" in secrets:
+        if "webhook_secret" in (clear_secrets or []):
+            updates["YOOKASSA_WEBHOOK_SECRET"] = None
+        elif "webhook_secret" in secrets:
             updates["YOOKASSA_WEBHOOK_SECRET"] = secrets["webhook_secret"]
     if updates:
         payment_vault.apply_updates(updates)
@@ -321,9 +345,11 @@ def upsert_from_payment_credentials(
     provider: str,
     secrets: dict[str, str],
     meta: dict[str, Any],
+    clear_secrets: list[str] | None = None,
+    clear_meta: list[str] | None = None,
     actor_id: int | None = None,
 ) -> ConnectionVault | None:
-    """Payments UI → Connection Vault row (same project), then dual-write already applied upstream."""
+    """Payments UI → Connection Vault row (same project); honors explicit clears."""
     if provider not in {"robokassa", "yookassa"}:
         return None
     existing = list(
@@ -337,19 +363,29 @@ def upsert_from_payment_credentials(
     )
     row = existing[0] if existing else None
     clean_meta = sanitize_meta(provider, meta)
+    clear_sec = [k for k in (clear_secrets or []) if k in SECRET_FIELDS.get(provider, frozenset())]
+    clear_m = [k for k in (clear_meta or []) if k in META_FIELDS.get(provider, frozenset())]
     if row:
         merged_meta = dict(row.meta or {})
         merged_meta.update(clean_meta)
+        for key in clear_m:
+            merged_meta.pop(key, None)
         row.meta = sanitize_meta(provider, merged_meta)
-        if secrets:
-            blob, masks, has = merge_rotate(row.secrets_blob, secrets)
+        if secrets or clear_sec:
+            blob, masks, has = merge_rotate(row.secrets_blob, secrets, clear_keys=clear_sec)
             row.secrets_blob = blob
             row.secret_masks = masks
             row.has_secret = has
             row.rotated_at = now()
             row.rotated_by = actor_id
         row.updated_at = now()
-        dual_write_payment(row, reveal_secrets(row), row.meta or {})
+        dual_write_payment(
+            row,
+            reveal_secrets(row),
+            row.meta or {},
+            clear_secrets=clear_sec,
+            clear_meta=clear_m,
+        )
         return row
     blob, masks, has = seal_secrets(secrets)
     label = "Robokassa" if provider == "robokassa" else "ЮKassa"
@@ -369,7 +405,7 @@ def upsert_from_payment_credentials(
         updated_at=now(),
     )
     db.add(row)
-    dual_write_payment(row, secrets, clean_meta)
+    dual_write_payment(row, secrets, clean_meta, clear_secrets=clear_sec, clear_meta=clear_m)
     return row
 
 

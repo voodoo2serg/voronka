@@ -52,18 +52,30 @@ def load_into_environ(*, force: bool = False) -> dict[str, bool]:
     """Load vault file into os.environ.
 
     Default: fill empty keys only (compose/process env wins).
-    force=True: overlay every key present in the vault file (needed after CRM save /
-    Connection Vault dual-write so other workers and webhook handlers see new secrets).
+    force=True: make process env match the vault file for ALLOWED_KEYS — overlay
+    present keys and unset keys that were removed from the file (multi-worker
+    revoke). If the vault file is missing/empty, force does not wipe compose env.
     Never invent ROBOKASSA_LIVE_READY — it is not an ALLOWED_KEYS entry.
     """
     present: dict[str, bool] = {k: bool(os.getenv(k)) for k in ALLOWED_KEYS}
+    path = secrets_path()
+    if not path.is_file():
+        return present
     vault_map = read_vault_map()
+    if force:
+        for key in ALLOWED_KEYS:
+            if key in vault_map:
+                os.environ[key] = vault_map[key]
+            else:
+                os.environ.pop(key, None)
+            present[key] = bool(os.environ.get(key))
+        return present
     if not vault_map:
         return present
     for key, value in vault_map.items():
         if key not in ALLOWED_KEYS:
             continue
-        if force or key not in os.environ or os.environ.get(key) == "":
+        if key not in os.environ or os.environ.get(key) == "":
             os.environ[key] = value
         present[key] = bool(os.environ.get(key))
     return present

@@ -62,37 +62,51 @@ YOOKASSA_FIELD_MAP = {
 }
 
 
-def _fields_to_vault_parts(provider: str, fields: dict[str, str | None]) -> tuple[dict[str, str], dict[str, Any]]:
-    """Split CRM form fields into Connection Vault secrets + meta."""
+def _fields_to_vault_parts(
+    provider: str, fields: dict[str, str | None]
+) -> tuple[dict[str, str], dict[str, Any], list[str], list[str]]:
+    """Split CRM form fields into Connection Vault secrets + meta + explicit clears."""
     secrets: dict[str, str] = {}
     meta: dict[str, Any] = {}
+    clear_secrets: list[str] = []
+    clear_meta: list[str] = []
+
+    def _take_secret(key: str) -> None:
+        if key not in fields:
+            return
+        val = fields.get(key)
+        if val is None or str(val).strip() == "":
+            clear_secrets.append(key)
+        else:
+            secrets[key] = str(val).strip()
+
+    def _take_meta(key: str, *, as_bool: bool = False) -> None:
+        if key not in fields:
+            return
+        val = fields.get(key)
+        if val is None or str(val).strip() == "":
+            clear_meta.append(key)
+            return
+        if as_bool:
+            raw = str(val).strip().lower()
+            meta[key] = raw in {"1", "true", "yes", "on"}
+        else:
+            meta[key] = str(val).strip()
+
     if provider == "robokassa":
         for key in ("test_password1", "test_password2", "password1", "password2"):
-            val = fields.get(key)
-            if val is not None and str(val).strip():
-                secrets[key] = str(val).strip()
-        if fields.get("login") is not None and str(fields.get("login") or "").strip():
-            meta["login"] = str(fields["login"]).strip()
-        if fields.get("test_mode") is not None and str(fields.get("test_mode") or "").strip() != "":
-            raw = str(fields["test_mode"]).strip().lower()
-            meta["test_mode"] = raw in {"1", "true", "yes", "on"}
-        if fields.get("hash") is not None and str(fields.get("hash") or "").strip():
-            meta["hash"] = str(fields["hash"]).strip()
-        if fields.get("receipt_tax") is not None and str(fields.get("receipt_tax") or "").strip():
-            meta["receipt_tax"] = str(fields["receipt_tax"]).strip()
-        if fields.get("receipt_sno") is not None and str(fields.get("receipt_sno") or "").strip():
-            meta["receipt_sno"] = str(fields["receipt_sno"]).strip()
+            _take_secret(key)
+        _take_meta("login")
+        _take_meta("test_mode", as_bool=True)
+        _take_meta("hash")
+        _take_meta("receipt_tax")
+        _take_meta("receipt_sno")
     else:
         for key in ("secret_key", "webhook_secret"):
-            val = fields.get(key)
-            if val is not None and str(val).strip():
-                secrets[key] = str(val).strip()
-        if fields.get("shop_id") is not None and str(fields.get("shop_id") or "").strip():
-            meta["shop_id"] = str(fields["shop_id"]).strip()
-        if fields.get("enabled") is not None and str(fields.get("enabled") or "").strip() != "":
-            raw = str(fields["enabled"]).strip().lower()
-            meta["enabled"] = raw in {"1", "true", "yes", "on"}
-    return secrets, meta
+            _take_secret(key)
+        _take_meta("shop_id")
+        _take_meta("enabled", as_bool=True)
+    return secrets, meta, clear_secrets, clear_meta
 
 
 @router.get("/payment-providers/credentials")
@@ -150,22 +164,26 @@ def save_credentials(body: ProviderCredentials, admin=Depends(crm_actor)):
                 updates[env_key] = "1" if str(value).strip().lower() in {"1", "true", "yes", "on"} else "0"
         else:
             updates[env_key] = value
-    try:
-        present = payment_vault.apply_updates(updates)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
 
+    # Validate project access BEFORE mutating the global payment vault (Codex P1).
     vault_id = None
     with Session.begin() as db:
         if body.project_id:
             project_access(db, admin, body.project_id)
-            secrets, meta = _fields_to_vault_parts(body.provider, body.fields)
+        try:
+            present = payment_vault.apply_updates(updates)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if body.project_id:
+            secrets, meta, clear_secrets, clear_meta = _fields_to_vault_parts(body.provider, body.fields)
             row = vault.upsert_from_payment_credentials(
                 db,
                 project_id=body.project_id,
                 provider=body.provider,
                 secrets=secrets,
                 meta=meta,
+                clear_secrets=clear_secrets,
+                clear_meta=clear_meta,
                 actor_id=admin.telegram_id,
             )
             vault_id = row.id if row else None
@@ -175,6 +193,7 @@ def save_credentials(body: ProviderCredentials, admin=Depends(crm_actor)):
             "payment_credentials.saved",
             provider=body.provider,
             keys=[k for k, v in updates.items() if v is not None],
+            cleared=[k for k, v in updates.items() if v is None],
             project_id=body.project_id,
             vault_id=vault_id,
         )
@@ -273,16 +292,15 @@ def patch_alert_rule(rid: str, body: AlertRulePatch, admin=Depends(crm_actor)):
 
 @router.post("/staff-alert-rules/{rid}/test")
 def test_alert_rule(rid: str, admin=Depends(crm_actor)):
-    """Fire one synthetic delivery so staff can verify TG/email channels."""
+    """Fire one synthetic delivery for this rule only (no sibling fan-out)."""
     staff_owner(admin)
     with Session.begin() as db:
         row = must(db.get(StaffAlertRule, rid))
         paid = row.kind != "not_paid"
         amount = int(row.amount_minor or 0) or 10000
-        results = staff_alerts.fire_payment_alerts(
+        results = staff_alerts.fire_single_rule(
             db,
-            kind=row.kind,
-            project_id=row.project_id,
+            row,
             order_id=f"test-{uid()}",
             amount_minor=amount,
             paid=paid,
