@@ -80,16 +80,23 @@ def test_b03_constructor_media_overlay_and_activate(crm, monkeypatch, tmp_path):
 
         page.get_by_role("button", name="Запустить цепочку", exact=True).first.click()
         expect(page.locator("#action-constructor")).to_be_visible()
-        expect(page.get_by_role("group", name="Медиатека и подключения").get_by_text("Медиатека CRM")).to_be_visible()
-        expect(page.get_by_role("group", name="Медиатека и подключения").get_by_text("Подключения")).to_be_visible()
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
         expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
-        # VR-482: obligatory preview pane + vertical canvas
+        # CRM-R3: square IA + preview pane
         expect(page.get_by_role("region", name="Превью шага").or_(page.locator(".constructor-preview"))).to_be_visible()
-        expect(page.locator(".constructor-flow-vertical")).to_be_visible()
+        expect(page.locator(".constructor-flow-squares")).to_be_visible()
         page.screenshot(path=str(shot_dir / "b03-constructor.png"), full_page=True)
 
-        # Codex P1: media opens as overlay — constructor stays mounted; B-02 real library.
-        page.get_by_role("group", name="Медиатека и подключения").get_by_text("Медиатека CRM").click()
+        # CRM-R3: add a square, then top «+» → Медиатека overlay (constructor stays mounted).
+        page.locator(".constructor-plus").first.click()
+        page.get_by_role("menu", name="Типы шагов").get_by_role("menuitem").filter(
+            has_text="Telegram"
+        ).click()
+        expect(page.locator(".constructor-square.selected")).to_be_visible()
+        page.locator(".constructor-plus-top .constructor-plus").click()
+        page.get_by_role("menu", name="Содержимое шага").get_by_role(
+            "menuitem", name="Медиатека Файл из Signal (SSO)"
+        ).click()
         expect(page.locator(".media-library")).to_be_visible(timeout=10000)
         expect(page.locator("#action-constructor")).to_be_visible()
         expect(

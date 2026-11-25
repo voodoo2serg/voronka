@@ -94,7 +94,8 @@ def test_overview_hash_nav_and_constructor_preview(crm, monkeypatch, tmp_path):
         page.evaluate("location.hash = '#today'")
         expect(page.locator("#action-constructor")).to_be_visible(timeout=10000)
         expect(page.locator(".constructor-preview")).to_be_visible()
-        expect(page.locator(".constructor-flow-vertical")).to_be_visible()
+        expect(page.locator(".constructor-flow-squares")).to_be_visible()
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
         page.screenshot(path=str(shot_dir / "constructor-canvas-preview.png"), full_page=True)
 
         assert not errors, errors

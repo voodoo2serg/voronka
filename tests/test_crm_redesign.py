@@ -184,3 +184,11 @@ def test_nav_and_media_constants_in_frontend():
     assert "вставьте asset_id" not in ctor.lower()
     # B-02: in-CRM media library CTA (not only external Signal tab)
     assert "onOpenMediaLibrary" in ctor
+    # CRM-R3: square IA — right type menu, top content menu, bottom vault sender
+    assert "constructor-flow-squares" in ctor
+    assert "Добавить шаг справа" in ctor
+    assert "Содержимое шага" in ctor
+    assert "Текст / детали" in ctor
+    assert "constructor-square-sender" in ctor
+    assert "Проверить" in ctor
+    assert "Сохранить" in ctor

@@ -77,21 +77,29 @@ def test_rich_constructor_shots(crm):
         expect(page.locator("#action-constructor")).to_be_visible()
         expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
 
-        # CRM-R2: add steps from meta node_kinds via «+»
-        page.locator(".constructor-plus").first.click()
+        # CRM-R3: horizontal squares — right «+» types, top «+» content, bottom sender
+        expect(page.locator(".constructor-flow-squares")).to_be_visible()
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
+        page.locator('.constructor-connector-h .constructor-plus').first.click()
         menu = page.get_by_role("menu", name="Типы шагов")
         expect(menu).to_be_visible(timeout=10000)
         menu.get_by_role("menuitem").filter(has_text="Telegram").click()
         expect(page.locator(".constructor-square.selected")).to_be_visible()
+        expect(page.locator(".constructor-square-sender")).to_be_visible()
         expect(page.locator(".constructor-editor-drawer.is-open")).to_be_visible()
         expect(page.locator(".constructor-preview-frame")).to_be_visible()
+        page.locator(".constructor-plus-top .constructor-plus").click()
+        top = page.get_by_role("menu", name="Содержимое шага")
+        expect(top).to_be_visible()
+        top.get_by_role("menuitem").filter(has_text="Текст / детали").click()
         page.locator(".constructor-editor textarea").fill(
             "Здравствуйте! Это превью цепочки на холсте."
         )
-        page.locator(".constructor-plus").last.click()
+        page.locator('.constructor-connector-h .constructor-plus').last.click()
         page.get_by_role("menu", name="Типы шагов").get_by_role("menuitem").filter(
             has_text="Письмо"
         ).click()
+        expect(page.locator(".constructor-square-sender").filter(has_text="FROM")).to_be_visible()
         page.screenshot(path=str(shot_dir / "constructor-canvas-drawer-preview.png"), full_page=True)
 
         assert not errors, errors

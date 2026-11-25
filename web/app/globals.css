@@ -108,18 +108,36 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .constructor-hint{margin:0 0 4px}
 .constructor-flow{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:9px;background:#fcfcfb}
 .constructor-flow-vertical{flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:0;padding:20px 18px 24px;background:linear-gradient(180deg,#fafaf8 0%,#f3f3f0 100%)}
-.constructor-step-block{display:flex;flex-direction:column;align-items:center;width:100%}
+/* CRM-R3: horizontal square IA — fixed «Клиент получает» left, + right / + top / sender bottom */
+.constructor-flow-squares{flex-direction:row;flex-wrap:nowrap;align-items:stretch;gap:0;padding:28px 20px 24px;overflow-x:auto;background:linear-gradient(90deg,#fafaf8 0%,#f3f3f0 100%)}
+.constructor-flow-squares .constructor-fixed{flex:0 0 auto;width:160px;min-width:140px;max-width:180px;margin:0;align-self:center;padding:18px 14px}
+.constructor-step-block{display:flex;flex-direction:row;align-items:center;flex:0 0 auto}
+.constructor-flow-squares .constructor-step-block{width:auto}
 .constructor-connector{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:36px;width:100%;position:relative}
+.constructor-connector-h{flex-direction:row;min-height:0;min-width:44px;width:auto;height:auto;align-self:center}
 .constructor-connector::before{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;margin-left:-1px;background:#d8d8d2;z-index:0}
+.constructor-connector-h::before{top:50%;bottom:auto;left:0;right:0;width:auto;height:2px;margin-left:0;margin-top:-1px}
 .constructor-connector .constructor-plus-wrap,.constructor-connector .constructor-plus{position:relative;z-index:1;background:#fcfcfb}
 .constructor-fixed{min-width:140px;width:100%;max-width:420px;margin:0 auto;padding:14px;border:1px dashed #ccc;border-radius:8px;background:#fff;text-align:center}
-.constructor-square{position:relative;width:100%;max-width:420px;min-width:0;margin:0 auto;padding:22px 16px 16px;border:1px solid var(--line);border-radius:10px;background:#fff;box-shadow:0 1px 0 #00000006}
+.constructor-square{position:relative;width:220px;min-width:200px;max-width:240px;margin:0;padding:28px 14px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;box-shadow:0 1px 0 #00000006;display:flex;flex-direction:column;gap:10px}
 .constructor-square.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .constructor-step-index{position:absolute;top:10px;left:12px;font-size:10px;font-weight:700;letter-spacing:.08em;color:#999}
 .constructor-plus{width:32px;height:32px;border-radius:50%;font-size:18px;line-height:1}
+.constructor-plus-sm{width:28px;height:28px;font-size:16px}
 .constructor-plus.below{position:absolute;left:50%;bottom:-14px;transform:translateX(-50%)}
+.constructor-plus-top{position:absolute;top:-14px;left:50%;transform:translateX(-50%);z-index:2}
+.constructor-plus-top .constructor-plus{background:#fff}
 .constructor-media{position:absolute;top:-12px;left:50%;transform:translateX(-50%);width:28px;height:28px;border-radius:50%}
-.square-body{border:0;background:transparent;padding:4px 0 0;display:flex;flex-direction:column;gap:4px;width:100%;text-align:left;white-space:normal}
+.square-body{border:0;background:transparent;padding:4px 0 0;display:flex;flex-direction:column;gap:4px;width:100%;text-align:left;white-space:normal;flex:1}
+.constructor-square-snippet{display:block;margin-top:4px;font-size:12px;line-height:1.4;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.constructor-square-sender{margin-top:auto;padding-top:8px;border-top:1px dashed #e4e4df;display:flex;flex-direction:column;gap:4px}
+.constructor-square-sender label{margin:0;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.constructor-square-sender select{font-size:12px;padding:6px 8px;width:100%}
+.constructor-square-sender .eyebrow{letter-spacing:.06em;font-size:10px;color:#888}
+.constructor-square-sender .fine{margin:0;font-size:11px;line-height:1.35}
+.constructor-plus-menu-top{top:32px}
+.constructor-plus-menu-link{text-align:left;display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:6px;text-decoration:none;color:inherit}
+.constructor-plus-menu-link:hover{background:#f1f1ef;text-decoration:none}
 .constructor-kinds{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .constructor-config,.constructor-dryrun,.creds-form{display:flex;flex-direction:column;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
 .creds-form label.checkbox{display:flex;align-items:center;gap:8px}
@@ -171,4 +189,4 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .start-client{background:#fff8f0}
 @media(max-width:1200px){.constructor-stage{grid-template-columns:1fr}.constructor-side{position:static}}
 @media(max-width:1100px){.constructor-next-steps{grid-template-columns:1fr}}
-@media(max-width:900px){.constructor-layout{grid-template-columns:1fr}}
+@media(max-width:900px){.constructor-layout{grid-template-columns:1fr}.constructor-flow-squares{padding:22px 14px}}
