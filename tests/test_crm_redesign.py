@@ -320,17 +320,21 @@ def test_nav_and_media_constants_in_frontend():
     assert "addNodeKind" in ctor
     assert "addFromCartItem" not in ctor
     assert "constructor/cart" not in ctor
+    assert "cmsChainCartHref" not in portals
     assert "вставьте asset_id" not in ctor.lower()
     # B-02 / CRM-R10: in-CRM media overlay pick + Signal SSO return_to
     assert "onOpenMediaLibrary" in ctor
     assert "openMediaOverlay" in ctor
+    assert "openMediaBrowse" in ctor
     assert "pendingAssetId" in ctor
     assert "encodeURIComponent(opts.returnTo)" in portals
     # CRM-R3: square IA — right type menu, top content menu, bottom vault sender
     assert "constructor-flow-squares" in ctor
     assert "Добавить шаг справа" in ctor
+    assert 'testId="constructor-plus-start"' in ctor
     assert "Содержимое шага" in ctor
     assert "Текст / детали" in ctor
     assert "constructor-square-sender" in ctor
     assert "Проверить" in ctor
     assert "Сохранить" in ctor
+    assert "базовая цепочка" in ctor

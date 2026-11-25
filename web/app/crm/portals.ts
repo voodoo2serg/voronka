@@ -69,7 +69,7 @@ export function crmConstructorSquareHref(opts: {
   q.set('section', 'chains');
   if (opts.node) q.set('node', opts.node);
   if (opts.chain) q.set('chain', opts.chain);
-  let origin = PORTAL_URLS.crm;
+  let origin: string = PORTAL_URLS.crm;
   let path = '/crm/';
   if (typeof window !== 'undefined' && window.location?.origin) {
     origin = window.location.origin;
@@ -98,17 +98,6 @@ export function signalMediaLibraryHref(opts: {
     parts.push(`return_to=${encodeURIComponent(opts.returnTo)}`);
   }
   return `${PORTAL_URLS.signal}/?${parts.join('&')}`;
-}
-
-/**
- * @deprecated CRM-R2: CMS cart is no longer a staff path. Kept for ops/deep-link compat only.
- * Canonical route was `/#/admin/cart/<project_id>` or `/#/admin/cart`.
- */
-export function cmsChainCartHref(projectId?: string | null): string {
-  const path = projectId
-    ? `/#/admin/cart/${encodeURIComponent(projectId)}`
-    : '/#/admin/cart';
-  return `${PORTAL_URLS.cms}${path}`;
 }
 
 /** Open Signal CE (регламенты / campaigns) or message-set for a Person. */
