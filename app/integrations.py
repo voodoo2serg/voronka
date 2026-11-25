@@ -304,7 +304,23 @@ def record_payment_interaction(
 def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dict | None = None) -> None:
     if kind not in {"access.granted", "access.revoked"}:
         raise ValueError(kind)
-    event_id = f"{kind}:{grant.id}"
+    # Keep access events immutable across revoke/regrant transitions.
+    from app.crm_models import AccessGrant
+    db.scalar(select(AccessGrant).where(AccessGrant.id == grant.id).with_for_update())
+    stems = [f"access.granted:{grant.id}", f"access.revoked:{grant.id}"]
+    history = list(db.scalars(select(IntegrationOutbox).where(
+        IntegrationOutbox.destination == DEST_SOLO,
+        or_(*(IntegrationOutbox.event_id == stem for stem in stems),
+            *(IntegrationOutbox.event_id.like(f"{stem}:r%") for stem in stems)),
+    )))
+    latest = max(history, key=lambda row: (
+        int((row.payload or {}).get("revision") or 1), row.created_at, row.event_id
+    ), default=None)
+    if latest and latest.kind == kind:
+        return
+    revision = max((int((row.payload or {}).get("revision") or 1)
+                    for row in history), default=0) + 1
+    event_id = f"{kind}:{grant.id}" + (f":r{revision}" if latest else "")
     hints = _product_hints(order)
     if grant.resource and "course_id" not in hints:
         hints["course_id"] = grant.resource
@@ -317,6 +333,7 @@ def enqueue_access_event(db, *, kind: str, grant, order, profile, financial: dic
         payload={
             **_dual_event_fields(kind, event_id),
             "grant_id": grant.id,
+            "revision": revision,
             "order_id": order.id,
             "project_id": order.project_id,
             "profile_id": profile.id,
