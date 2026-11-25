@@ -48,28 +48,30 @@ def secrets_path() -> Path:
     return Path(os.getenv("CRM_PAYMENT_SECRETS_DEFAULT", ".voronka-payment-secrets.env"))
 
 
-def load_into_environ() -> dict[str, bool]:
-    """Load vault file into os.environ (does not override already-set process env)."""
-    path = secrets_path()
+def load_into_environ(*, force: bool = False) -> dict[str, bool]:
+    """Load vault file into os.environ.
+
+    Default: fill empty keys only (compose/process env wins).
+    force=True: overlay every key present in the vault file (needed after CRM save /
+    Connection Vault dual-write so other workers and webhook handlers see new secrets).
+    Never invent ROBOKASSA_LIVE_READY — it is not an ALLOWED_KEYS entry.
+    """
     present: dict[str, bool] = {k: bool(os.getenv(k)) for k in ALLOWED_KEYS}
-    if not path.is_file():
+    vault_map = read_vault_map()
+    if not vault_map:
         return present
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return present
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
+    for key, value in vault_map.items():
         if key not in ALLOWED_KEYS:
             continue
-        if key not in os.environ or os.environ.get(key) == "":
+        if force or key not in os.environ or os.environ.get(key) == "":
             os.environ[key] = value
         present[key] = bool(os.environ.get(key))
     return present
+
+
+def ensure_runtime(*, force: bool = True) -> dict[str, bool]:
+    """CRM-R9: call before pay-link / ResultURL / ЮKassa webhook / status / ping."""
+    return load_into_environ(force=force)
 
 
 def read_vault_map() -> dict[str, str]:

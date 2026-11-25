@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — CRM-R9 Payments vault + notify
+
+- Payment vault `ensure_runtime(force=True)` before ResultURL / FailURL / ЮKassa webhook / status / ping so credentials from CRM save apply across workers.
+- Payments UI and Подключения both write Robokassa/ЮKassa; Payments PUT upserts Connection Vault for the current project.
+- Robokassa FailURL `/api/crm/robokassa/fail` → `not_paid` staff alerts; ResultURL still fires `paid` + `amount_threshold`.
+- Staff alert test fire, toggle, and scan-unpaid; UI shows ResultURL / FailURL / webhook.
+- Q11: sandbox only — `ROBOKASSA_LIVE_READY` never flipped from UI.
+- Tests: `tests/test_crm_r9_payments.py`.
+
 ## Unreleased — CRM-R8 Drop «Прогрев» module
 
 - Remove CRM product surface: no outreach nav, no «Прогрев (dry_run)» on clients, no outreach section UI.

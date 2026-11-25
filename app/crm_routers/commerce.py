@@ -348,6 +348,9 @@ def access(oid: str, resource: str, capability: str, admin=Depends(crm_actor)):
 
 @router.post("/orders/{oid}/robokassa")
 def checkout(oid: str, amount_minor: int | None = None, admin=Depends(crm_actor)):
+    from app import payment_vault
+
+    payment_vault.ensure_runtime(force=True)
     test = os.getenv("ROBOKASSA_TEST", "1") == "1"
     merchant = os.getenv("ROBOKASSA_LOGIN")
     password = os.getenv("ROBOKASSA_TEST_PASSWORD1" if test else "ROBOKASSA_PASSWORD1")
@@ -401,6 +404,10 @@ def checkout(oid: str, amount_minor: int | None = None, admin=Depends(crm_actor)
 
 @router.api_route("/robokassa/result", methods=["GET", "POST"])
 async def robokassa_result(request: Request):
+    from app import payment_vault
+    from app import staff_alerts
+
+    payment_vault.ensure_runtime(force=True)
     params = request.query_params if request.method == "GET" else await request.form()
     if any(len(params.getlist(k)) != 1 for k in ("OutSum", "InvId", "SignatureValue")):
         raise HTTPException(400, "Неоднозначные параметры")
@@ -457,7 +464,6 @@ async def robokassa_result(request: Request):
                 # Live money stays even if entitlement/outbox later fails.
                 queue_for_payment(db, payment)
             invoice.state = "paid"
-            from app import staff_alerts
 
             order_row = db.get(Order, invoice.order_id)
             staff_alerts.fire_payment_alerts(
@@ -481,6 +487,64 @@ async def robokassa_result(request: Request):
         prior_event.state = "processed"
         prior_event.processed_at = db_now()
     return Response("OK" + number, media_type="text/plain")
+
+
+@router.api_route("/robokassa/fail", methods=["GET", "POST"])
+async def robokassa_fail(request: Request):
+    """FailURL landing — CRM-R9 not_paid staff alert (no money movement; SuccessURL still not SoR)."""
+    from app import payment_vault
+    from app import staff_alerts
+
+    payment_vault.ensure_runtime(force=True)
+    params = request.query_params if request.method == "GET" else await request.form()
+    number = str(params.get("InvId") or params.get("inv_id") or "").strip()
+    if not number:
+        raise HTTPException(400, "InvId обязателен")
+    try:
+        value_raw = str(params.get("OutSum") or params.get("out_sum") or "0")
+        amount = money_minor(value_raw) if value_raw not in {"", "0"} else 0
+    except Exception:  # noqa: BLE001 — soft parse for browser FailURL
+        amount = 0
+    with Session.begin() as db:
+        invoice = db.scalar(select(Invoice).where(Invoice.number == number).with_for_update())
+        if not invoice:
+            raise HTTPException(404, "Счёт не найден")
+        if invoice.state == "paid":
+            return {"ok": True, "state": "paid", "ignored": True}
+        if invoice.state != "failed":
+            invoice.state = "failed"
+        if amount <= 0:
+            amount = int(invoice.amount_minor or 0)
+        order_row = db.get(Order, invoice.order_id)
+        event_key = f"robokassa-fail:{number}:{amount}"
+        prior = db.scalar(
+            select(ProviderEvent).where(ProviderEvent.provider == "robokassa", ProviderEvent.event_key == event_key)
+        )
+        if not prior:
+            prior = ProviderEvent(
+                id=uid(),
+                provider="robokassa",
+                event_key=event_key,
+                order_id=invoice.order_id,
+                invoice_id=invoice.id,
+                payload_redacted={"InvId": number, "OutSum": amount, "kind": "fail"},
+                payload_hash=hashlib.sha256(event_key.encode()).hexdigest(),
+                state="processed",
+                verified_at=db_now(),
+                processed_at=db_now(),
+                created_at=db_now(),
+            )
+            db.add(prior)
+        staff_alerts.fire_payment_alerts(
+            db,
+            kind="not_paid",
+            project_id=order_row.project_id if order_row else None,
+            order_id=invoice.order_id,
+            amount_minor=amount,
+            paid=False,
+            provider="robokassa",
+        )
+    return {"ok": True, "state": "failed", "invoice": number}
 
 
 @router.get("/orders/{oid}/entitlement-jobs")

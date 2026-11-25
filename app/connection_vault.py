@@ -276,17 +276,22 @@ def ensure_runtime_connection(db, row: ConnectionVault, secrets: dict[str, str])
 
 
 def dual_write_payment(row: ConnectionVault, secrets: dict[str, str], meta: dict) -> None:
-    """One-release dual-write into global payment_vault env file."""
+    """CRM-R9: vault row → global payment_vault file + process env (sandbox-safe)."""
     updates: dict[str, str | None] = {}
     if row.type == "robokassa":
         if meta.get("login"):
             updates["ROBOKASSA_LOGIN"] = str(meta["login"])
+        # Default sandbox when staff stores test passwords without an explicit mode flag.
         if "test_mode" in meta:
             updates["ROBOKASSA_TEST"] = "1" if meta.get("test_mode") in (True, "1", "true", 1) else "0"
+        elif secrets.get("test_password1") or secrets.get("test_password2"):
+            updates["ROBOKASSA_TEST"] = "1"
         if meta.get("hash"):
             updates["ROBOKASSA_HASH"] = str(meta["hash"])
         if meta.get("receipt_tax"):
             updates["ROBOKASSA_RECEIPT_TAX"] = str(meta["receipt_tax"])
+        if meta.get("receipt_sno"):
+            updates["ROBOKASSA_RECEIPT_SNO"] = str(meta["receipt_sno"])
         mapping = {
             "password1": "ROBOKASSA_PASSWORD1",
             "password2": "ROBOKASSA_PASSWORD2",
@@ -307,6 +312,65 @@ def dual_write_payment(row: ConnectionVault, secrets: dict[str, str], meta: dict
             updates["YOOKASSA_WEBHOOK_SECRET"] = secrets["webhook_secret"]
     if updates:
         payment_vault.apply_updates(updates)
+
+
+def upsert_from_payment_credentials(
+    db,
+    *,
+    project_id: str,
+    provider: str,
+    secrets: dict[str, str],
+    meta: dict[str, Any],
+    actor_id: int | None = None,
+) -> ConnectionVault | None:
+    """Payments UI → Connection Vault row (same project), then dual-write already applied upstream."""
+    if provider not in {"robokassa", "yookassa"}:
+        return None
+    existing = list(
+        db.scalars(
+            select(ConnectionVault).where(
+                ConnectionVault.project_id == project_id,
+                ConnectionVault.type == provider,
+                ConnectionVault.active.is_(True),
+            )
+        )
+    )
+    row = existing[0] if existing else None
+    clean_meta = sanitize_meta(provider, meta)
+    if row:
+        merged_meta = dict(row.meta or {})
+        merged_meta.update(clean_meta)
+        row.meta = sanitize_meta(provider, merged_meta)
+        if secrets:
+            blob, masks, has = merge_rotate(row.secrets_blob, secrets)
+            row.secrets_blob = blob
+            row.secret_masks = masks
+            row.has_secret = has
+            row.rotated_at = now()
+            row.rotated_by = actor_id
+        row.updated_at = now()
+        dual_write_payment(row, reveal_secrets(row), row.meta or {})
+        return row
+    blob, masks, has = seal_secrets(secrets)
+    label = "Robokassa" if provider == "robokassa" else "ЮKassa"
+    row = ConnectionVault(
+        id=uid(),
+        project_id=project_id,
+        type=provider,
+        label=label,
+        meta=clean_meta,
+        secrets_blob=blob,
+        secret_masks=masks,
+        has_secret=has,
+        active=True,
+        legacy_source="payment_settings",
+        created_by=actor_id,
+        created_at=now(),
+        updated_at=now(),
+    )
+    db.add(row)
+    dual_write_payment(row, secrets, clean_meta)
+    return row
 
 
 def sync_legacy_into_vault(db, project_id: str, actor_id: int | None = None) -> list[ConnectionVault]:
