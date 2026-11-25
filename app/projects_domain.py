@@ -221,9 +221,64 @@ def is_converted_start_profile(profile) -> bool:
     return CONVERTED_TAG in tags
 
 
-def start_inbox_metrics(db, project: Project) -> dict:
-    """CRM-R7: contacted / open / converted for system Project «Старт»."""
-    from app.crm_models import Activity, Profile
+def _start_lead_last_action(db, profile, project_id: str) -> tuple[str, str | None, bool]:
+    """Prefer Activity; fall back to project-scoped message Events (same as contacts list)."""
+    from datetime import timezone
+
+    from app.crm_models import Activity
+    from app.db import Connection, Event, Identity
+
+    last = db.scalar(
+        select(Activity)
+        .where(Activity.profile_id == profile.id)
+        .order_by(Activity.created_at.desc(), Activity.id.desc())
+        .limit(1)
+    )
+    linked = select(Identity.connection_id).join(Connection).where(
+        Identity.contact_id == profile.contact_id,
+        Connection.project_id == project_id,
+    )
+    event = db.scalar(
+        select(Event)
+        .where(
+            Event.contact_id == profile.contact_id,
+            Event.connection_id.in_(linked),
+            Event.kind.in_(["message.received", "message.sent", "manager.message_queued"]),
+        )
+        .order_by(Event.created_at.desc())
+        .limit(1)
+    )
+    event_labels = {
+        "message.received": "Получено сообщение",
+        "message.sent": "Платформа приняла сообщение",
+        "manager.message_queued": "Ответ менеджера в очереди",
+    }
+    if event and (
+        not last
+        or event.created_at.replace(tzinfo=timezone.utc)
+        > last.created_at.replace(tzinfo=timezone.utc)
+    ):
+        return (
+            event_labels.get(event.kind, event.kind),
+            event.created_at.isoformat() if event.created_at else None,
+            True,
+        )
+    if last:
+        return (
+            (last.outcome or last.kind or ""),
+            last.created_at.isoformat() if last.created_at else None,
+            True,
+        )
+    return ("", None, False)
+
+
+def start_inbox_metrics(db, project: Project, admin=None) -> dict:
+    """CRM-R7: contacted / open / converted for system Project «Старт».
+
+    When ``admin`` is a manager, only assigned profiles are included (same as contacts list).
+    """
+    from app.crm_models import Profile
+    from app.crm_service import assigned_profile_filter
 
     if not is_start_project(project):
         return {
@@ -233,13 +288,10 @@ def start_inbox_metrics(db, project: Project) -> dict:
             "start_converted_count": 0,
             "start_leads": [],
         }
-    profiles = list(
-        db.scalars(
-            select(Profile)
-            .where(Profile.project_id == project.id)
-            .order_by(Profile.created_at.desc(), Profile.id)
-        )
-    )
+    query = select(Profile).where(Profile.project_id == project.id)
+    if admin is not None:
+        query = query.where(assigned_profile_filter(admin))
+    profiles = list(db.scalars(query.order_by(Profile.created_at.desc(), Profile.id)))
     open_rows: list = []
     converted_rows: list = []
     for row in profiles:
@@ -250,13 +302,8 @@ def start_inbox_metrics(db, project: Project) -> dict:
     contacted = 0
     lead_items: list[dict] = []
     for row in open_rows:
-        last = db.scalar(
-            select(Activity)
-            .where(Activity.profile_id == row.id)
-            .order_by(Activity.created_at.desc(), Activity.id.desc())
-            .limit(1)
-        )
-        if last:
+        last_action, last_at, was_contacted = _start_lead_last_action(db, row, project.id)
+        if was_contacted:
             contacted += 1
         if len(lead_items) < 12:
             extra = profile_converted_extra(row)
@@ -269,9 +316,9 @@ def start_inbox_metrics(db, project: Project) -> dict:
                     "source": row.source or "",
                     "person_role": row.person_role or "lead",
                     "created_at": row.created_at.isoformat() if row.created_at else None,
-                    "last_action": (last.outcome if last else "") or (last.kind if last else ""),
-                    "last_action_at": last.created_at.isoformat() if last and last.created_at else None,
-                    "contacted": bool(last),
+                    "last_action": last_action,
+                    "last_action_at": last_at,
+                    "contacted": was_contacted,
                     "service": str(extra.get("service") or "")[:200],
                 }
             )

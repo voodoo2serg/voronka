@@ -180,6 +180,89 @@ def test_start_dashboard_inbox_metrics_and_convert(crm, monkeypatch):
     assert bad.status_code == 422
 
 
+def test_manager_scope_on_start_dashboard_and_convert(crm, monkeypatch):
+    """Codex P1: managers only see/convert assigned Старт leads."""
+    monkeypatch.setenv("INTEGRATION_INBOUND_TOKEN", "inbound-secret")
+    monkeypatch.delenv("DEFAULT_PROJECT_ID", raising=False)
+
+    with crm.db.begin() as db:
+        start = ensure_start_project(db)
+        start_id = start.id
+
+    mine_raw = json.dumps(
+        {
+            "event_id": "r7-mgr-mine",
+            "kind": "lead.created",
+            "email": "r7.mine@example.ru",
+            "name": "Мой Старт",
+            "consent": True,
+            "source": "solo_pr",
+        }
+    ).encode()
+    other_raw = json.dumps(
+        {
+            "event_id": "r7-mgr-other",
+            "kind": "lead.created",
+            "email": "r7.other@example.ru",
+            "name": "Чужой Старт",
+            "consent": True,
+            "source": "solo_pr",
+        }
+    ).encode()
+    mine = crm.client.post(
+        "/api/crm/integrations/leads",
+        content=mine_raw,
+        headers=_auth_headers("inbound-secret", mine_raw),
+    ).json()
+    other = crm.client.post(
+        "/api/crm/integrations/leads",
+        content=other_raw,
+        headers=_auth_headers("inbound-secret", other_raw),
+    ).json()
+
+    assert (
+        crm.client.post(
+            "/api/crm/staff",
+            json={
+                "login": "r7-mgr",
+                "password": "manager-password-123",
+                "role": "manager",
+                "project_ids": [start_id, "p"],
+            },
+        ).status_code
+        == 200
+    )
+    staff = crm.client.get("/api/crm/staff").json()
+    mid = next(s["id"] for s in staff if s["login"] == "r7-mgr")
+    with crm.db.begin() as db:
+        db.get(Profile, mine["profile_id"]).owner_id = mid
+        db.get(Profile, other["profile_id"]).owner_id = 123
+
+    login = crm.client.post(
+        "/api/crm/login",
+        json={"login": "r7-mgr", "password": "manager-password-123"},
+    ).json()
+    crm.client.headers["Authorization"] = "Bearer " + login["token"]
+
+    dash = crm.client.get(f"/api/crm/projects/{start_id}/dashboard").json()
+    lead_ids = {x["id"] for x in dash.get("start_leads") or []}
+    assert mine["profile_id"] in lead_ids
+    assert other["profile_id"] not in lead_ids
+    assert dash["start_open_count"] == 1
+
+    denied = crm.client.post(
+        f"/api/crm/contacts/{other['profile_id']}/convert",
+        json={"project_id": "p", "person_role": "client"},
+    )
+    assert denied.status_code == 404
+
+    ok = crm.client.post(
+        f"/api/crm/contacts/{mine['profile_id']}/convert",
+        json={"project_id": "p", "person_role": "client"},
+    )
+    assert ok.status_code == 200, ok.text
+
+
 def test_contacts_and_frontend_r7_surface():
     constants = (ROOT / "web" / "app" / "crm" / "constants.ts").read_text(encoding="utf-8")
     assert "CLIENT_PAGE_SIZES" in constants
@@ -192,10 +275,18 @@ def test_contacts_and_frontend_r7_surface():
     assert "convertLeadForm" in ws
     assert "/contacts/" in ws and "/convert" in ws
     assert "dealPageSize" in ws
+    assert "setDealOffset(0)" in ws
     assert "CLIENT_PAGE_SIZES" in ws
     overview = ws.split("section === 'overview'")[1].split("section === 'inbox'")[0]
     assert "ProjectSalesDashboard" in overview
     assert "WorkTodayPanel" in overview  # demoted, still present (R6 contract)
+
+    domain = (ROOT / "app" / "projects_domain.py").read_text(encoding="utf-8")
+    assert "assigned_profile_filter" in domain
+    assert "message.received" in domain
+    board = (ROOT / "app" / "crm_routers" / "projects_board.py").read_text(encoding="utf-8")
+    assert "get_profile(db, admin, profile_id)" in board
+    assert "manager_scope(admin)" in board
 
     dash_ui = (ROOT / "web" / "app" / "crm" / "sections" / "ProjectSalesDashboard.tsx").read_text(
         encoding="utf-8"

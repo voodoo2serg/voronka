@@ -13,6 +13,7 @@
 - Project overview = sales dashboard (clients / deals / money) with «Старт» inbox metrics and convert-to-project.
 - `POST /contacts/{id}/convert` soft-converts a «Старт» lead into a commercial Project (+ optional Branch).
 - Clients and deals table: pagination **10 / 50 / Все**.
+- Manager scope on dashboard `start_leads` / `recent_deals` and convert (`get_profile`); contacted metric includes message Events; deal page resets on project switch.
 - Tests: `tests/test_crm_r7_start_dashboard.py`, `tests/test_crm_r7_dashboard_browser.py`.
 
 ## Unreleased — CRM-R4 Constructor «Проверить» end-to-end

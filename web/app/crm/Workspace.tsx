@@ -309,11 +309,13 @@ export default function Workspace() {
   }, [me]);
 
   // CART-04 / Codex P2: drop deep-linked cart when staff switches Project (selector / board).
+  // CRM-R7: also reset deals table page so a smaller project is not stuck on an empty page.
   useEffect(() => {
     const prev = prevPidRef.current;
     if (prev && prev !== pid) {
       setCartId('');
       setCartForProject('');
+      setDealOffset(0);
     }
     prevPidRef.current = pid;
   }, [pid]);
@@ -837,6 +839,7 @@ export default function Workspace() {
             value={pid}
             onChange={(e) => {
               setOffset(0);
+              setDealOffset(0);
               const next = e.target.value;
               setPid(next);
               if (next) {

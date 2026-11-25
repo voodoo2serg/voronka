@@ -5,7 +5,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
 from app.crm_models import (
@@ -19,7 +19,14 @@ from app.crm_models import (
     ProjectCourse,
     WorkItem,
 )
-from app.crm_service import audit, project_access, project_ids, uid
+from app.crm_service import (
+    audit,
+    get_profile,
+    manager_scope,
+    project_access,
+    project_ids,
+    uid,
+)
 from app.db import Project, now
 from app.projects_domain import (
     PERSON_ROLES,
@@ -132,12 +139,21 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
         project_access(db, admin, pid)
         project = must(db.get(Project, pid))
         board = project_board_row(db, project)
-        deals = db.scalar(select(func.count()).select_from(Deal).where(Deal.project_id == pid)) or 0
+        deal_filter = [Deal.project_id == pid]
+        if manager_scope(admin):
+            # Same visibility as GET /projects/{pid}/deals.
+            deal_filter.append(
+                or_(Deal.owner_id == admin.telegram_id, Profile.owner_id == admin.telegram_id)
+            )
+        deal_count_q = select(func.count()).select_from(Deal)
+        recent_q = select(Deal).where(Deal.project_id == pid)
+        if manager_scope(admin):
+            deal_count_q = deal_count_q.join(Profile, Profile.id == Deal.profile_id)
+            recent_q = recent_q.join(Profile, Profile.id == Deal.profile_id)
+        deals = db.scalar(deal_count_q.where(*deal_filter)) or 0
         open_deals = (
             db.scalar(
-                select(func.count())
-                .select_from(Deal)
-                .where(Deal.project_id == pid, Deal.stage.notin_(["won", "lost"]))
+                deal_count_q.where(*deal_filter, Deal.stage.notin_(["won", "lost"]))
             )
             or 0
         )
@@ -155,15 +171,14 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
         )
         courses = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
         base = get_base_action_chain(db, pid, None)
-        recent_deals = list(
-            db.scalars(
-                select(Deal)
-                .where(Deal.project_id == pid)
-                .order_by(Deal.created_at.desc(), Deal.id.desc())
-                .limit(8)
+        if manager_scope(admin):
+            recent_q = recent_q.where(
+                or_(Deal.owner_id == admin.telegram_id, Profile.owner_id == admin.telegram_id)
             )
+        recent_deals = list(
+            db.scalars(recent_q.order_by(Deal.created_at.desc(), Deal.id.desc()).limit(8))
         )
-        start_extra = start_inbox_metrics(db, project)
+        start_extra = start_inbox_metrics(db, project, admin=admin)
         return {
             **board,
             "deals_count": int(deals),
@@ -310,8 +325,8 @@ def convert_contact(profile_id: str, body: ConvertBody, admin=Depends(crm_actor)
     """CRM-R7: convert a «Старт» lead into a commercial Project / Branch."""
     target_project_id = body.project_id.strip()
     with Session.begin() as db:
-        row = must(db.get(Profile, profile_id))
-        project_access(db, admin, row.project_id)
+        # get_profile enforces project_access + profile_visible (manager scope).
+        row = get_profile(db, admin, profile_id)
         project_access(db, admin, target_project_id)
         source = must(db.get(Project, row.project_id))
         if not is_start_project(source):
