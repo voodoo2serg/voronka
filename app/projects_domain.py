@@ -608,8 +608,13 @@ def ensure_project_course(
     *,
     label: str = "",
     branch_id: str | None = None,
+    fill_label_if_empty: bool = False,
 ):
-    """Idempotent bind of LMS course_id to a Project (same course may hang on many projects)."""
+    """Idempotent bind of LMS course_id to a Project (same course may hang on many projects).
+
+    ``fill_label_if_empty``: product sync may suggest a label only for new/empty rows —
+    never overwrite a staff-entered label (CRM-R11 Codex P2).
+    """
     from app.crm_models import ProjectCourse
 
     cid = (course_id or "").strip()
@@ -621,9 +626,13 @@ def ensure_project_course(
             ProjectCourse.course_id == cid,
         )
     )
+    suggested = (label or "").strip()
     if prior:
-        if label is not None and str(label).strip():
-            prior.label = str(label).strip()
+        if fill_label_if_empty:
+            if suggested and not (prior.label or "").strip():
+                prior.label = suggested
+        elif suggested:
+            prior.label = suggested
         if branch_id is not None:
             prior.branch_id = branch_id or None
         return prior
@@ -632,12 +641,66 @@ def ensure_project_course(
         project_id=project_id,
         course_id=cid,
         branch_id=branch_id or None,
-        label=(label or "").strip(),
+        label=suggested,
         created_at=now(),
     )
     db.add(row)
     db.flush()
     return row
+
+
+def project_products_reference_course(
+    db, project_id: str, course_id: str, *, exclude_product_id: str | None = None
+) -> bool:
+    """True if any Product on the project still has config.course_id == course_id."""
+    from app.crm_models import Product
+
+    cid = (course_id or "").strip()
+    if not cid:
+        return False
+    for product in db.scalars(select(Product).where(Product.project_id == project_id)):
+        if exclude_product_id and product.id == exclude_product_id:
+            continue
+        cfg = product.config if isinstance(product.config, dict) else {}
+        raw = cfg.get("course_id")
+        if isinstance(raw, str) and raw.strip() == cid:
+            return True
+    return False
+
+
+def release_project_course_if_unused(
+    db,
+    project_id: str,
+    course_id: str,
+    *,
+    auto_labels: set[str] | None = None,
+) -> bool:
+    """Drop product-auto ProjectCourse when no Product still references it.
+
+    Keeps binds that look staff-explicit: nonempty label not in ``auto_labels``
+    (product names that owned the auto-bind). Manual + Курс labels survive.
+    """
+    from app.crm_models import ProjectCourse
+
+    cid = (course_id or "").strip()
+    if not cid:
+        return False
+    if project_products_reference_course(db, project_id, cid):
+        return False
+    row = db.scalar(
+        select(ProjectCourse).where(
+            ProjectCourse.project_id == project_id,
+            ProjectCourse.course_id == cid,
+        )
+    )
+    if not row:
+        return False
+    label = (row.label or "").strip()
+    if label and auto_labels is not None and label not in auto_labels:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
 
 
 def course_projects_payload(db, course_id: str, accessible_ids: set[str] | None = None) -> list[dict]:

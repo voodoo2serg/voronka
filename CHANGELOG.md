@@ -5,6 +5,7 @@
 - Course binds to many Projects via `crm_project_courses`; list/dashboard/bind return `project_name` + sibling `projects[]`.
 - Reverse lookup `GET /api/crm/courses/{course_id}/projects` (Project names for staff).
 - Product create/update with `config.course_id` auto-ensures M2M bind; product cards show Project name + «Также в проектах».
+- Product course change/clear drops unused auto-binds; product sync never overwrites staff course labels.
 - Overview: always-visible «Курсы LMS» panel with bind/unbind.
 - Tests: `tests/test_crm_r11_course_m2m.py`.
 
