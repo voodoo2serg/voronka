@@ -119,6 +119,90 @@ def test_unbind_leaves_other_project_bind(crm):
     assert missing.status_code == 404
 
 
+def test_product_course_change_releases_obsolete_auto_bind(crm):
+    """Codex P2: changing/clearing product course_id drops unused auto ProjectCourse."""
+    created = crm.client.post(
+        "/api/crm/projects/p/products",
+        json={
+            "name": "Автокурс",
+            "kind": "course",
+            "price_minor": 1000,
+            "active": True,
+            "config": {"course_id": "olat-old"},
+        },
+    ).json()
+    assert any(
+        x["course_id"] == "olat-old"
+        for x in crm.client.get("/api/crm/projects/p/courses").json()["items"]
+    )
+    updated = crm.client.put(
+        f"/api/crm/products/{created['id']}",
+        json={
+            "name": "Автокурс",
+            "kind": "course",
+            "price_minor": 1000,
+            "active": True,
+            "description": "",
+            "config": {"course_id": "olat-new"},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    courses = {x["course_id"] for x in crm.client.get("/api/crm/projects/p/courses").json()["items"]}
+    assert "olat-new" in courses
+    assert "olat-old" not in courses
+
+    cleared = crm.client.put(
+        f"/api/crm/products/{created['id']}",
+        json={
+            "name": "Автокурс",
+            "kind": "course",
+            "price_minor": 1000,
+            "active": True,
+            "description": "",
+            "config": {},
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    left = {x["course_id"] for x in crm.client.get("/api/crm/projects/p/courses").json()["items"]}
+    assert "olat-new" not in left
+
+
+def test_product_sync_preserves_manual_label_and_explicit_bind(crm):
+    """Codex P2: product sync must not overwrite staff labels; explicit binds survive clear."""
+    bind = crm.client.post(
+        "/api/crm/projects/p/courses",
+        json={"course_id": "olat-manual", "label": "Staff label"},
+    ).json()
+    assert bind["label"] == "Staff label"
+    product = crm.client.post(
+        "/api/crm/projects/p/products",
+        json={
+            "name": "Продукт с тем же курсом",
+            "kind": "course",
+            "price_minor": 1000,
+            "active": True,
+            "config": {"course_id": "olat-manual"},
+        },
+    ).json()
+    listed = crm.client.get("/api/crm/projects/p/courses").json()
+    row = next(x for x in listed["items"] if x["course_id"] == "olat-manual")
+    assert row["label"] == "Staff label"
+
+    crm.client.put(
+        f"/api/crm/products/{product['id']}",
+        json={
+            "name": "Продукт с тем же курсом",
+            "kind": "course",
+            "price_minor": 1000,
+            "active": True,
+            "description": "",
+            "config": {},
+        },
+    )
+    still = crm.client.get("/api/crm/projects/p/courses").json()
+    assert any(x["course_id"] == "olat-manual" and x["label"] == "Staff label" for x in still["items"])
+
+
 def test_frontend_shows_project_name_on_course_uis():
     panel = (ROOT / "web" / "app" / "crm" / "sections" / "ProjectCoursesPanel.tsx").read_text(
         encoding="utf-8"

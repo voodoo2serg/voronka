@@ -18,7 +18,11 @@ from app.crm_service import (
 )
 from app.db import now as db_now
 from app.entitlement import queue_for_payment, redact_robokassa_params
-from app.projects_domain import course_projects_payload, ensure_project_course
+from app.projects_domain import (
+    course_projects_payload,
+    ensure_project_course,
+    release_project_course_if_unused,
+)
 from app import integrations
 from app import ledger
 from app import person_graph
@@ -71,11 +75,44 @@ def _encode_product(db, row, accessible_ids: set[str] | None = None) -> dict:
     return out
 
 
-def _sync_product_course_bind(db, project_id: str, config: dict, product_name: str = "") -> None:
-    """When Product.config.course_id is set, ensure M2M ProjectCourse row (course may hang on many Projects)."""
-    cid = config.get("course_id") if isinstance(config, dict) else None
-    if isinstance(cid, str) and cid.strip():
-        ensure_project_course(db, project_id, cid.strip(), label=(product_name or "").strip())
+def _course_id_from_config(config) -> str | None:
+    if not isinstance(config, dict):
+        return None
+    raw = config.get("course_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def _sync_product_course_bind(
+    db,
+    project_id: str,
+    config: dict,
+    *,
+    product_name: str = "",
+    previous_course_id: str | None = None,
+) -> None:
+    """Ensure M2M for current course_id; drop obsolete product-auto bind when course changes/clears."""
+    new_cid = _course_id_from_config(config)
+    name = (product_name or "").strip()
+    if new_cid:
+        # Product sync never overwrites a staff-entered label.
+        ensure_project_course(
+            db,
+            project_id,
+            new_cid,
+            label=name,
+            fill_label_if_empty=True,
+        )
+    old_cid = (previous_course_id or "").strip() or None
+    if old_cid and old_cid != new_cid:
+        auto_labels = {name} if name else set()
+        release_project_course_if_unused(
+            db,
+            project_id,
+            old_cid,
+            auto_labels=auto_labels,
+        )
 
 
 @router.get("/projects/{pid}/products")
@@ -116,8 +153,15 @@ def update_product(product_id: str, body: ProductBody, admin=Depends(crm_actor))
     data["config"] = _normalize_product_config(data.get("config") or {})
     with Session.begin() as db:
         row = must(db.get(Product, product_id)); project_access(db, admin, row.project_id)
+        previous_course_id = _course_id_from_config(row.config)
         for key, value in data.items(): setattr(row, key, value)
-        _sync_product_course_bind(db, row.project_id, row.config or {}, product_name=row.name)
+        _sync_product_course_bind(
+            db,
+            row.project_id,
+            row.config or {},
+            product_name=row.name,
+            previous_course_id=previous_course_id,
+        )
         audit(db, admin, "product.updated", product_id=row.id)
         access_ids = set(project_ids(db, admin))
         return _encode_product(db, row, accessible_ids=access_ids)
