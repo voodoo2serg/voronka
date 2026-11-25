@@ -11,6 +11,8 @@ export function PaymentsSection({
   onBusy,
   onNotice,
   isOwner,
+  pid,
+  onProvidersChanged,
 }: {
   data: Row | null;
   api: ApiFn;
@@ -18,6 +20,8 @@ export function PaymentsSection({
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
   isOwner: boolean;
+  pid: string;
+  onProvidersChanged?: () => Promise<void> | void;
 }) {
   const [creds, setCreds] = useState<Row | null>(null);
   const [alerts, setAlerts] = useState<Row[]>([]);
@@ -77,13 +81,18 @@ export function PaymentsSection({
   const ykStatus = data.yookassa || {};
   const stats = data.stats || {};
 
+  async function afterSave() {
+    await loadOwnerExtras();
+    if (onProvidersChanged) await onProvidersChanged();
+  }
+
   return (
     <div className="two-column">
       <section className="panel" style={{ gridColumn: '1 / -1' }}>
         <p className="fine">
-          Учётные данные касс и ботов хранятся в{' '}
-          <a href="#connections">Подключениях (Connection Vault)</a>. Здесь — статус провайдеров,
-          ping и оповещения. Формы ниже dual-write в legacy payment vault на один релиз.
+          Учётные данные Robokassa и ЮKassa можно ввести здесь или в{' '}
+          <a href="#connections">Подключениях</a> — оба пути пишут в один vault и сразу доступны
+          webhook/ResultURL. Песочница до решения владельца (Q11); live-gate из UI не включается.
         </p>
       </section>
       <section className="panel">
@@ -101,7 +110,9 @@ export function PaymentsSection({
           <dt>ROBOKASSA_LIVE_READY</dt>
           <dd>{rkStatus.live_ready ? '1' : '0'}</dd>
           <dt>ResultURL</dt>
-          <dd className="mono">{rkStatus.result_url}</dd>
+          <dd className="mono">{String(rkStatus.result_url || '')}</dd>
+          <dt>FailURL</dt>
+          <dd className="mono">{String(rkStatus.fail_url || '')}</dd>
         </dl>
         {isOwner && (
           <form
@@ -117,28 +128,48 @@ export function PaymentsSection({
                 if (rk.login.trim()) fields.login = rk.login.trim();
                 if (rk.test_password1.trim()) fields.test_password1 = rk.test_password1.trim();
                 if (rk.test_password2.trim()) fields.test_password2 = rk.test_password2.trim();
-                await api('/payment-providers/credentials', 'PUT', { provider: 'robokassa', fields });
-                onNotice('Robokassa: учётные данные сохранены в vault (секреты не показываются)');
+                await api('/payment-providers/credentials', 'PUT', {
+                  provider: 'robokassa',
+                  fields,
+                  project_id: pid || undefined,
+                });
+                onNotice('Robokassa: сохранено в vault (секреты не показываются)');
                 setRk((p) => ({ ...p, login: '', test_password1: '', test_password2: '' }));
-                await loadOwnerExtras();
+                await afterSave();
               });
             }}
           >
             <h3>Учётные данные</h3>
             <label>
               Login магазина
-              <input value={rk.login} onChange={(e) => setRk({ ...rk, login: e.target.value })} placeholder={rkStatus.login_set ? 'задан — оставьте пустым' : ''} />
+              <input
+                value={rk.login}
+                onChange={(e) => setRk({ ...rk, login: e.target.value })}
+                placeholder={rkStatus.login_set ? 'задан — оставьте пустым' : ''}
+              />
             </label>
             <label>
               Тестовый пароль #1
-              <input type="password" value={rk.test_password1} onChange={(e) => setRk({ ...rk, test_password1: e.target.value })} />
+              <input
+                type="password"
+                value={rk.test_password1}
+                onChange={(e) => setRk({ ...rk, test_password1: e.target.value })}
+              />
             </label>
             <label>
               Тестовый пароль #2
-              <input type="password" value={rk.test_password2} onChange={(e) => setRk({ ...rk, test_password2: e.target.value })} />
+              <input
+                type="password"
+                value={rk.test_password2}
+                onChange={(e) => setRk({ ...rk, test_password2: e.target.value })}
+              />
             </label>
             <label className="checkbox">
-              <input type="checkbox" checked={rk.test_mode} onChange={(e) => setRk({ ...rk, test_mode: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={rk.test_mode}
+                onChange={(e) => setRk({ ...rk, test_mode: e.target.checked })}
+              />
               Песочница (ROBOKASSA_TEST=1)
             </label>
             <label>
@@ -159,6 +190,7 @@ export function PaymentsSection({
                 void onBusy(async () => {
                   const r = await api('/payment-providers/robokassa/test-ping', 'POST');
                   onNotice(r.ok ? 'Ping OK — credentials режима на месте' : 'Ping: не хватает login/паролей');
+                  await afterSave();
                 })
               }
             >
@@ -167,7 +199,8 @@ export function PaymentsSection({
           </form>
         )}
         <p className="fine">
-          Секреты не показываются. <code>ROBOKASSA_LIVE_READY</code> не включается из UI. Песочница OK.
+          В ЛК Robokassa укажите ResultURL и FailURL выше. Секреты не показываются.{' '}
+          <code>ROBOKASSA_LIVE_READY</code> не включается из UI.
         </p>
       </section>
       <div>
@@ -176,12 +209,14 @@ export function PaymentsSection({
             <h2>ЮKassa</h2>
             <span className={ykStatus.ready ? 'badge good' : 'badge'}>{ykStatus.adapter || 'webhook_v1'}</span>
           </div>
-          <p className="muted">{ykStatus.note}</p>
+          <p className="muted">{String(ykStatus.note || '')}</p>
           <dl className="status-dl">
             <dt>Webhook</dt>
-            <dd className="mono">{ykStatus.webhook_url}</dd>
+            <dd className="mono">{String(ykStatus.webhook_url || '')}</dd>
             <dt>YOOKASSA_ENABLED</dt>
             <dd>{ykStatus.enabled ? '1' : '0'}</dd>
+            <dt>Готовность</dt>
+            <dd>{ykStatus.ready ? 'shop+secret заданы' : 'нужны shop id и secret'}</dd>
           </dl>
           {isOwner && (
             <form
@@ -195,10 +230,14 @@ export function PaymentsSection({
                   if (yk.shop_id.trim()) fields.shop_id = yk.shop_id.trim();
                   if (yk.secret_key.trim()) fields.secret_key = yk.secret_key.trim();
                   if (yk.webhook_secret.trim()) fields.webhook_secret = yk.webhook_secret.trim();
-                  await api('/payment-providers/credentials', 'PUT', { provider: 'yookassa', fields });
+                  await api('/payment-providers/credentials', 'PUT', {
+                    provider: 'yookassa',
+                    fields,
+                    project_id: pid || undefined,
+                  });
                   onNotice('ЮKassa: учётные данные сохранены');
                   setYk((p) => ({ ...p, shop_id: '', secret_key: '', webhook_secret: '' }));
-                  await loadOwnerExtras();
+                  await afterSave();
                 });
               }}
             >
@@ -209,18 +248,43 @@ export function PaymentsSection({
               </label>
               <label>
                 Secret key
-                <input type="password" value={yk.secret_key} onChange={(e) => setYk({ ...yk, secret_key: e.target.value })} />
+                <input
+                  type="password"
+                  value={yk.secret_key}
+                  onChange={(e) => setYk({ ...yk, secret_key: e.target.value })}
+                />
               </label>
               <label>
                 Webhook secret
-                <input type="password" value={yk.webhook_secret} onChange={(e) => setYk({ ...yk, webhook_secret: e.target.value })} />
+                <input
+                  type="password"
+                  value={yk.webhook_secret}
+                  onChange={(e) => setYk({ ...yk, webhook_secret: e.target.value })}
+                />
               </label>
               <label className="checkbox">
-                <input type="checkbox" checked={yk.enabled} onChange={(e) => setYk({ ...yk, enabled: e.target.checked })} />
+                <input
+                  type="checkbox"
+                  checked={yk.enabled}
+                  onChange={(e) => setYk({ ...yk, enabled: e.target.checked })}
+                />
                 Intent включения (не live-gate)
               </label>
               <button className="primary" disabled={busy}>
                 Сохранить ЮKassa
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void onBusy(async () => {
+                    const r = await api('/payment-providers/yookassa/test-ping', 'POST');
+                    onNotice(r.ok ? 'Ping OK — shop+secret на месте' : 'Ping: не хватает shop/secret');
+                    await afterSave();
+                  })
+                }
+              >
+                Test ping
               </button>
             </form>
           )}
@@ -263,6 +327,7 @@ export function PaymentsSection({
                     channel: alertChannel,
                     amount_minor: Number(alertAmount) || 0,
                     active: true,
+                    project_id: pid || undefined,
                   });
                   onNotice('Правило оповещения создано');
                   await loadOwnerExtras();
@@ -279,7 +344,10 @@ export function PaymentsSection({
               </label>
               <label>
                 Канал
-                <select value={alertChannel} onChange={(e) => setAlertChannel(e.target.value as typeof alertChannel)}>
+                <select
+                  value={alertChannel}
+                  onChange={(e) => setAlertChannel(e.target.value as typeof alertChannel)}
+                >
                   <option value="telegram">Telegram</option>
                   <option value="email">Email</option>
                   <option value="both">Оба</option>
@@ -294,6 +362,18 @@ export function PaymentsSection({
               <button className="primary" disabled={busy}>
                 Добавить правило
               </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void onBusy(async () => {
+                    const r = await api('/staff-alert-rules/scan-unpaid', 'POST');
+                    onNotice(`Скан неоплаченных: оповещений ${r.fired || 0}`);
+                  })
+                }
+              >
+                Скан неоплаченных
+              </button>
             </form>
             <ul className="checklist">
               {alerts.map((a) => (
@@ -301,6 +381,36 @@ export function PaymentsSection({
                   <span className={a.active ? 'badge good' : 'badge'}>{String(a.kind)}</span>{' '}
                   {String(a.channel)}
                   {a.kind === 'amount_threshold' ? ` · ≥ ${money(a.amount_minor)}` : ''}
+                  <span className="constructor-actions" style={{ marginLeft: 8 }}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        void onBusy(async () => {
+                          await api(`/staff-alert-rules/${a.id}`, 'PATCH', { active: !a.active });
+                          onNotice(a.active ? 'Правило выключено' : 'Правило включено');
+                          await loadOwnerExtras();
+                        })
+                      }
+                    >
+                      {a.active ? 'Выкл.' : 'Вкл.'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        void onBusy(async () => {
+                          const r = await api(`/staff-alert-rules/${a.id}/test`, 'POST');
+                          const ok = Array.isArray(r.results)
+                            ? r.results.some((x: Row) => x.state === 'sent')
+                            : false;
+                          onNotice(ok ? 'Тест: доставлено хотя бы в один канал' : 'Тест: канал не ответил (проверьте бот/SMTP)');
+                        })
+                      }
+                    >
+                      Тест
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>

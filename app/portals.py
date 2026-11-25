@@ -120,8 +120,10 @@ def portal_chrome(role: str | None = None) -> list[dict]:
 
 
 def robokassa_status() -> dict:
+    from app import payment_vault
     from app import robokassa_receipt
 
+    payment_vault.ensure_runtime(force=True)
     login = bool(os.getenv("ROBOKASSA_LOGIN"))
     test = os.getenv("ROBOKASSA_TEST", "1") == "1"
     test_pw = bool(os.getenv("ROBOKASSA_TEST_PASSWORD1") and os.getenv("ROBOKASSA_TEST_PASSWORD2"))
@@ -131,6 +133,7 @@ def robokassa_status() -> dict:
     # ready = credentials for current mode; live still requires LIVE_READY (never flipped by this slice).
     ready = bool(login and passwords_set and (test or live_ready_flag))
     receipt_meta = robokassa_receipt.receipt_env_configured()
+    base = crm_public_base()
     return {
         "provider": "robokassa",
         "login_set": login,
@@ -141,7 +144,8 @@ def robokassa_status() -> dict:
         "hash": os.getenv("ROBOKASSA_HASH", "sha256"),
         "live_ready": live_ready_flag,
         "ready": ready,
-        "result_url": f"{crm_public_base()}/api/crm/robokassa/result",
+        "result_url": f"{base}/api/crm/robokassa/result",
+        "fail_url": f"{base}/api/crm/robokassa/fail",
         "receipt_in_adapter": True,
         "receipt_tax": receipt_meta["tax"],
         "receipt_sno": receipt_meta["sno"],
@@ -197,6 +201,9 @@ def robokassa_status() -> dict:
 
 
 def yookassa_skeleton() -> dict:
+    from app import payment_vault
+
+    payment_vault.ensure_runtime(force=True)
     shop = bool(os.getenv("YOOKASSA_SHOP_ID"))
     secret = bool(os.getenv("YOOKASSA_SECRET_KEY"))
     webhook = bool(os.getenv("YOOKASSA_WEBHOOK_SECRET"))
@@ -217,7 +224,7 @@ def yookassa_skeleton() -> dict:
         },
         "env_present": {"YOOKASSA_SHOP_ID": shop, "YOOKASSA_SECRET_KEY": secret, "YOOKASSA_WEBHOOK_SECRET": webhook},
         "webhook_url": f"{crm_public_base()}/api/crm/yookassa/webhook",
-        "note": "ЮKassa webhook принимает уведомления; боевые деньги — только после решения владельца.",
+        "note": "ЮKassa webhook принимает уведомления; боевые деньги — только после решения владельца (Q11 sandbox).",
         "secrets_exposed": False,
     }
 

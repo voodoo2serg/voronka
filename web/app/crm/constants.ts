@@ -41,7 +41,7 @@ export const sectionHints: Record<string, string> = {
   products: 'Курсы, экспертные услуги и форматы участия.',
   tasks: 'Задачи, встречи и материалы, которые вы обещали.',
   orders: 'Заказы, авансы, рассрочки и подтверждённые поступления.',
-  payments: 'Robokassa и ЮKassa: статус, webhook, оповещения. Учётные данные — в Подключениях.',
+  payments: 'Robokassa и ЮKassa: vault, ResultURL/FailURL/webhook, оповещения paid / not paid / порог.',
   connections: 'Connection Vault: боты, каналы, SMTP, Robokassa/ЮKassa. Секреты только ••••last4.',
   media: 'Медиатека проекта: список и создание в Signal SoR без ухода из CRM (B-02).',
   chains: 'Конструктор (#today): холст шагов, типы из списка, правая панель редактора, превью; медиатека + Подключения.',

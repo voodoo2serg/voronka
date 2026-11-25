@@ -80,9 +80,13 @@ function metaFieldsFor(type: string): { key: string; label: string }[] {
         { key: 'login', label: 'Login магазина' },
         { key: 'shop_id', label: 'Shop id (опц.)' },
         { key: 'hash', label: 'Hash (md5/sha256/sha512)' },
+        { key: 'test_mode', label: 'Песочница (1/0)' },
       ];
     case 'yookassa':
-      return [{ key: 'shop_id', label: 'Shop id' }];
+      return [
+        { key: 'shop_id', label: 'Shop id' },
+        { key: 'enabled', label: 'Intent включения (1/0)' },
+      ];
     default:
       return [];
   }
@@ -355,9 +359,17 @@ export function ConnectionsVaultSection({
                 for (const [k, v] of Object.entries(form.secrets)) {
                   if (v.trim()) secrets[k] = v.trim();
                 }
-                const meta: Record<string, string> = {};
+                const meta: Record<string, string | boolean> = {};
                 for (const [k, v] of Object.entries(form.meta)) {
-                  if (v.trim()) meta[k] = v.trim();
+                  if (!v.trim()) continue;
+                  if (k === 'test_mode' || k === 'enabled') {
+                    meta[k] = ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
+                  } else {
+                    meta[k] = v.trim();
+                  }
+                }
+                if (form.type === 'robokassa' && meta.test_mode === undefined) {
+                  meta.test_mode = true;
                 }
                 const created = await api(`/projects/${pid}/connection-vault`, 'POST', {
                   type: form.type,

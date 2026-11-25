@@ -1718,6 +1718,12 @@ export default function Workspace() {
                   onBusy={act}
                   onNotice={setNotice}
                   isOwner={me.role === 'owner'}
+                  pid={pid}
+                  onProvidersChanged={async () => {
+                    if (!pid) return;
+                    const next = await api(`/projects/${pid}/payment-providers`).catch(() => null);
+                    if (next) setPaymentProviders(next);
+                  }}
                 />
               )}
               {section === 'connections' && (

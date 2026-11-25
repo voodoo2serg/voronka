@@ -90,11 +90,15 @@ def payment_providers(pid: str, request: Request, admin=Depends(crm_actor)):
             .limit(1)
         )
         robokassa = portals.robokassa_status()
-        # Prefer request host when already on crm.* so ResultURL matches the live vhost.
+        yookassa = portals.yookassa_skeleton()
+        # Prefer request host when already on crm.* so ResultURL/FailURL/webhook match the live vhost.
         host = portals.normalize_host(request.headers.get("host"))
         if portals.is_crm_host(host):
             scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-            robokassa["result_url"] = f"{scheme}://{host}/api/crm/robokassa/result"
+            base = f"{scheme}://{host}"
+            robokassa["result_url"] = f"{base}/api/crm/robokassa/result"
+            robokassa["fail_url"] = f"{base}/api/crm/robokassa/fail"
+            yookassa["webhook_url"] = f"{base}/api/crm/yookassa/webhook"
         robokassa["last_result"] = (
             {
                 "id": last.id,
@@ -108,7 +112,7 @@ def payment_providers(pid: str, request: Request, admin=Depends(crm_actor)):
         )
         return {
             "robokassa": robokassa,
-            "yookassa": portals.yookassa_skeleton(),
+            "yookassa": yookassa,
             "stats": {
                 "orders_count": len(orders),
                 "payments_count": sum(1 for p in payments if p.kind == "payment"),
@@ -330,7 +334,10 @@ async def yookassa_webhook(request: Request):
     from app.db import now as db_now
     from app.entitlement import queue_for_payment
     from app import ledger
+    from app import payment_vault
     from app import staff_alerts
+
+    payment_vault.ensure_runtime(force=True)
 
     raw = await request.body()
     try:

@@ -178,10 +178,12 @@ def patch_vault(vid: str, body: VaultPatch, admin=Depends(crm_actor)):
         if body.active is not None:
             row.active = body.active
         row.updated_at = now()
+        secrets = vault.reveal_secrets(row)
         if row.type in {"telegram_bot", "max_bot"} and row.legacy_connection_id:
-            secrets = vault.reveal_secrets(row)
             if secrets:
                 vault.ensure_runtime_connection(db, row, secrets)
+        if row.type in {"robokassa", "yookassa"}:
+            vault.dual_write_payment(row, secrets, row.meta or {})
         audit(db, admin, "connection_vault.updated", vault_id=row.id, vault_type=row.type)
         return _scrub_response(vault.public_row(row))
 
