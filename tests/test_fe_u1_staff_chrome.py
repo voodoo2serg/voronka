@@ -45,12 +45,13 @@ def test_launcher_uses_staff_chrome_classes():
 
 
 def test_guest_login_fe_u3_untouched():
-    """CRM-A1: no guest CTA island; still no staff-chrome on login gate."""
+    """CRM-R1: no guest CTA island; still no staff-chrome on login gate."""
     login = (ROOT / "web" / "app" / "crm" / "components" / "LoginScreen.tsx").read_text(encoding="utf-8")
     assert "staff-chrome" not in login
     assert "SignalLauncher" not in login
     assert "Войти" in login
     assert "location.replace" in login
+    assert "Переход к единому входу" not in login
     assert 'className="auth-ctas"' not in login
     assert "Регистрация" not in login
 

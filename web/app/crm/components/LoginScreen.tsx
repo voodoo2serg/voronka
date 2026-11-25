@@ -1,13 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ACCESS_REQUEST } from '../portals';
 import type { ApiFn } from '../types';
 
 const IDP_MAIL_COPY = 'Отправили письмо! Проверьте почту!';
-/** Break-glass only via ?breakglass=1 or hidden brandmark gesture — no local auth island. */
-const BREAK_GLASS_CLICKS = 5;
-const BREAK_GLASS_WINDOW_MS = 2800;
 
 const ACCESS_HINTS: Record<string, string> = {
   need_staff: 'SSO прошёл, но роль CRM ещё не выдана. Запросите доступ — администратор привяжет staff.',
@@ -15,6 +12,21 @@ const ACCESS_HINTS: Record<string, string> = {
   denied: 'Доступ к CRM не разрешён. Запросите выдачу в CMS или SIGNAL.',
 };
 
+function oidcLoginHref(): string {
+  const params = new URLSearchParams(window.location.search);
+  let href = '/api/crm/oidc/login?return_to=' + encodeURIComponent('/crm/');
+  if (params.get('register') === '1') {
+    href = '/api/crm/oidc/login?register=1&return_to=' + encodeURIComponent('/crm/');
+  } else if (params.get('recover') === '1') {
+    href = '/api/crm/oidc/login?recover=1&return_to=' + encodeURIComponent('/crm/');
+  }
+  return href;
+}
+
+/**
+ * CRM-R1: no auth island — unauthenticated staff go straight to Keycloak.
+ * Local/emergency form only with ?breakglass=1 (ops). No intermediate login flash.
+ */
 export function LoginScreen({
   api,
   busy,
@@ -39,13 +51,9 @@ export function LoginScreen({
   const [recover, setRecover] = useState(false);
   const [code, setCode] = useState('');
   const [purpose, setPurpose] = useState('reset');
-  const [ssoEnabled, setSsoEnabled] = useState(false);
-  const [cutover, setCutover] = useState(false);
-  const [showLocal, setShowLocal] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
-  const [statusReady, setStatusReady] = useState(false);
+  const [breakGlass, setBreakGlass] = useState(false);
   const [accessReason, setAccessReason] = useState('');
-  const glassClicks = useRef<{ n: number; t: number }>({ n: 0, t: 0 });
+  const [bootstrapped, setBootstrapped] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -58,77 +66,25 @@ export function LoginScreen({
       const url = window.location.pathname + (next ? `?${next}` : '') + window.location.hash;
       window.history.replaceState({}, '', url);
     }
-    if (params.get('breakglass') === '1' || params.get('local') === '1') {
-      setShowLocal(true);
+    // CRM-R1: break-glass only via explicit query — no brandmark gesture / ?local=.
+    if (params.get('breakglass') === '1') {
+      setBreakGlass(true);
     }
+    setBootstrapped(true);
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/crm/oidc/status', { credentials: 'same-origin' })
-      .then((response) => (response.ok ? response.json() : { enabled: false }))
-      .then(
-        (result: {
-          enabled?: boolean;
-          cutover?: boolean;
-        }) => {
-          if (cancelled) return;
-          const enabled = result.enabled === true;
-          const nextCutover = result.cutover === true;
-          setSsoEnabled(enabled);
-          setCutover(nextCutover);
-          setStatusReady(true);
-        },
-      )
-      .catch(() => {
-        if (!cancelled) {
-          setSsoEnabled(false);
-          setCutover(false);
-          setShowLocal(true);
-          setStatusReady(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!statusReady || typeof window === 'undefined') return;
+    if (!bootstrapped || typeof window === 'undefined') return;
     if (accessReason && ACCESS_HINTS[accessReason]) return;
-    if (showLocal) return;
-    if (!ssoEnabled) {
-      setShowLocal(true);
-      return;
-    }
-    // CRM-A1: no local auth island — immediate Keycloak.
+    if (breakGlass) return;
     // Remember hash (#overview / #today) — OIDC return_to is path-only (/crm/).
     try {
       const hash = window.location.hash || '';
       if (hash && hash !== '#') sessionStorage.setItem('crm-return-hash', hash);
     } catch {}
-    setRedirecting(true);
-    const params = new URLSearchParams(window.location.search);
-    let href = '/api/crm/oidc/login?return_to=' + encodeURIComponent('/crm/');
-    if (params.get('register') === '1') href = '/api/crm/oidc/login?register=1&return_to=' + encodeURIComponent('/crm/');
-    else if (params.get('recover') === '1') href = '/api/crm/oidc/login?recover=1&return_to=' + encodeURIComponent('/crm/');
-    window.location.replace(href);
-  }, [statusReady, ssoEnabled, showLocal, accessReason]);
+    window.location.replace(oidcLoginHref());
+  }, [bootstrapped, breakGlass, accessReason]);
 
-  function onBrandmarkGesture() {
-    if (!ssoEnabled || showLocal) return;
-    const now = Date.now();
-    if (now - glassClicks.current.t > BREAK_GLASS_WINDOW_MS) glassClicks.current = { n: 0, t: now };
-    glassClicks.current.n += 1;
-    glassClicks.current.t = now;
-    if (glassClicks.current.n >= BREAK_GLASS_CLICKS) {
-      glassClicks.current = { n: 0, t: 0 };
-      setShowLocal(true);
-      setRedirecting(false);
-    }
-  }
-
-  const localRecover = !ssoEnabled && recover;
   const noAccess = Boolean(accessReason && ACCESS_HINTS[accessReason]);
 
   if (noAccess) {
@@ -161,31 +117,9 @@ export function LoginScreen({
     );
   }
 
-  if (!statusReady || (ssoEnabled && !showLocal && redirecting)) {
-    return (
-      <main className="login-screen">
-        <section className="login-card" aria-labelledby="crm-login-title">
-          <div
-            className="brandmark"
-            onClick={onBrandmarkGesture}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') onBrandmarkGesture();
-            }}
-            role="presentation"
-          >
-            С
-          </div>
-          <p className="eyebrow">СОЛО-PR / CRM</p>
-          <h1 id="crm-login-title">Вход</h1>
-          <p className="muted" role="status">
-            Переход к единому входу…
-          </p>
-          <a className="link" href="/api/crm/oidc/login">
-            Продолжить
-          </a>
-        </section>
-      </main>
-    );
+  if (!bootstrapped || !breakGlass) {
+    // CRM-R1: blank while navigating to Keycloak — no login-card flash.
+    return <main className="loading" aria-busy="true" />;
   }
 
   return (
@@ -195,83 +129,83 @@ export function LoginScreen({
           С
         </div>
         <p className="eyebrow">СОЛО-PR / CRM</p>
-        <h1 id="crm-login-title">{localRecover ? 'Восстановление' : cutover ? 'Аварийный вход' : 'Вход'}</h1>
-        {(showLocal || localRecover) && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void onBusy(async () => {
-                if (localRecover) {
-                  if (code) {
-                    await api('/recovery/finish', 'POST', { login, purpose, code, password });
-                    onNotice(IDP_MAIL_COPY);
-                    setRecover(false);
-                    setCode('');
-                  } else {
-                    await api('/recovery/start', 'POST', { login, purpose });
-                    onNotice(IDP_MAIL_COPY);
-                  }
+        <h1 id="crm-login-title">{recover ? 'Восстановление' : 'Аварийный вход'}</h1>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void onBusy(async () => {
+              if (recover) {
+                if (code) {
+                  await api('/recovery/finish', 'POST', { login, purpose, code, password });
+                  onNotice(IDP_MAIL_COPY);
+                  setRecover(false);
+                  setCode('');
                 } else {
-                  const r = await api('/login', 'POST', { login, password });
-                  sessionStorage.removeItem('crm-token');
-                  onToken(r.token);
+                  await api('/recovery/start', 'POST', { login, purpose });
+                  onNotice(IDP_MAIL_COPY);
                 }
-              });
-            }}
-          >
-            <label>
-              Логин
-              <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
-            </label>
-            {localRecover && (
-              <>
-                <label>
-                  Операция
-                  <select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
-                    <option value="reset">Восстановить пароль</option>
-                    <option value="verify">Подтвердить email</option>
-                  </select>
-                </label>
-                <label>
-                  Код из письма
-                  <input
-                    inputMode="numeric"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    placeholder="Для получения кода оставьте пустым"
-                  />
-                </label>
-              </>
-            )}
-            {(!localRecover || (purpose === 'reset' && code)) && (
+              } else {
+                const r = await api('/login', 'POST', { login, password });
+                sessionStorage.removeItem('crm-token');
+                onToken(r.token);
+              }
+            });
+          }}
+        >
+          <label>
+            Логин
+            <input autoComplete="username" required value={login} onChange={(e) => setLogin(e.target.value)} />
+          </label>
+          {recover && (
+            <>
               <label>
-                {localRecover ? 'Новый пароль' : 'Пароль'}
+                Операция
+                <select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
+                  <option value="reset">Восстановить пароль</option>
+                  <option value="verify">Подтвердить email</option>
+                </select>
+              </label>
+              <label>
+                Код из письма
                 <input
-                  type="password"
-                  autoComplete={localRecover ? 'new-password' : 'current-password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  inputMode="numeric"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="Для получения кода оставьте пустым"
                 />
               </label>
-            )}
-            <button className="primary full" disabled={busy}>
-              {localRecover ? (code ? 'Подтвердить' : 'Получить код') : cutover ? 'Аварийный вход' : 'Войти'}
-            </button>
-          </form>
-        )}
-        {!ssoEnabled && (showLocal || recover) && (
-          <button
-            className="link"
-            onClick={() => {
-              setRecover(!recover);
-              onError('');
-              onNotice('');
-            }}
-          >
-            {recover ? 'Вернуться ко входу' : 'Забыли пароль?'}
+            </>
+          )}
+          {(!recover || (purpose === 'reset' && code)) && (
+            <label>
+              {recover ? 'Новый пароль' : 'Пароль'}
+              <input
+                type="password"
+                autoComplete={recover ? 'new-password' : 'current-password'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+          )}
+          <button className="primary full" disabled={busy}>
+            {recover ? (code ? 'Подтвердить' : 'Получить код') : 'Аварийный вход'}
           </button>
-        )}
+        </form>
+        <button
+          className="link"
+          type="button"
+          onClick={() => {
+            setRecover(!recover);
+            onError('');
+            onNotice('');
+          }}
+        >
+          {recover ? 'Вернуться ко входу' : 'Забыли пароль?'}
+        </button>
+        <a className="link" href="/api/crm/oidc/login?return_to=%2Fcrm%2F">
+          Войти через Keycloak
+        </a>
         {error && <p role="alert" className="error">{error}</p>}
         {notice && (
           <p role="status" className="notice">
