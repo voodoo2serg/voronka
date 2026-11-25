@@ -16,7 +16,11 @@ from app.crm_models import ActionChain, ActionChainDryRun, Branch
 from app.crm_service import audit, project_access, uid
 from app.db import Funnel, Version, now
 from app.graph import validate_graph
-from app.portals import signal_media_library_url, signal_public_base
+from app.portals import (
+    crm_constructor_square_url,
+    signal_media_library_url,
+    signal_public_base,
+)
 from app.projects_domain import (
     base_chain_summary,
     chain_to_funnel_graph,
@@ -62,7 +66,14 @@ class DryRunBody(Body):
 @router.get("/constructor/meta")
 def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
     """Static Constructor helpers: node kinds, From / vault pickers, Signal media SSO deep-link."""
-    media_url = signal_media_library_url() or SIGNAL_MEDIA_CANONICAL
+    pid = (project_id or "").strip() or None
+    if pid:
+        return_to = crm_constructor_square_url(project_id=pid)
+        media_url = (
+            signal_media_library_url(project=pid, return_to=return_to) or SIGNAL_MEDIA_CANONICAL
+        )
+    else:
+        media_url = signal_media_library_url() or SIGNAL_MEDIA_CANONICAL
     from_list = list(FROM_IDENTITIES)
     extra = (os.getenv("CRM_MAIL_FROM_IDENTITIES") or "").strip()
     if extra:
@@ -73,15 +84,15 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
     vault_email: list[dict] = []
     vault_payment: list[dict] = []
     vault_messaging: list[dict] = []
-    if project_id:
+    if pid:
         from app import connection_vault as cv
 
         with Session() as db:
-            project_access(db, admin, project_id)
-            vault_email = cv.list_for_picker(db, project_id, types=["email_smtp"])
-            vault_payment = cv.list_for_picker(db, project_id, types=["robokassa", "yookassa"])
+            project_access(db, admin, pid)
+            vault_email = cv.list_for_picker(db, pid, types=["email_smtp"])
+            vault_payment = cv.list_for_picker(db, pid, types=["robokassa", "yookassa"])
             vault_messaging = cv.list_for_picker(
-                db, project_id, types=["telegram_bot", "max_bot", "telegram_channel"]
+                db, pid, types=["telegram_bot", "max_bot", "telegram_channel"]
             )
             # Enrich From list from vault email rows (address in meta).
             for item in vault_email:
@@ -109,6 +120,7 @@ def constructor_meta(project_id: str | None = None, admin=Depends(crm_actor)):
         "vault_payment": vault_payment,
         "vault_messaging": vault_messaging,
         "media_library_url": media_url,
+        "media_return_base": crm_constructor_square_url(project_id=pid) if pid else None,
         "signal_base": signal_public_base(),
         "payment_providers": [
             {"id": "robokassa", "label": "Robokassa"},

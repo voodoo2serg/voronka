@@ -88,7 +88,7 @@ def test_b03_constructor_media_overlay_and_activate(crm, monkeypatch, tmp_path):
         expect(page.locator(".constructor-flow-squares")).to_be_visible()
         page.screenshot(path=str(shot_dir / "b03-constructor.png"), full_page=True)
 
-        # CRM-R3: add a square, then top «+» → Медиатека overlay (constructor stays mounted).
+        # CRM-R10: add a square, then top «+» → Медиатека overlay (pickMode; constructor stays mounted).
         page.locator(".constructor-plus").first.click()
         page.get_by_role("menu", name="Типы шагов").get_by_role("menuitem").filter(
             has_text="Telegram"
@@ -100,9 +100,16 @@ def test_b03_constructor_media_overlay_and_activate(crm, monkeypatch, tmp_path):
         ).click()
         expect(page.locator(".media-library")).to_be_visible(timeout=10000)
         expect(page.locator("#action-constructor")).to_be_visible()
-        expect(
-            page.get_by_role("dialog", name="Медиатека CRM").get_by_role("link", name="Открыть в Signal")
-        ).to_be_visible()
+        dialog = page.get_by_role("dialog", name="Медиатека CRM")
+        signal_link = dialog.get_by_role("link", name="Открыть в Signal")
+        expect(signal_link).to_be_visible()
+        href = signal_link.get_attribute("href") or ""
+        assert "view=media" in href
+        assert "return_to=" in href
+        # Codex P1: return_to value must be percent-encoded (node/section not sibling params).
+        ret = href.split("return_to=", 1)[1]
+        assert not ret.startswith("https://") and not ret.startswith("http://")
+        assert "section%3Dchains" in href or "section%253Dchains" in href
         page.screenshot(path=str(shot_dir / "b03-media-overlay.png"), full_page=True)
         page.get_by_role("button", name="← К конструктору").click()
         expect(page.locator(".media-overlay-layer")).to_have_count(0)

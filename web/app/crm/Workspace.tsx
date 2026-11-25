@@ -81,8 +81,14 @@ export default function Workspace() {
   /** Deep-linked CMS cart id — only valid while `pid` matches `cartForProject`. */
   const [cartId, setCartId] = useState<string>('');
   const [cartForProject, setCartForProject] = useState<string>('');
-  /** B-03: media drawer overlay — keep constructor draft mounted. */
+  /** B-03 / CRM-R10: media drawer overlay — keep constructor draft mounted; pick attaches to square. */
   const [mediaOverlay, setMediaOverlay] = useState(false);
+  const [mediaPickNodeId, setMediaPickNodeId] = useState<string | null>(null);
+  /** CRM-R10: Signal return_to / overlay pick → attach asset to square. */
+  const [ctorFocusNodeId, setCtorFocusNodeId] = useState<string | null>(null);
+  const [ctorFocusChainId, setCtorFocusChainId] = useState<string | null>(null);
+  const [ctorPendingAssetId, setCtorPendingAssetId] = useState<string | null>(null);
+  const [ctorPendingContentKind, setCtorPendingContentKind] = useState<string | null>(null);
   const prevPidRef = useRef('');
   const [mailStatus, setMailStatus] = useState<Row | null>(null);
   const [cmsMatrix, setCmsMatrix] = useState<Row | null>(null);
@@ -210,6 +216,29 @@ export default function Workspace() {
     window.history.replaceState({}, '', next);
   }
 
+  /** CRM-R10: apply /crm/?project=&node=&section=chains&asset_id= from Signal return_to. */
+  function applyLocationSearch() {
+    if (typeof window === 'undefined') return;
+    const q = new URLSearchParams(window.location.search || '');
+    const project = (q.get('project') || '').trim();
+    const sectionParam = (q.get('section') || '').trim();
+    const node = (q.get('node') || '').trim();
+    const chain = (q.get('chain') || '').trim();
+    const assetId = (q.get('asset_id') || '').trim();
+    const contentKind = (q.get('content_kind') || '').trim();
+    if (project) setPid(project);
+    if (sectionParam === 'chains' || sectionParam === 'today' || node || assetId) {
+      setSection('chains');
+      writeHash('#today');
+    } else if (sectionParam && sections.some(([sid]) => sid === sectionParam)) {
+      setSection(sectionParam);
+    }
+    if (node) setCtorFocusNodeId(node);
+    if (chain) setCtorFocusChainId(chain);
+    if (assetId) setCtorPendingAssetId(assetId);
+    if (contentKind) setCtorPendingContentKind(contentKind);
+  }
+
   /** Apply location.hash → section / cart / person. Safe to call on hashchange. */
   function applyLocationHash() {
     if (typeof window === 'undefined') return;
@@ -224,9 +253,17 @@ export default function Workspace() {
         const q = new URLSearchParams(hash.slice(qIdx + 1));
         const project = (q.get('project') || '').trim();
         const cart = (q.get('cart') || '').trim();
+        const node = (q.get('node') || '').trim();
+        const chain = (q.get('chain') || '').trim();
+        const assetId = (q.get('asset_id') || '').trim();
+        const contentKind = (q.get('content_kind') || '').trim();
         if (project) setPid(project);
         setCartId(cart);
         setCartForProject(cart && project ? project : '');
+        if (node) setCtorFocusNodeId(node);
+        if (chain) setCtorFocusChainId(chain);
+        if (assetId) setCtorPendingAssetId(assetId);
+        if (contentKind) setCtorPendingContentKind(contentKind);
       }
     } else if (base === '#payments') setSection('payments');
     else if (base === '#connections') setSection('connections');
@@ -295,10 +332,20 @@ export default function Workspace() {
         }
       }
     } catch {}
+    // CRM-R10: Signal return_to lands on /crm/?project=&node=&section=chains&asset_id=
+    // before hash — apply search first so empty-hash → #home does not wipe it.
+    applyLocationSearch();
     applyLocationHash();
     const hash = typeof window !== 'undefined' ? window.location.hash || '' : '';
+    const search = typeof window !== 'undefined' ? window.location.search || '' : '';
+    const searchQ = new URLSearchParams(search);
+    const fromSignalReturn =
+      searchQ.has('asset_id') ||
+      searchQ.has('node') ||
+      searchQ.get('section') === 'chains' ||
+      searchQ.get('section') === 'today';
     const base = hash.split('?')[0] || '';
-    if (!base || base === '#') {
+    if ((!base || base === '#') && !fromSignalReturn) {
       writeHash('#home');
       setSection('home');
       setPid('');
@@ -1909,11 +1956,21 @@ export default function Workspace() {
                   busy={busy}
                   onBusy={act}
                   onNotice={setNotice}
-                  onOpenMediaLibrary={() => {
+                  onOpenMediaLibrary={(nodeId) => {
+                    setMediaPickNodeId(nodeId);
+                    setCtorFocusNodeId(nodeId);
                     setMediaOverlay(true);
                     setError('');
                   }}
                   onOpenConnections={() => goSection('connections')}
+                  focusNodeId={ctorFocusNodeId}
+                  focusChainId={ctorFocusChainId}
+                  pendingAssetId={ctorPendingAssetId}
+                  pendingContentKind={ctorPendingContentKind}
+                  onConsumedReturnAsset={() => {
+                    setCtorPendingAssetId(null);
+                    setCtorPendingContentKind(null);
+                  }}
                 />
               )}
               {section === 'chains' && mediaOverlay && (
@@ -1922,7 +1979,10 @@ export default function Workspace() {
                     type="button"
                     className="scrim"
                     aria-label="Закрыть медиатеку"
-                    onClick={() => setMediaOverlay(false)}
+                    onClick={() => {
+                      setMediaOverlay(false);
+                      setMediaPickNodeId(null);
+                    }}
                   />
                   <div className="drawer media-overlay-drawer">
                     <MediaLibrarySection
@@ -1931,9 +1991,29 @@ export default function Workspace() {
                       busy={busy}
                       onBusy={act}
                       onNotice={setNotice}
+                      pickMode
+                      returnNodeId={mediaPickNodeId || ctorFocusNodeId}
+                      onPick={(assetId, item) => {
+                        const nodeId = mediaPickNodeId || ctorFocusNodeId;
+                        if (nodeId) setCtorFocusNodeId(nodeId);
+                        setCtorPendingAssetId(assetId);
+                        setCtorPendingContentKind(
+                          item?.kind ? String(item.kind) : null,
+                        );
+                        setMediaOverlay(false);
+                        setMediaPickNodeId(null);
+                        setNotice(`Выбрано · ${assetId.slice(0, 8)}…`);
+                      }}
                     />
                     <div className="row" style={{ marginTop: 12 }}>
-                      <button type="button" className="link" onClick={() => setMediaOverlay(false)}>
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => {
+                          setMediaOverlay(false);
+                          setMediaPickNodeId(null);
+                        }}
+                      >
                         ← К конструктору
                       </button>
                     </div>

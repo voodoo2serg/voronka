@@ -97,12 +97,52 @@ def signal_href(
     return base + (("?" + "&".join(q)) if q else "")
 
 
-def signal_media_library_url(*, brand: str | None = None, person: str | None = None) -> str:
-    """CRM-A15 canonical Медиатека deep-link (Signal PR #57). SSO preserves return_to."""
+def signal_media_library_url(
+    *,
+    brand: str | None = None,
+    person: str | None = None,
+    project: str | None = None,
+    return_to: str | None = None,
+) -> str:
+    """CRM-A15 / CRM-R10 Медиатека deep-link. SSO + optional project / return_to."""
     override = (os.getenv("SIGNAL_MEDIA_DEEP_LINK") or "").strip()
-    if override and not brand and not person:
+    if override and not brand and not person and not project and not return_to:
         return override
-    return signal_href(view="media", brand=brand, person=person)
+    from urllib.parse import quote
+
+    q: list[str] = ["view=media"]
+    if brand:
+        q.append(f"brand={quote(str(brand), safe='')}")
+    if person:
+        q.append(f"person={quote(str(person), safe='')}")
+    if project:
+        q.append(f"project={quote(str(project), safe='')}")
+    if return_to:
+        # Fully encode the CRM URL so &node= / &section= stay inside return_to
+        # (Signal R10 Codex P1 — unencoded return_to truncates at first &).
+        q.append(f"return_to={quote(str(return_to), safe='')}")
+    return signal_public_base() + "/?" + "&".join(q)
+
+
+def crm_constructor_square_url(
+    *,
+    project_id: str,
+    node_id: str | None = None,
+    chain_id: str | None = None,
+) -> str:
+    """Absolute CRM Constructor deep-link for Signal return_to (same square).
+
+    Query (not hash) so Signal can append asset_id / content_kind:
+    /crm/?project=&node=<squareId>&section=chains
+    """
+    from urllib.parse import urlencode
+
+    q: dict[str, str] = {"project": project_id, "section": "chains"}
+    if node_id:
+        q["node"] = node_id
+    if chain_id:
+        q["chain"] = chain_id
+    return f"{crm_public_base()}/crm/?{urlencode(q)}"
 
 
 def portal_chrome(role: str | None = None) -> list[dict]:
