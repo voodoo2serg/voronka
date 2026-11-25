@@ -718,7 +718,11 @@ class ProjectCourse(Base):
 
 
 class ActionChain(Base):
-    """Staff Action Constructor output — base layer replacing fixed funnel as source of truth."""
+    """Staff Action Constructor output — base layer replacing fixed funnel as source of truth.
+
+    CRM-R5: at most one ``is_base`` chain per (project_id, branch_id) scope.
+    ``branch_id IS NULL`` = project-level base; set branch = branch-level base.
+    """
     __tablename__ = "crm_action_chains"
     __table_args__ = (
         CheckConstraint("state IN ('draft', 'published', 'archived')"),
@@ -730,6 +734,8 @@ class ActionChain(Base):
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(String(800), default="")
     state: Mapped[str] = mapped_column(String(30), default="draft")
+    # CRM-R5: Сохранить → this chain is the Project/Branch base (not fixed funnel template).
+    is_base: Mapped[bool] = mapped_column(Boolean, default=False)
     # Ordered nodes [{id, kind, title, config, media_asset_id?, from_address?}, …]
     nodes: Mapped[list] = mapped_column(JSON, default=list)
     revision: Mapped[int] = mapped_column(Integer, default=1)

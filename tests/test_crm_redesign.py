@@ -97,6 +97,7 @@ def test_action_chain_save_publish_dry_run(crm, monkeypatch, tmp_path):
         },
     ).json()
     assert created["state"] == "draft"
+    assert created["is_base"] is True  # CRM-R5: Save → project base
     dry = crm.client.post(
         f"/api/crm/action-chains/{created['id']}/dry-run",
         json={"email": "tester@example.ru", "telegram": ""},
@@ -109,6 +110,94 @@ def test_action_chain_save_publish_dry_run(crm, monkeypatch, tmp_path):
         row = db.get(ActionChain, created["id"])
         assert row is not None
         assert row.funnel_id
+        assert row.is_base is True
+
+
+def test_action_chain_save_sets_project_and_branch_base(crm):
+    """CRM-R5: Сохранить = base chain for Project (and Branch if selected); not fixed funnel."""
+    first = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "База проекта",
+            "nodes": [{"id": "a1", "kind": "email", "title": "Письмо", "config": {"body": "A"}}],
+        },
+    ).json()
+    assert first["is_base"] is True
+    assert first["branch_id"] is None
+
+    second = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "Новая база проекта",
+            "nodes": [{"id": "b1", "kind": "telegram", "title": "TG", "config": {"body": "B"}}],
+        },
+    ).json()
+    assert second["is_base"] is True
+
+    listed = crm.client.get("/api/crm/projects/p/action-chains").json()
+    assert listed["base_chain"]["id"] == second["id"]
+    assert listed["base_chain"]["name"] == "Новая база проекта"
+    by_id = {x["id"]: x for x in listed["items"]}
+    assert by_id[first["id"]]["is_base"] is False
+    assert by_id[second["id"]]["is_base"] is True
+
+    br = crm.client.post(
+        "/api/crm/projects/p/branches",
+        json={"name": "Кампания R5", "description": "ветка"},
+    ).json()
+    branch_chain = crm.client.post(
+        "/api/crm/projects/p/action-chains",
+        json={
+            "name": "База ветки",
+            "branch_id": br["id"],
+            "nodes": [{"id": "c1", "kind": "contact", "title": "Касание", "config": {"body": "C"}}],
+        },
+    ).json()
+    assert branch_chain["is_base"] is True
+    assert branch_chain["branch_id"] == br["id"]
+
+    # Project-level base unchanged when branch base is set.
+    project_base = crm.client.get("/api/crm/projects/p/base-action-chain").json()
+    assert project_base["base_chain"]["id"] == second["id"]
+
+    branch_base = crm.client.get(
+        f"/api/crm/projects/p/base-action-chain?branch_id={br['id']}"
+    ).json()
+    assert branch_base["base_chain"]["id"] == branch_chain["id"]
+
+    # PATCH Save re-promotes + can move scope to branch.
+    patched = crm.client.patch(
+        f"/api/crm/action-chains/{first['id']}",
+        json={
+            "name": "Снова база проекта",
+            "nodes": [{"id": "a1", "kind": "email", "title": "Письмо", "config": {"body": "A2"}}],
+            "revision": first["revision"],
+            "branch_id": "",
+        },
+    ).json()
+    assert patched["is_base"] is True
+    assert patched["branch_id"] is None
+    project_base2 = crm.client.get("/api/crm/projects/p/base-action-chain").json()
+    assert project_base2["base_chain"]["id"] == first["id"]
+
+    dash = crm.client.get("/api/crm/projects/p/dashboard").json()
+    assert dash["base_chain"]["id"] == first["id"]
+    assert dash["base_chain"]["steps"]
+
+    today = crm.client.get("/api/crm/projects/p/work-today").json()
+    assert today["base_chain"]["id"] == first["id"]
+
+
+def test_constructor_save_base_copy_in_frontend():
+    ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "базовая цепочка" in ctor.lower() or "базой выбранного" in ctor
+    assert "branch_id" in ctor
+    assert "is_base" in ctor
+    assert "Весь проект" in ctor
+    wt = (ROOT / "web" / "app" / "crm" / "sections" / "WorkTodayPanel.tsx").read_text(encoding="utf-8")
+    assert "Базовая цепочка проекта" in wt or "базовой цепочки" in wt.lower()
 
 
 def test_chain_to_funnel_graph_validates():
