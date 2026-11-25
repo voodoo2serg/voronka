@@ -57,7 +57,9 @@ def test_constructor_cart_unconfigured_soft_empty(crm, monkeypatch):
     assert body["empty"] is True
     assert body["configured"] is False
     assert body["error"] == "cms_hmac_unconfigured"
-    assert "/#/admin/cart/p" in body["cms_cart_url"]
+    # Soft protocol: never hand staff a CMS cart/admin hop URL.
+    assert body.get("cms_cart_url") in (None, "")
+    assert "admin/cart" not in str(body)
 
 
 def test_constructor_cart_fetches_cms_by_project(crm, monkeypatch):

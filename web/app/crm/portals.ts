@@ -12,6 +12,7 @@ export const PORTAL_URLS = {
 /** Self-serve path when SSO works but CRM staff row / project is missing. */
 export const ACCESS_REQUEST = {
   signal: PORTAL_URLS.signal + '/?view=access',
+  /** @deprecated Soft protocol: CMS is payment-form site, not staff grant / cart UX. Prefer `signal`. */
   cmsStaff: PORTAL_URLS.cms + '/admin',
   label: 'Запросить доступ',
 } as const;

@@ -165,11 +165,8 @@ export function LoginScreen({
             {ACCESS_REQUEST.label}
           </a>
           <p className="fine">
-            Администратор выдаёт staff в{' '}
-            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
-              CMS → Администраторы
-            </a>
-            . Ops — только owner/editor.
+            Доступ staff запрашивается через Signal. CMS — сайт платёжных форм, не конструктор и не
+            медиатека. Ops — только owner/editor.
           </p>
           <button
             type="button"

@@ -160,8 +160,12 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .constructor-dryrun-status li.ok{color:#2f6b3a}
 .constructor-dryrun-status li.fail{color:#8a3a3a}
 .creds-form label.checkbox{display:flex;align-items:center;gap:8px}
-.constructor-cart-link{display:inline-flex;align-items:center;border:1px solid #dededb;border-radius:6px;padding:7px 11px;background:#fff;font-weight:500;text-decoration:none}
-.constructor-cart-link:hover{background:#f1f1ef;text-decoration:none}
+.constructor-signal-link{display:inline-flex;align-items:center;border:1px solid #dededb;border-radius:6px;padding:7px 11px;background:#fff;font-weight:500;text-decoration:none}
+.constructor-signal-link:hover{background:#f1f1ef;text-decoration:none}
+.constructor-channels{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.constructor-channels ul{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.constructor-channels li{font-size:13px;line-height:1.35}
+.constructor-channels .channel-kind{display:inline-block;min-width:4.5em;color:var(--muted,#6b6b67);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
 .constructor-empty-cart{margin-top:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .constructor-empty-cart h3{margin:0 0 8px;color:#555}
 .constructor-start-ctas-inline{justify-content:center;gap:12px;margin-top:12px}
