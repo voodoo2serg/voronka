@@ -1,6 +1,8 @@
 """Payment → entitlement job. Payment is never rolled back on job failure."""
 from __future__ import annotations
 
+from datetime import timezone
+
 from sqlalchemy import or_, select
 
 from app.crm_models import AccessGrant, EntitlementJob, Order, Payment, Profile
@@ -38,7 +40,7 @@ def process_job(db, job: EntitlementJob) -> bool:
     job.attempts += 1
     job.updated_at = now()
     payment = db.get(Payment, job.payment_id)
-    order = db.get(Order, job.order_id)
+    order = db.scalar(select(Order).where(Order.id == job.order_id).with_for_update())
     if not payment or not order:
         job.state = "failed"
         job.last_error = "payment_or_order_missing"
@@ -46,22 +48,39 @@ def process_job(db, job: EntitlementJob) -> bool:
     profile = db.get(Profile, order.profile_id)
     financial = balance(db, order)
     try:
-        integrations.enqueue_deal_paid(db, payment_id=payment.id, order=order, profile=profile, financial=financial)
+        if payment.kind == "payment":
+            integrations.enqueue_deal_paid(db, payment_id=payment.id, order=order, profile=profile, financial=financial)
         grants = list(db.scalars(select(AccessGrant).where(AccessGrant.order_id == order.id)))
         applied = []
         for grant in grants:
-            # Financial threshold must hold before notifying neighbors.
-            if financial["paid_minor"] * 100 < order.total_minor * grant.min_paid_percent:
-                continue
-            integrations.enqueue_access_event(
-                db, kind="access.granted", grant=grant, order=order, profile=profile, financial=financial
+            expiry = grant.expires_at
+            if expiry and expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            allowed = (
+                order.state == "open"
+                and (not expiry or expiry > now())
+                and financial["paid_minor"] * 100 >= order.total_minor * grant.min_paid_percent
             )
-            # LMS enrollment uses canonical course.view (or course.enter alias).
-            if grant.capability in {"course.view", "course.enter"}:
-                integrations.enqueue_enrollment(
-                    db, grant=grant, order=order, profile=profile, revision=job.attempts, revoke=False
+            if grant.capability == "certificate.issue":
+                allowed = allowed and financial["fully_paid"] and order.academic_complete
+            if allowed:
+                integrations.enqueue_access_event(
+                    db, kind="access.granted", grant=grant, order=order, profile=profile, financial=financial
                 )
-            applied.append(grant.id)
+                applied.append(grant.id)
+            elif payment.kind == "refund":
+                integrations.enqueue_access_event(
+                    db, kind="access.revoked", grant=grant, order=order, profile=profile, financial=financial
+                )
+            if grant.capability in {"course.view", "course.enter"} and (allowed or payment.kind == "refund"):
+                integrations.enqueue_enrollment(
+                    db, grant=grant, order=order, profile=profile, revision=job.attempts, revoke=not allowed
+                )
+        if payment.kind == "refund":
+            job.state = "applied"
+            job.last_error = ""
+            job.result = {"grants": applied, "financial": financial}
+            return True
         if grants and not applied:
             job.state = "waiting_grant"
             job.last_error = "payment_threshold_not_met"
