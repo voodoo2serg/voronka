@@ -32,7 +32,10 @@ from app.projects_domain import (
     PERSON_ROLES,
     base_chain_summary,
     convert_profile_from_start,
+    course_projects_payload,
+    encode_project_course,
     ensure_progrev_project,
+    ensure_project_course,
     ensure_start_project,
     get_base_action_chain,
     is_start_project,
@@ -170,6 +173,7 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             db.scalars(select(Branch).where(Branch.project_id == pid).order_by(Branch.name, Branch.id))
         )
         courses = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
+        access_ids = set(project_ids(db, admin))
         base = get_base_action_chain(db, pid, None)
         if manager_scope(admin):
             recent_q = recent_q.where(
@@ -185,7 +189,8 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             "open_deals_count": int(open_deals),
             "products_count": int(products),
             "branches": [encode(b) for b in branches],
-            "courses": [encode(c) for c in courses],
+            # CRM-R11: each course includes project_name + sibling projects sharing course_id.
+            "courses": [encode_project_course(db, c, accessible_ids=access_ids) for c in courses],
             "chains": [encode(c) for c in chains],
             # CRM-R5: SoR for project steps = saved constructor base, not fixed funnel template.
             "base_chain": base_chain_summary(base),
@@ -238,8 +243,10 @@ def patch_branch(bid: str, body: BranchPatch, admin=Depends(crm_actor)):
 
 @router.get("/projects/{pid}/courses")
 def list_courses(pid: str, admin=Depends(crm_actor)):
+    """CRM-R11: courses on this project; each item lists all Projects sharing the course."""
     with Session() as db:
         project_access(db, admin, pid)
+        access_ids = set(project_ids(db, admin))
         rows = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
         # Also surface Product.config.course_id bindings for this project.
         products = list(db.scalars(select(Product).where(Product.project_id == pid, Product.active.is_(True))))
@@ -248,10 +255,19 @@ def list_courses(pid: str, admin=Depends(crm_actor)):
             cfg = p.config if isinstance(p.config, dict) else {}
             cid = cfg.get("course_id")
             if isinstance(cid, str) and cid.strip():
+                course_id = cid.strip()
                 product_courses.append(
-                    {"product_id": p.id, "product_name": p.name, "course_id": cid.strip()}
+                    {
+                        "product_id": p.id,
+                        "product_name": p.name,
+                        "course_id": course_id,
+                        "projects": course_projects_payload(db, course_id, accessible_ids=access_ids),
+                    }
                 )
-        return {"items": [encode(r) for r in rows], "product_binds": product_courses}
+        return {
+            "items": [encode_project_course(db, r, accessible_ids=access_ids) for r in rows],
+            "product_binds": product_courses,
+        }
 
 
 @router.post("/projects/{pid}/courses")
@@ -266,22 +282,20 @@ def bind_course(pid: str, body: CourseBind, admin=Depends(crm_actor)):
         prior = db.scalar(
             select(ProjectCourse).where(ProjectCourse.project_id == pid, ProjectCourse.course_id == course_id)
         )
-        if prior:
-            prior.label = (body.label or prior.label or "").strip()
-            prior.branch_id = body.branch_id
-            audit(db, admin, "project_course.updated", project_id=pid, course_id=course_id)
-            return encode(prior)
-        row = ProjectCourse(
-            id=uid(),
+        created = prior is None
+        row = ensure_project_course(db, pid, course_id, branch_id=body.branch_id)
+        # Explicit staff bind always writes label (including clear).
+        row.label = (body.label or "").strip()
+        row.branch_id = body.branch_id
+        audit(
+            db,
+            admin,
+            "project_course.updated" if not created else "project_course.bound",
             project_id=pid,
             course_id=course_id,
-            branch_id=body.branch_id,
-            label=(body.label or "").strip(),
-            created_at=now(),
         )
-        db.add(row)
-        audit(db, admin, "project_course.bound", project_id=pid, course_id=course_id)
-        return encode(row)
+        access_ids = set(project_ids(db, admin))
+        return encode_project_course(db, row, accessible_ids=access_ids)
 
 
 @router.delete("/projects/{pid}/courses/{course_id}")
@@ -295,6 +309,23 @@ def unbind_course(pid: str, course_id: str, admin=Depends(crm_actor)):
         db.delete(row)
         audit(db, admin, "project_course.unbound", project_id=pid, course_id=course_id)
         return {"ok": True}
+
+
+@router.get("/courses/{course_id}/projects")
+def course_projects(course_id: str, admin=Depends(crm_actor)):
+    """CRM-R11 reverse lookup: which Projects (name visible) attach this LMS course."""
+    cid = course_id.strip()
+    if not cid:
+        raise HTTPException(422, "course_id обязателен")
+    with Session() as db:
+        access_ids = set(project_ids(db, admin))
+        items = course_projects_payload(db, cid, accessible_ids=access_ids)
+        if not items:
+            # 404 only when no binds at all (vs empty because of ACL).
+            any_bind = db.scalar(select(ProjectCourse.id).where(ProjectCourse.course_id == cid).limit(1))
+            if not any_bind:
+                raise HTTPException(404, "Курс не привязан ни к одному проекту")
+        return {"course_id": cid, "items": items, "project_names": [x["project_name"] for x in items]}
 
 
 @router.patch("/contacts/{profile_id}/placement")

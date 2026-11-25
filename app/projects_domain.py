@@ -596,3 +596,94 @@ def base_chain_summary(row) -> dict | None:
             if isinstance(n, dict)
         ],
     }
+
+
+# --- CRM-R11: Course ↔ Project M2M ---
+
+
+def ensure_project_course(
+    db,
+    project_id: str,
+    course_id: str,
+    *,
+    label: str = "",
+    branch_id: str | None = None,
+):
+    """Idempotent bind of LMS course_id to a Project (same course may hang on many projects)."""
+    from app.crm_models import ProjectCourse
+
+    cid = (course_id or "").strip()
+    if not cid:
+        raise ValueError("course_id required")
+    prior = db.scalar(
+        select(ProjectCourse).where(
+            ProjectCourse.project_id == project_id,
+            ProjectCourse.course_id == cid,
+        )
+    )
+    if prior:
+        if label is not None and str(label).strip():
+            prior.label = str(label).strip()
+        if branch_id is not None:
+            prior.branch_id = branch_id or None
+        return prior
+    row = ProjectCourse(
+        id=uid(),
+        project_id=project_id,
+        course_id=cid,
+        branch_id=branch_id or None,
+        label=(label or "").strip(),
+        created_at=now(),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def course_projects_payload(db, course_id: str, accessible_ids: set[str] | None = None) -> list[dict]:
+    """Projects that share this LMS course_id — staff see Project name (CRM-R11)."""
+    from app.crm_models import ProjectCourse
+
+    cid = (course_id or "").strip()
+    if not cid:
+        return []
+    binds = list(
+        db.scalars(
+            select(ProjectCourse)
+            .where(ProjectCourse.course_id == cid)
+            .order_by(ProjectCourse.created_at.asc(), ProjectCourse.id)
+        )
+    )
+    out: list[dict] = []
+    for bind in binds:
+        if accessible_ids is not None and bind.project_id not in accessible_ids:
+            continue
+        project = db.get(Project, bind.project_id)
+        if not project:
+            continue
+        out.append(
+            {
+                "project_id": project.id,
+                "project_name": project.name,
+                "label": bind.label or "",
+                "branch_id": bind.branch_id,
+                "bind_id": bind.id,
+            }
+        )
+    return out
+
+
+def encode_project_course(db, row, accessible_ids: set[str] | None = None) -> dict:
+    """ProjectCourse row + project_name + sibling projects sharing the same course_id."""
+    project = db.get(Project, row.project_id)
+    projects = course_projects_payload(db, row.course_id, accessible_ids=accessible_ids)
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "project_name": project.name if project else "",
+        "course_id": row.course_id,
+        "branch_id": row.branch_id,
+        "label": row.label or "",
+        "created_at": row.created_at.isoformat() if getattr(row, "created_at", None) else None,
+        "projects": projects,
+    }
