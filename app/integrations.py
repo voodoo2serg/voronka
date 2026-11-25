@@ -563,8 +563,16 @@ def _prefer_enrollment_row(rows: list[IntegrationOutbox]) -> IntegrationOutbox |
 
 def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool = False) -> IntegrationOutbox | None:
     kind = "enrollment.revoked" if revoke else "enrollment.desired"
-    # Prefer existing stable or legacy :rN row — never insert a second peer event_id for the same grant.
-    existing = _prefer_enrollment_row(_enrollment_rows_for_grant(db, grant.id, revoke=revoke))
+    # Serialize transitions for a grant, including concurrent worker/API calls.
+    from app.crm_models import AccessGrant
+    db.scalar(select(AccessGrant).where(AccessGrant.id == grant.id).with_for_update())
+    history = (_enrollment_rows_for_grant(db, grant.id)
+               + _enrollment_rows_for_grant(db, grant.id, revoke=True))
+    latest = max(history, key=lambda row: (
+        int((row.payload or {}).get("revision") or 1), row.created_at, row.event_id
+    ), default=None)
+    revision = max((int((row.payload or {}).get("revision") or 1)
+                    for row in history), default=0) + 1
     hints = _product_hints(order)
     course_id = hints.get("course_id") or grant.resource or ""
     commerce_product_id = hints.get("commerce_product_id") or order.product_id
@@ -574,8 +582,9 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         capability = "course.view"
     extra = profile.extra if isinstance(getattr(profile, "extra", None), dict) else {}
     keycloak_sub = str(extra.get("keycloak_sub") or "")
-    # Wire event_id must match the outbox row peer already knows (legacy or stable).
-    event_id = existing.event_id if existing else enrollment_event_id(grant.id, revoke=revoke)
+    event_id = enrollment_event_id(grant.id, revoke=revoke)
+    if latest:
+        event_id = f"{event_id}:r{revision}"
     payload: dict[str, Any] = {
         **_dual_event_fields(kind, event_id),
         # LMS EnrollmentBody
@@ -603,14 +612,13 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         payload["keycloak_sub"] = keycloak_sub
     if hints.get("club"):
         payload["club"] = hints["club"]
-    if existing:
-        # Reuse legacy/stable row: refresh payload only; do not change delivery state here.
-        existing.payload = payload
-        if not existing.correlation_id:
-            existing.correlation_id = order.id
-        existing.updated_at = now()
-        db.flush()
-        return existing
+    # Identical desired state is a retry, not a new business transition.
+    if latest and latest.kind == kind:
+        previous = latest.payload or {}
+        fields = ("course_id", "commerce_product_id", "capability", "expires_at",
+                  "min_paid_percent", "keycloak_sub", "email", "voronka_profile_id")
+        if all(previous.get(field) == payload.get(field) for field in fields):
+            return latest
     return enqueue_event(
         db,
         destination=DEST_LMS,
