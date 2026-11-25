@@ -789,3 +789,54 @@ def test_entitlement_queue_backlog_does_not_starve_ready_job(crm, monkeypatch):
         assert len(list(db.scalars(select(EntitlementJob).where(
             EntitlementJob.state == "failed", EntitlementJob.attempts == 8
         )))) == 20
+
+
+def test_refund_regrant_emits_monotonic_access_transitions(crm):
+    from app import entitlement
+    from app.crm_models import IntegrationOutbox
+
+    o = order(crm, person=contact(crm, email="refund-audit@example.test"))
+    base = "/api/crm/orders/" + o["id"]
+    r = crm.client.post(base + "/grants", json={
+        "resource": "course-audit", "capability": "course.view", "min_paid_percent": 50,
+    })
+    assert r.status_code == 200, r.text
+    grant_id = r.json()["id"]
+
+    def money(key, amount, kind="payment"):
+        r = crm.client.post(base + "/payments", json={
+            "external_id": key, "amount_minor": amount, "kind": kind,
+            "evidence": "Audit regression",
+        })
+        assert r.status_code == 200, r.text
+        with crm.db.begin() as db:
+            entitlement.process_pending(db)
+
+    def history(destination):
+        with crm.db() as db:
+            rows = list(db.scalars(select(IntegrationOutbox).where(
+                IntegrationOutbox.destination == destination,
+                IntegrationOutbox.correlation_id == o["id"],
+            )))
+            return sorted(
+                [(row.kind, row.payload["revision"], row.event_id)
+                 for row in rows if row.payload.get("grant_id") == grant_id],
+                key=lambda row: row[1],
+            )
+
+    money("audit-payment-1", 100000)
+    money("audit-refund-1", 25000, "refund")
+    assert len(history("lms_end")) == 1
+    money("audit-refund-2", 75000, "refund")
+    money("audit-refund-2", 75000, "refund")
+    assert not crm.client.get(base + "/access?resource=course-audit&capability=course.view").json()["allow"]
+    money("audit-payment-2", 50000)
+    assert crm.client.get(base + "/access?resource=course-audit&capability=course.view").json()["allow"]
+    for destination, expected in (
+        ("lms_end", ["enrollment.desired", "enrollment.revoked", "enrollment.desired"]),
+        ("solo_pr", ["access.granted", "access.revoked", "access.granted"]),
+    ):
+        rows = history(destination)
+        assert [row[0] for row in rows] == expected
+        assert [row[1] for row in rows] == [1, 2, 3]
+        assert len({row[2] for row in rows}) == 3
