@@ -1818,7 +1818,7 @@ export default function Workspace() {
                   <h2>Конструктор действий</h2>
                   <p className="muted">
                     Выберите проект в фильтре «ПРОЕКТ» слева или откройте карточку на доске проектов — затем
-                    соберите цепочку из корзины CMS.
+                    соберите цепочку на холсте конструктора.
                   </p>
                   <div className="row" style={{ gap: 10, marginTop: 12 }}>
                     <button type="button" className="primary" onClick={() => setSection('home')}>

@@ -153,7 +153,9 @@ def test_work_today_paint_and_signal_actions():
     assert "Медиатека CRM" in ctor
     assert "Открыть в Signal" in ctor
     assert "onOpenMediaLibrary" in ctor
-    assert "Набрать корзину в CMS" in ctor
+    assert "Набрать корзину в CMS" not in ctor
+    assert "Корзина CMS" not in ctor
+    assert "addNodeKind" in ctor
     assert "Настроить в Подключениях" in ctor
     assert "smtp_password" not in ctor
     assert "bot_token" not in ctor
