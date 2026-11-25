@@ -35,7 +35,8 @@ def test_browser_login_create_contact_deal_and_import(crm,width):
         page=browser.new_page(viewport={'width':width,'height':1000})
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.route('http://crm.test/**',serve)
-        page.goto('http://crm.test/crm/')
+        # CRM-R1: default /crm/ → Keycloak; local form only with ?breakglass=1.
+        page.goto('http://crm.test/crm/?breakglass=1')
         page.get_by_label('Логин',exact=True).fill('owner')
         page.get_by_label('Пароль',exact=True).fill('owner-password-123')
         # AUTH-M2 / FE-U3: guest primary CTA label is short «Войти» (local form submit).

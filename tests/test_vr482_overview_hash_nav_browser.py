@@ -70,7 +70,8 @@ def test_overview_hash_nav_and_constructor_preview(crm, monkeypatch, tmp_path):
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.route("http://crm.test/**", serve)
-        page.goto("http://crm.test/crm/")
+        # CRM-R1: local login only behind ?breakglass=1
+        page.goto("http://crm.test/crm/?breakglass=1")
         page.get_by_label("Логин", exact=True).fill("owner")
         page.get_by_label("Пароль", exact=True).fill("owner-password-123")
         page.get_by_role("button", name="Войти", exact=True).click()
