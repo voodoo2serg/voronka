@@ -111,6 +111,9 @@ def test_crm_empty_state_not_project_wall():
     assert "ProjectsBoardSection" in src
     assert "ActionConstructorSection" in src
     assert "['outreach', 'Прогрев']" not in src
+    assert "Прогрев (dry_run)" not in src
+    assert "outreachForm" not in src
+    assert "outreach-batches" not in src
     assert "SIGNAL_MEDIA_LIBRARY_URL" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
     assert "view=media" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
     # Home face must not be WorkToday / infinite contacts list.

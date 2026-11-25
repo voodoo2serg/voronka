@@ -1,8 +1,12 @@
-# Прогрев (outreach): телефонная база → Start официального бота
+# Прогрев (outreach) — deprecated product (CRM-R8)
 
-Дата: 2026-11-09. Статус: MVP dry_run в CRM; live PyMax — заглушка за флагом.
+**Дата:** 2026-11-09 (MVP) · **Deprecated as CRM product:** 2026-11-25 (CRM-R8).
 
-## Продуктовая воронка
+Staff UI (nav «Прогрев», кнопка «Прогрев (dry_run)», секция партий) **удалены**. Warm-up — обычный commercial Project с именем «Прогрев» (seed idempotent, `is_system=false`) + конструктор / рассылки проекта. Это **не** специальный модуль.
+
+Ниже — legacy API / модель для ops и тестов; не staff workflow.
+
+## Бывшая продуктовая воронка (архив)
 
 ```text
 Profile.phone (импорт / старые покупатели)
@@ -10,12 +14,11 @@ Profile.phone (импорт / старые покупатели)
   → текст приглашения + Entry deep link на официальный MAX или Telegram бот
   → пользователь жмёт Start
   → Identity + ensure_profile + CRM Inbox / воронка
-  → Deal / Order / Robokassa (без изменений)
 ```
 
 Прогрев **не** является peer официального Bot API и **не** идёт через `Campaign` / `available_identity` / `Outbox`.
 
-## Модель
+## Модель (legacy)
 
 | Сущность | Назначение |
 |---|---|
@@ -28,9 +31,8 @@ Profile.phone (импорт / старые покупатели)
 2. `Profile.stopped` и исход «stopped» исключают получателя из prepare.
 3. Prepare **не** создаёт строки Outbox.
 4. `entry_connection_id` — только `telegram`/`max` с `role=bot` (не outreach-аккаунт).
-5. Официальная доставка остаётся в `app/channels.py`.
 
-## API (CRM)
+## API (legacy, не CRM product)
 
 - `POST /api/crm/projects/{pid}/outreach-batches` — черновик + получатели
 - `GET /api/crm/projects/{pid}/outreach-batches`
@@ -38,22 +40,9 @@ Profile.phone (импорт / старые покупатели)
 - `POST /api/crm/outreach-batches/{id}/prepare` — dry_run: тексты и ссылки, Activity/Event
 - `POST /api/crm/outreach-batches/{id}/recipients/{rid}/outcome` — ручная отметка invited/started/skipped/failed/stopped
 - `POST /api/crm/outreach-batches/{id}/control` — pause/resume/cancel
+- `GET /api/crm/outreach-batches/{id}/export` — тексты+ссылки для ручной SIM
 
-После `/start` на официальном боте `runtime.consume` вызывает `mark_started_for_identity` (эвристика по `contact_id` + `entry_connection_id`).
+## Transport
 
-## PyMax / неофициальный транспорт
-
-- Модуль `app/outreach_transport.py`: `DryRunTransport` по умолчанию; `PyMaxTransport` отказывается без `OUTREACH_MAX_ENABLED=1` и всё равно требует отдельной конфигурации (сейчас `pymax_not_configured`).
-- Live-отправка **не** нужна для merge и **не** подключена к worker ботов.
-- Не добавлять PyMax в `channels.send`.
-
-## Операционные риски
-
-| Риск | Митигация |
-|---|---|
-| Бан личного номера / ToS | Отдельная SIM; только invite-to-bot; готовность потерять аккаунт |
-| 152-ФЗ / антиспам | Единый `Profile.stopped`, Activity/Event с текстом и batch_id; телефон ≠ согласие |
-| Хрупкость неофициального API | Feature-flag off; поломка PyMax не роняет bot delivery |
-| Смешение с Campaign | Отдельные таблицы и роутер; тесты на отсутствие Outbox |
-
-См. также раздел в [OPERATIONS.md](OPERATIONS.md).
+- Модуль `app/outreach_transport.py`: `DryRunTransport` по умолчанию; `PyMaxTransport` отказывается без `OUTREACH_MAX_ENABLED=1`.
+- `OUTREACH_MAX_ENABLED=0` по умолчанию.

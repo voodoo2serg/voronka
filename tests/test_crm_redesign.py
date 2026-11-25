@@ -299,7 +299,9 @@ def test_nav_and_media_constants_in_frontend():
     assert "['home', 'Проекты']" in constants
     assert "['chains', 'Конструктор']" in constants
     assert "['media', 'Медиатека']" in constants
-    assert "Прогрев" not in constants or "['outreach'" not in constants
+    # CRM-R8: outreach / «Прогрев» module removed from nav constants.
+    assert "['outreach'" not in constants
+    assert "Прогрев" not in constants
     portals = (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
     assert "SIGNAL_MEDIA_LIBRARY_URL" in portals
     assert "/?view=media" in portals

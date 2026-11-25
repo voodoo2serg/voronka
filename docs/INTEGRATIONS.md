@@ -54,9 +54,9 @@ Campaign payload может включать `asset_id` (`video_note`/`video`). 
 
 **B-02 CRM embedded медиатека:** staff chrome lists/creates Signal assets via BFF `GET|POST /api/crm/projects/{pid}/signal-media*` (crm_session → `SIGNAL_INTERNAL_MEDIA_*` → Signal ` /internal/media/project-assets|create|…`). UI section `#media` / nav «Медиатека»; constructor CTA «Из медиатеки». Optional `SIGNAL_MEDIA_DEFAULT_BRAND_ID` when multiple Signal brands share a Project. **CRM-R2:** CMS chain cart is no longer a staff path — constructor «+» uses meta `node_kinds` in CRM.
 
-## Outreach
+## Outreach (legacy API, CRM-R8)
 
-`GET /api/crm/outreach-batches/{id}/export` — тексты+ссылки для ручной SIM. `OUTREACH_MAX_ENABLED=0` по умолчанию.
+Staff «Прогрев» module removed. `GET /api/crm/outreach-batches/{id}/export` — legacy тексты+ссылки для ручной SIM. `OUTREACH_MAX_ENABLED=0` по умолчанию. См. [OUTREACH.md](OUTREACH.md).
 
 ## СИГНАЛ 2.0 — визуальная студия рассылок (план интеграции)
 

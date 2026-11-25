@@ -117,7 +117,7 @@ export function AnalyticsSection({
                   {report.comms?.outbox_sent ?? 0} / {report.comms?.outbox_failed ?? 0} /{' '}
                   {report.comms?.outbox_unknown ?? 0}
                 </dd>
-                <dt>Прогрев (партии)</dt>
+                <dt>Outreach-партии (legacy API)</dt>
                 <dd>{report.comms?.outreach_batches_in_period ?? 0}</dd>
               </dl>
             </section>

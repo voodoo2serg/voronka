@@ -110,16 +110,13 @@ sudo systemctl enable --now voronka-backup.timer
 
 Кабинет `/crm/` отдаёт CSP (`default-src 'self'`, без сторонних скриптов). Сессия CRM ставится HttpOnly-cookie `crm_session` (SameSite=Lax) и дополнительно возвращает Bearer-токен для совместимости. Отключение сотрудника и смена пароля явно отзывают Redis-сессии. `CRM_COOKIE_SECURE=0` допустим только на локальном HTTP.
 
-## CRM: прогрев (outreach) и неофициальные аккаунты
+## CRM: прогрев (outreach) — deprecated product (CRM-R8)
 
-Политика: личные аккаунты (PyMax / userbot) **не** являются Connection для кампаний и **не** пишут в Outbox ботов. Chatwoot и EspoCRM в стек не входят — inbox и сделки остаются в voronka.
+Модуль «Прогрев» / кнопка «Прогрев (dry_run)» **сняты с CRM UI** (2026-11-25). Warm-up — обычный Project «Прогрев» на доске проектов + конструктор / рассылки.
 
-1. Создайте/опубликуйте воронку и Entry на **официальном** Telegram или MAX боте проекта.
-2. В CRM выберите клиентов с телефонами → «Прогрев (dry_run)» → подготовьте тексты и deep link.
-3. Отправку с отдельной SIM выполняйте вручную (или будущим адаптером); отметьте outcome в партии.
-4. После Start пользователя Identity и «Диалоги» работают как обычно.
+Политика по неофициальным аккаунтам без изменений: личные аккаунты (PyMax / userbot) **не** являются Connection для кампаний и **не** пишут в Outbox ботов. Chatwoot и EspoCRM в стек не входят — inbox и сделки остаются в voronka.
 
-Ограничения: `daily_cap` ≤ 50; `OUTREACH_MAX_ENABLED` по умолчанию `0`. Не смешивать боевой личный номер владельца бренда с warm-up SIM. Подробности — [OUTREACH.md](OUTREACH.md). Миграция `0006` добавляет таблицы партий. Экспорт для ручной SIM: `GET /api/crm/outreach-batches/{id}/export`.
+Legacy API партий (`/api/crm/.../outreach-batches`) может оставаться для ops; staff UX — нет. Подробности — [OUTREACH.md](OUTREACH.md).
 
 ## Rate limits рассылок
 

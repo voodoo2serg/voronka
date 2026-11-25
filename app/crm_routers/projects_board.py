@@ -24,6 +24,7 @@ from app.db import Project, now
 from app.projects_domain import (
     PERSON_ROLES,
     base_chain_summary,
+    ensure_progrev_project,
     ensure_start_project,
     get_base_action_chain,
     project_board_row,
@@ -67,6 +68,7 @@ def home_projects(admin=Depends(crm_actor)):
     """CRM home = Projects board (contacts $, money $, next tasks)."""
     with Session.begin() as db:
         ensure_start_project(db)
+        ensure_progrev_project(db)
         ids = project_ids(db, admin)
         rows = list(
             db.scalars(

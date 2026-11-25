@@ -14,7 +14,6 @@ export function Icon({ name }: { name: string }) {
     chains: 'M7 7h10v4H7z M7 13h10v4H7z M5 9h2 M17 15h2',
     campaigns: 'M5 19L19 5 M5 5h14v14',
     analytics: 'M4 19V5 M4 19h16 M8 15v-4 M12 15V9 M16 15v-7',
-    outreach: 'M12 3v18 M5 10l7-7 7 7 M8 21h8',
     imports: 'M7 3v17 M3 16l4 4 4-4 M17 21V4 M13 8l4-4 4 4',
     settings: 'M12 8a4 4 0 100 8 4 4 0 000-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2',
   };

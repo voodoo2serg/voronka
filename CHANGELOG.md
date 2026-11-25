@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — CRM-R8 Drop «Прогрев» module
+
+- Remove CRM product surface: no outreach nav, no «Прогрев (dry_run)» on clients, no outreach section UI.
+- Seed ordinary Project «Прогрев» (`is_system=false`) on `/me` and home board — not a special module.
+- Docs: OUTREACH / OPERATIONS mark product deprecated; legacy outreach API retained for ops/tests.
+- Tests: `tests/test_crm_r8_drop_progrev.py`.
+
 ## Unreleased — CRM-R4 Constructor «Проверить» end-to-end
 
 - Dry-run sends real test email via vault Mailu SMTP (`email_smtp`) and Telegram via vault `telegram_bot` (env SMTP/bot fallback).
