@@ -262,8 +262,13 @@ def test_frontend_no_paste_asset_id_and_meta_kinds_plus():
     assert "addFromCartItem" not in ctor
     assert "constructor/cart" not in ctor
     assert "onOpenMediaLibrary" in ctor
-    assert "Медиатека CRM" in ctor
+    assert "Медиатека" in ctor
     assert "Из медиатеки" in ctor
+    # CRM-R3 square IA
+    assert "constructor-flow-squares" in ctor
+    assert "Содержимое шага" in ctor
+    assert "Добавить шаг справа" in ctor
+    assert "constructor-square-sender" in ctor
     # No manual paste of asset_id
     assert "вставьте asset_id" not in ctor.lower()
     assert "placeholder=\"вставьте" not in ctor

@@ -64,10 +64,11 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.route("http://crm.test/**", serve)
-        page.goto("http://crm.test/crm/")
+        # CRM-R1: local login only behind ?breakglass=1 («Аварийный вход»)
+        page.goto("http://crm.test/crm/?breakglass=1")
         page.get_by_label("Логин", exact=True).fill("owner")
         page.get_by_label("Пароль", exact=True).fill("owner-password-123")
-        page.get_by_role("button", name="Войти", exact=True).click()
+        page.get_by_role("button", name="Аварийный вход", exact=True).click()
         expect(page.get_by_role("heading", name="Проекты", exact=True, level=1)).to_be_visible()
         page.locator("button.project-card").filter(has_text="Соло-PR").click()
         expect(page.get_by_role("heading", name="Обзор", exact=True, level=1)).to_be_visible()
@@ -76,9 +77,9 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         page.get_by_role("button", name="Запустить цепочку", exact=True).first.click()
         expect(page.get_by_role("heading", name="Конструктор", exact=True, level=1)).to_be_visible()
         expect(page.locator("#action-constructor")).to_be_visible()
-        steps = page.get_by_role("group", name="Медиатека и подключения")
-        expect(steps.get_by_text("Медиатека CRM", exact=False)).to_be_visible()
-        expect(steps.get_by_text("Подключения", exact=False)).to_be_visible()
+        # CRM-R3: square IA — fixed start + right «+»
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
+        expect(page.locator(".constructor-flow-squares")).to_be_visible()
         # CRM-R2: CMS cart is not a staff path
         expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
         expect(page.get_by_role("link", name="Набрать корзину в CMS")).to_have_count(0)
@@ -97,9 +98,7 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         # Deep-link hash alone (same session — project already selected)
         page.evaluate("location.hash = '#today'")
         expect(page.locator("#action-constructor")).to_be_visible(timeout=10000)
-        expect(
-            page.get_by_role("group", name="Медиатека и подключения").get_by_text("Медиатека CRM", exact=False)
-        ).to_be_visible()
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
         page.screenshot(path=str(shot_dir / "cart01_today_hash_deeplink.png"), full_page=True)
 
         assert not errors, errors

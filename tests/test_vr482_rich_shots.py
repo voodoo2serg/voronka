@@ -64,10 +64,11 @@ def test_rich_constructor_shots(crm):
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.route("http://crm.test/**", serve)
-        page.goto("http://crm.test/crm/")
+        # CRM-R1: local login only behind ?breakglass=1 («Аварийный вход»)
+        page.goto("http://crm.test/crm/?breakglass=1")
         page.get_by_label("Логин", exact=True).fill("owner")
         page.get_by_label("Пароль", exact=True).fill("owner-password-123")
-        page.get_by_role("button", name="Войти", exact=True).click()
+        page.get_by_role("button", name="Аварийный вход", exact=True).click()
         expect(page.get_by_role("heading", name="Проекты", exact=True, level=1)).to_be_visible()
         page.locator("button.project-card").filter(has_text="Соло-PR").click()
         expect(page.get_by_role("heading", name="Обзор", exact=True, level=1)).to_be_visible()
@@ -77,21 +78,29 @@ def test_rich_constructor_shots(crm):
         expect(page.locator("#action-constructor")).to_be_visible()
         expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
 
-        # CRM-R2: add steps from meta node_kinds via «+»
-        page.locator(".constructor-plus").first.click()
+        # CRM-R3: horizontal squares — right «+» types, top «+» content, bottom sender
+        expect(page.locator(".constructor-flow-squares")).to_be_visible()
+        expect(page.get_by_text("Клиент получает", exact=True)).to_be_visible()
+        page.locator('.constructor-connector-h .constructor-plus').first.click()
         menu = page.get_by_role("menu", name="Типы шагов")
         expect(menu).to_be_visible(timeout=10000)
         menu.get_by_role("menuitem").filter(has_text="Telegram").click()
         expect(page.locator(".constructor-square.selected")).to_be_visible()
+        expect(page.locator(".constructor-square-sender")).to_be_visible()
         expect(page.locator(".constructor-editor-drawer.is-open")).to_be_visible()
         expect(page.locator(".constructor-preview-frame")).to_be_visible()
+        page.locator(".constructor-plus-top .constructor-plus").click()
+        top = page.get_by_role("menu", name="Содержимое шага")
+        expect(top).to_be_visible()
+        top.get_by_role("menuitem").filter(has_text="Текст / детали").click()
         page.locator(".constructor-editor textarea").fill(
             "Здравствуйте! Это превью цепочки на холсте."
         )
-        page.locator(".constructor-plus").last.click()
+        page.locator('.constructor-connector-h .constructor-plus').last.click()
         page.get_by_role("menu", name="Типы шагов").get_by_role("menuitem").filter(
             has_text="Письмо"
         ).click()
+        expect(page.locator(".constructor-square-sender").filter(has_text="FROM")).to_be_visible()
         page.screenshot(path=str(shot_dir / "constructor-canvas-drawer-preview.png"), full_page=True)
 
         assert not errors, errors

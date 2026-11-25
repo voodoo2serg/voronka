@@ -16,6 +16,8 @@ type NodeRow = {
   from_address?: string | null;
 };
 
+type MenuKey = string | null;
+
 function uid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -53,6 +55,14 @@ function channelLabel(
     return row ? String(row.label) : 'Оплата · подключение не выбрано';
   }
   return String(node.kind);
+}
+
+function kindNeedsSender(kind: string): boolean {
+  return kind === 'email' || kind === 'telegram' || kind === 'payment';
+}
+
+function kindHasActionDetails(kind: string): boolean {
+  return kind === 'payment' || kind === 'code' || kind === 'wait';
 }
 
 /** Empty vault → short CTA to Подключения (no credential forms on #today). */
@@ -105,7 +115,8 @@ export function ActionConstructorSection({
   const [dryTg, setDryTg] = useState('');
   const [selected, setSelected] = useState<number | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [plusOpenAt, setPlusOpenAt] = useState<string | null>(null);
+  const [editorFocus, setEditorFocus] = useState<'message' | 'action'>('message');
+  const [plusOpenAt, setPlusOpenAt] = useState<MenuKey>(null);
 
   async function refresh() {
     if (!pid) return;
@@ -122,13 +133,16 @@ export function ActionConstructorSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pid]);
 
-  function selectStep(index: number) {
+  function selectStep(index: number, focus: 'message' | 'action' = 'message') {
     setSelected(index);
+    setEditorFocus(focus);
     setEditorOpen(true);
     setPlusOpenAt(null);
   }
 
   const nodeKinds = ((meta?.node_kinds as Row[] | undefined) || []).filter((k) => k?.id);
+  const paymentProviders = (meta?.payment_providers as Row[] | undefined) || [];
+  const tariffModes = (meta?.tariff_modes as Row[] | undefined) || [];
 
   function addNodeKind(kindId: string, atIndex?: number) {
     const kindMeta = nodeKinds.find((k) => String(k.id) === kindId);
@@ -153,6 +167,7 @@ export function ActionConstructorSection({
     const newIndex =
       atIndex === undefined ? nodes.length : Math.max(0, Math.min(nodes.length, atIndex + 1));
     setSelected(newIndex);
+    setEditorFocus('message');
     setEditorOpen(true);
     setPlusOpenAt(null);
   }
@@ -218,6 +233,7 @@ export function ActionConstructorSection({
   }
 
   function openMedia() {
+    setPlusOpenAt(null);
     if (onOpenMediaLibrary) {
       onOpenMediaLibrary();
       return;
@@ -238,14 +254,15 @@ export function ActionConstructorSection({
   const previewChannel = channelLabel(current, vaultEmail, vaultMessaging, vaultPayment);
   const previewBody = nodeBody(current);
 
-  function PlusMenu({ menuKey, afterIndex }: { menuKey: string; afterIndex?: number }) {
+  function TypeMenu({ menuKey, afterIndex }: { menuKey: string; afterIndex?: number }) {
     const open = plusOpenAt === menuKey;
     return (
       <div className="constructor-plus-wrap">
         <button
           type="button"
           className="constructor-plus"
-          title="Добавить шаг"
+          title="Добавить шаг справа"
+          aria-label="Добавить шаг справа"
           aria-expanded={open}
           aria-haspopup="menu"
           onClick={() => setPlusOpenAt((cur) => (cur === menuKey ? null : menuKey))}
@@ -277,6 +294,207 @@ export function ActionConstructorSection({
     );
   }
 
+  function TopMenu({ index, node }: { index: number; node: NodeRow }) {
+    const menuKey = `top-${node.id}`;
+    const open = plusOpenAt === menuKey;
+    return (
+      <div className="constructor-plus-wrap constructor-plus-top">
+        <button
+          type="button"
+          className="constructor-plus constructor-plus-sm"
+          title="Текст, медиа или детали действия"
+          aria-label="Текст, медиа или детали действия"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          onClick={() => setPlusOpenAt((cur) => (cur === menuKey ? null : menuKey))}
+        >
+          +
+        </button>
+        {open && (
+          <div className="constructor-plus-menu constructor-plus-menu-top" role="menu" aria-label="Содержимое шага">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => selectStep(index, 'message')}
+            >
+              <b>Текст / детали</b>
+              <small>Сообщение и пауза</small>
+            </button>
+            <button type="button" role="menuitem" onClick={openMedia}>
+              <b>Медиатека</b>
+              <small>Файл из Signal (SSO)</small>
+            </button>
+            {kindHasActionDetails(node.kind) && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => selectStep(index, 'action')}
+              >
+                <b>Детали действия</b>
+                <small>
+                  {node.kind === 'payment'
+                    ? 'Провайдер и тариф'
+                    : node.kind === 'code'
+                      ? 'Код / доступ'
+                      : 'Пауза'}
+                </small>
+              </button>
+            )}
+            <a
+              href={mediaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              role="menuitem"
+              className="constructor-plus-menu-link"
+              onClick={() => setPlusOpenAt(null)}
+            >
+              <b>Открыть в Signal</b>
+              <small>Медиатека во вкладке</small>
+            </a>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function SquareSender({ index, node }: { index: number; node: NodeRow }) {
+    if (!kindNeedsSender(node.kind)) {
+      return (
+        <div className="constructor-square-sender muted">
+          <span className="eyebrow">ИСТОЧНИК</span>
+          <span className="fine">Не требуется для этого типа</span>
+        </div>
+      );
+    }
+
+    if (node.kind === 'email') {
+      if (!vaultEmail.length) {
+        return (
+          <div className="constructor-square-sender">
+            <span className="eyebrow">FROM</span>
+            <VaultEmptyCta onOpenConnections={onOpenConnections} />
+          </div>
+        );
+      }
+      return (
+        <div className="constructor-square-sender">
+          <label>
+            <span className="eyebrow">FROM</span>
+            <select
+              value={String(node.config.from_vault_id || node.config.vault_id || '')}
+              onChange={(e) => {
+                const vid = e.target.value;
+                const row = vaultEmail.find((v) => String(v.id) === vid);
+                const addr = row ? String((row.meta as Row)?.from_address || '') : '';
+                updateNode(index, {
+                  from_address: addr || node.from_address || null,
+                  config: {
+                    ...node.config,
+                    from_vault_id: vid || null,
+                    vault_id: vid || null,
+                  },
+                });
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <option value="">Ящик из vault…</option>
+              {vaultEmail.map((v) => (
+                <option key={String(v.id)} value={String(v.id)}>
+                  {String(v.label)}
+                  {(v.meta as Row)?.from_address
+                    ? ` · ${String((v.meta as Row).from_address)}`
+                    : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      );
+    }
+
+    if (node.kind === 'telegram') {
+      if (!vaultMessaging.length) {
+        return (
+          <div className="constructor-square-sender">
+            <span className="eyebrow">БОТ</span>
+            <VaultEmptyCta onOpenConnections={onOpenConnections} />
+          </div>
+        );
+      }
+      return (
+        <div className="constructor-square-sender">
+          <label>
+            <span className="eyebrow">БОТ</span>
+            <select
+              value={String(node.config.vault_id || '')}
+              onChange={(e) => {
+                const vid = e.target.value;
+                updateNode(index, {
+                  config: { ...node.config, vault_id: vid || null },
+                });
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <option value="">Telegram-бот из vault…</option>
+              {vaultMessaging.map((v) => (
+                <option key={String(v.id)} value={String(v.id)}>
+                  {String(v.label)} · {String(v.type_label || v.type)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      );
+    }
+
+    // payment
+    if (!vaultPayment.length) {
+      return (
+        <div className="constructor-square-sender">
+          <span className="eyebrow">ОПЛАТА</span>
+          <VaultEmptyCta onOpenConnections={onOpenConnections} />
+        </div>
+      );
+    }
+    return (
+      <div className="constructor-square-sender">
+        <label>
+          <span className="eyebrow">ОПЛАТА</span>
+          <select
+            value={String(node.config.vault_id || '')}
+            onChange={(e) => {
+              const vid = e.target.value;
+              const row = vaultPayment.find((v) => String(v.id) === vid);
+              const provider = row
+                ? String(row.type)
+                : String(node.config.provider || 'robokassa');
+              updateNode(index, {
+                config: {
+                  ...node.config,
+                  vault_id: vid || null,
+                  provider:
+                    provider === 'yookassa'
+                      ? 'yookassa'
+                      : provider === 'robokassa'
+                        ? 'robokassa'
+                        : node.config.provider,
+                },
+              });
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <option value="">Платёж из vault…</option>
+            {vaultPayment.map((v) => (
+              <option key={String(v.id)} value={String(v.id)}>
+                {String(v.label)} · {String(v.type_label || v.type)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    );
+  }
+
   return (
     <div className="constructor-layout" id="action-constructor">
       <aside className="constructor-rail panel">
@@ -295,6 +513,7 @@ export function ActionConstructorSection({
               setNodes([]);
               setSelected(null);
               setEditorOpen(false);
+              setPlusOpenAt(null);
             }}
           >
             + Новая
@@ -314,6 +533,7 @@ export function ActionConstructorSection({
                   setNodes(loaded);
                   setSelected(loaded.length ? 0 : null);
                   setEditorOpen(Boolean(loaded.length));
+                  setPlusOpenAt(null);
                 }}
               >
                 {String(c.name)}
@@ -345,70 +565,51 @@ export function ActionConstructorSection({
             </div>
           </div>
 
-          <div className="constructor-next-steps" role="group" aria-label="Медиатека и подключения">
-            <button type="button" className="constructor-step-card" onClick={openMedia}>
-              <span className="eyebrow">1</span>
-              <b>Медиатека CRM</b>
-              <small>Создать файл и подписать kind + Project</small>
-            </button>
-            {onOpenConnections ? (
-              <button type="button" className="constructor-step-card" onClick={onOpenConnections}>
-                <span className="eyebrow">2</span>
-                <b>Подключения</b>
-                <small>Почта From, боты и платежи — только из vault</small>
-              </button>
-            ) : (
-              <a className="constructor-step-card" href="#connections">
-                <span className="eyebrow">2</span>
-                <b>Подключения</b>
-                <small>Почта From, боты и платежи — только из vault</small>
-              </a>
-            )}
-          </div>
           <p className="fine constructor-hint">
-            «+» добавляет шаг по типу из списка конструктора. Клик по шагу открывает правую панель. Превью справа
-            всегда на месте.{' '}
+            Квадраты: <b>+</b> справа — следующий шаг (типы из списка); <b>+</b> сверху — текст / медиатека /
+            детали действия; снизу — From / бот из vault.{' '}
             <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
               Открыть в Signal
             </a>
           </p>
 
-          <div className="constructor-flow constructor-flow-vertical" aria-label="Последовательность шагов">
+          <div
+            className="constructor-flow constructor-flow-squares"
+            aria-label="Последовательность шагов"
+          >
             <div className="constructor-fixed">
               <strong>Клиент получает</strong>
               <p className="fine">Старт цепочки</p>
             </div>
-            <div className="constructor-connector" aria-hidden="true">
-              <PlusMenu menuKey="flow-start" afterIndex={-1} />
+
+            <div className="constructor-connector constructor-connector-h">
+              <TypeMenu menuKey="flow-start" afterIndex={-1} />
             </div>
+
             {nodes.map((node, index) => (
               <div key={node.id} className="constructor-step-block">
                 <div
                   className={`constructor-square${selected === index ? ' selected' : ''}`}
                   data-step-index={index}
                 >
+                  <TopMenu index={index} node={node} />
                   <span className="constructor-step-index" aria-hidden="true">
                     {index + 1}
                   </span>
-                  <button
-                    type="button"
-                    className="constructor-media"
-                    title="Открыть медиатеку CRM"
-                    aria-label="Открыть медиатеку CRM"
-                    onClick={openMedia}
-                  >
-                    +
-                  </button>
                   <button type="button" className="square-body" onClick={() => selectStep(index)}>
                     <b>{node.title}</b>
                     <small>
                       {node.kind}
                       {node.media_asset_id ? ` · ${String(node.media_asset_id).slice(0, 8)}…` : ''}
                     </small>
+                    {nodeBody(node) ? (
+                      <span className="constructor-square-snippet">{nodeBody(node).slice(0, 72)}</span>
+                    ) : null}
                   </button>
+                  <SquareSender index={index} node={node} />
                 </div>
-                <div className="constructor-connector" aria-hidden="true">
-                  <PlusMenu menuKey={node.id} afterIndex={index} />
+                <div className="constructor-connector constructor-connector-h">
+                  <TypeMenu menuKey={node.id} afterIndex={index} />
                 </div>
               </div>
             ))}
@@ -418,11 +619,18 @@ export function ActionConstructorSection({
             <div className="empty compact constructor-empty-guide">
               <h3>С чего начать</h3>
               <p>
-                Добавьте шаг кнопкой «+» — типы из списка конструктора (контакт, опрос, письмо, оплата…). Файлы —
-                из медиатеки. Каналы настраиваются в Подключениях.
+                Нажмите «+» справа от «Клиент получает» — выберите тип (контакт, опрос, письмо, оплата…).
+                Сверху квадрата — текст или медиатека; снизу — ящик / бот из Подключений.
               </p>
               <div className="row constructor-start-ctas-inline">
-                <button type="button" className="primary" onClick={openMedia}>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => setPlusOpenAt((cur) => (cur === 'flow-start' ? null : 'flow-start'))}
+                >
+                  Добавить шаг
+                </button>
+                <button type="button" className="link" onClick={openMedia}>
                   Из медиатеки
                 </button>
                 {onOpenConnections ? (
@@ -486,7 +694,7 @@ export function ActionConstructorSection({
                         Допишите текст в панели справа или оставьте asset как есть.
                       </p>
                     ) : (
-                      <p className="fine">Нет текста — откройте шаг и введите сообщение.</p>
+                      <p className="fine">Нет текста — откройте «+» сверху → Текст / детали.</p>
                     )}
                   </div>
                 </div>
@@ -515,7 +723,10 @@ export function ActionConstructorSection({
                 <div className="panel-title">
                   <div>
                     <h2>Шаг {(selected ?? 0) + 1}</h2>
-                    <p className="muted">{current.kind}</p>
+                    <p className="muted">
+                      {current.kind}
+                      {editorFocus === 'action' ? ' · детали действия' : ''}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -534,38 +745,135 @@ export function ActionConstructorSection({
                     onChange={(e) => updateNode(selected, { title: e.target.value })}
                   />
                 </label>
-                <label>
-                  Сообщение
-                  <textarea
-                    rows={6}
-                    value={previewBody}
-                    onChange={(e) =>
-                      updateNode(selected, {
-                        config: { ...current.config, body: e.target.value, text: e.target.value },
-                      })
-                    }
-                    placeholder="Текст сообщения без тяжёлой загрузки файлов…"
-                  />
-                </label>
-                <label>
-                  Пауза перед шагом (мин)
-                  <input
-                    type="number"
-                    min={0}
-                    value={String(current.config.wait_minutes ?? '')}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const wait = raw === '' ? undefined : Number(raw);
-                      updateNode(selected, {
-                        config: {
-                          ...current.config,
-                          wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
-                        },
-                      });
-                    }}
-                    placeholder="0"
-                  />
-                </label>
+
+                {(editorFocus === 'message' || !kindHasActionDetails(current.kind)) && (
+                  <label>
+                    Сообщение
+                    <textarea
+                      rows={6}
+                      value={previewBody}
+                      onChange={(e) =>
+                        updateNode(selected, {
+                          config: { ...current.config, body: e.target.value, text: e.target.value },
+                        })
+                      }
+                      placeholder="Текст сообщения без тяжёлой загрузки файлов…"
+                    />
+                  </label>
+                )}
+
+                {/* Pause: always for wait; otherwise when editing message / kinds without action pane */}
+                {(current.kind === 'wait' ||
+                  editorFocus === 'message' ||
+                  !kindHasActionDetails(current.kind)) && (
+                  <label>
+                    {current.kind === 'wait' ? 'Пауза (мин)' : 'Пауза перед шагом (мин)'}
+                    <input
+                      type="number"
+                      min={0}
+                      value={String(current.config.wait_minutes ?? '')}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const wait = raw === '' ? undefined : Number(raw);
+                        updateNode(selected, {
+                          config: {
+                            ...current.config,
+                            wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
+                          },
+                        });
+                      }}
+                      placeholder={current.kind === 'wait' ? 'например 60' : '0'}
+                    />
+                  </label>
+                )}
+
+                {(editorFocus === 'action' || current.kind === 'payment') && current.kind === 'payment' && (
+                  <>
+                    <label>
+                      Провайдер
+                      <select
+                        value={String(current.config.provider || 'robokassa')}
+                        onChange={(e) =>
+                          updateNode(selected, {
+                            config: { ...current.config, provider: e.target.value },
+                          })
+                        }
+                      >
+                        {(paymentProviders.length
+                          ? paymentProviders
+                          : [
+                              { id: 'robokassa', label: 'Robokassa' },
+                              { id: 'yookassa', label: 'ЮKassa' },
+                            ]
+                        ).map((p) => (
+                          <option key={String(p.id)} value={String(p.id)}>
+                            {String(p.label || p.id)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Тариф
+                      <select
+                        value={String(current.config.tariff_mode || 'fixed')}
+                        onChange={(e) =>
+                          updateNode(selected, {
+                            config: { ...current.config, tariff_mode: e.target.value },
+                          })
+                        }
+                      >
+                        {(tariffModes.length
+                          ? tariffModes
+                          : [
+                              { id: 'fixed', label: 'Фиксированный тариф' },
+                              { id: 'open', label: 'Открытая сумма' },
+                            ]
+                        ).map((t) => (
+                          <option key={String(t.id)} value={String(t.id)}>
+                            {String(t.label || t.id)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {String(current.config.tariff_mode || 'fixed') === 'fixed' && (
+                      <label>
+                        Сумма (коп.)
+                        <input
+                          type="number"
+                          min={0}
+                          value={String(current.config.amount_minor ?? '')}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const amount = raw === '' ? undefined : Number(raw);
+                            updateNode(selected, {
+                              config: {
+                                ...current.config,
+                                amount_minor:
+                                  amount === undefined || Number.isNaN(amount) ? undefined : amount,
+                              },
+                            });
+                          }}
+                          placeholder="например 50000"
+                        />
+                      </label>
+                    )}
+                  </>
+                )}
+
+                {(editorFocus === 'action' || current.kind === 'code') && current.kind === 'code' && (
+                  <label>
+                    Код / доступ
+                    <input
+                      value={String(current.config.access_code || '')}
+                      onChange={(e) =>
+                        updateNode(selected, {
+                          config: { ...current.config, access_code: e.target.value },
+                        })
+                      }
+                      placeholder="Код или ссылка доступа"
+                    />
+                  </label>
+                )}
 
                 {current.kind === 'email' && (
                   <>
