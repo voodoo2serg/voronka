@@ -154,7 +154,7 @@ export function MediaLibrarySection({
               Обновить
             </button>
             <a
-              className="constructor-cart-link"
+              className="constructor-signal-link"
               href={signalOpenUrl}
               data-testid="media-open-signal"
               onClick={(e) => {

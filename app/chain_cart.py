@@ -115,7 +115,8 @@ def enrich_cart_payload(cart: dict[str, Any] | None) -> dict[str, Any]:
         "empty": len(items) == 0,
         "created_at": cart.get("created_at"),
         "updated_at": cart.get("updated_at"),
-        "cms_cart_url": f"{cms_base_url()}/#/admin/cart/{project_id}" if project_id else f"{cms_base_url()}/#/admin/cart",
+        # Soft protocol (VR-513): never advertise CMS cart/admin hop to staff UI.
+        "cms_cart_url": None,
     }
 
 
@@ -164,9 +165,7 @@ def fetch_cms_cart(
                 "not_found": True,
                 "project_id": pid or None,
                 "cart_id": cid or None,
-                "cms_cart_url": (
-                    f"{cms_base_url()}/#/admin/cart/{pid}" if pid else f"{cms_base_url()}/#/admin/cart"
-                ),
+                "cms_cart_url": None,
             }
         response.raise_for_status()
         data = response.json()

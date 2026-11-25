@@ -1073,10 +1073,10 @@ export default function Workspace() {
                     <a className="primary" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
                       {ACCESS_REQUEST.label} в SIGNAL
                     </a>
-                    <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
-                      CMS → выдать staff
-                    </a>
                   </div>
+                  <p className="fine">
+                    CMS (cms.solo-pr.ru) — сайт платёжных форм, не выдача staff и не сборка цепочек.
+                  </p>
                 </>
               )}
             </div>
@@ -2555,14 +2555,12 @@ export default function Workspace() {
                         </small>
                       </div>
                     ))}
-                    <h3>Роли ↔ CMS-матрица</h3>
+                    <h3>Роли ↔ матрица доступа</h3>
                     {cmsMatrix ? (
                       <>
                         <p className="fine">
-                          SoR: {cmsMatrix.source_of_truth}. Синхронизация: {cmsMatrix.sync}.{' '}
-                          <a href={cmsMatrix.cms_url} target="_blank" rel="noreferrer">
-                            Открыть CMS ↗
-                          </a>
+                          SoR ролей: {cmsMatrix.source_of_truth}. Синхронизация: {cmsMatrix.sync}. CMS не
+                          используется для сборки цепочек / медиатеки (только платёжные формы сайта).
                         </p>
                         <ul className="checklist">
                           {(cmsMatrix.checklist || []).map((item: Row) => (

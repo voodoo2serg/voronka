@@ -7,6 +7,7 @@ type Item={id:string;label:string;mark:string;site:string;admin?:string};
  * Mailu is intentionally absent from «Сервисы» (mailbox passwords ≠ SIGNAL SSO; signal#33 / PR-CAT0).
  */
 const ITEMS:Item[]=[
+ // CMS admin = payment-form site chrome (not cart / not chain builder). Soft protocol: never #/admin/cart.
  {id:'solo',label:'Соло-Пиар',mark:'СП',site:'https://solo-pr.ru/',admin:'https://cms.solo-pr.ru/admin'},
  // One promo entry only — no separate raga7/raga9/course tiles (owner 2026-11-19).
  {id:'raga',label:'Промо',mark:'ПР',site:'https://raga7.vodopetov.ru/'},

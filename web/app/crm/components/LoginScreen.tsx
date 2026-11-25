@@ -103,11 +103,8 @@ export function LoginScreen({
             {ACCESS_REQUEST.label}
           </a>
           <p className="fine">
-            Администратор выдаёт staff в{' '}
-            <a href={ACCESS_REQUEST.cmsStaff} target="_blank" rel="noreferrer">
-              CMS → Администраторы
-            </a>{' '}
-            (provision CRM + Signal).
+            Доступ staff запрашивается через Signal. CMS (cms.solo-pr.ru) — сайт платёжных форм, не
+            конструктор цепочек и не медиатека.
           </p>
           <a className="link" href="/api/crm/oidc/login">
             Войти

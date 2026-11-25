@@ -44,9 +44,28 @@ def test_zero_cms_cart_staff_hops():
     assert "constructor-plus-cta" not in ctor
     assert "constructor-plus-cta" not in css
     assert "constructor-cart-rail" not in css
+    assert "constructor-cart-link" not in css
+    assert "constructor-cart-link" not in ctor
     assert "data-cart-route" not in ctor
     assert "cartId=" not in ws
     assert "setCartId" not in ws
+    # Soft protocol: no staff CMS hop CTAs from constructor / no-project surfaces
+    assert "CMS → выдать staff" not in ws
+    assert "Открыть CMS" not in ws
+    assert "cmsMatrix.cms_url" not in ws
+    assert "constructor-vault-channels" in ctor
+    assert "constructor-soft-empty" in ctor
+    assert "сначала шаги" in ctor.lower() or "Сначала соберите" in ctor
+
+
+def test_bff_never_returns_cms_cart_admin_url():
+    """VR-513: chain_cart / constructor cart BFF must not emit #/admin/cart."""
+    chain = (ROOT / "app" / "chain_cart.py").read_text(encoding="utf-8")
+    bff = (ROOT / "app" / "crm_routers" / "action_chains.py").read_text(encoding="utf-8")
+    assert "#/admin/cart" not in chain
+    assert "#/admin/cart" not in bff
+    assert 'cms_cart_url": None' in chain or "cms_cart_url': None" in chain
+    assert 'cms_cart_url"] = None' in bff or 'cms_cart_url": None' in bff
 
 
 def test_square_ia_right_top_bottom():

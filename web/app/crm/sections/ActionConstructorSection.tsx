@@ -854,8 +854,9 @@ export function ActionConstructorSection({
           </div>
 
           <p className="fine constructor-hint">
-            Сохранить = базовая цепочка проекта/ветки (не шаблон «лид→касание→оплата…»). Квадраты: <b>+</b>{' '}
-            справа — следующий шаг; <b>+</b> сверху — текст / медиатека / детали; снизу — From / бот из vault.{' '}
+            Сначала соберите цепочку действий — даже если медиатека или каналы пока пусты. Текст, файлы и
+            отправители подключаются позже. <b>+</b> справа — тип шага; <b>+</b> сверху — текст / медиатека /
+            детали; снизу и справа — ящик / бот из Подключений.{' '}
             <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
               Открыть в Signal
             </a>
@@ -904,16 +905,17 @@ export function ActionConstructorSection({
           </div>
 
           {showEmptyGuide && (
-            <div className="empty compact constructor-empty-guide">
+            <div className="empty compact constructor-empty-guide" data-testid="constructor-soft-empty">
               <h3>С чего начать</h3>
               <p>
                 Нажмите «+» справа от «Клиент получает» — выберите тип (контакт, опрос, письмо, оплата…).
-                Сверху квадрата — текст или медиатека; снизу — ящик / бот из Подключений.
+                Пустая медиатека или отсутствие ящика/бота не блокируют цепочку: сначала шаги, потом вложения.
               </p>
               <div className="row constructor-start-ctas-inline">
                 <button
                   type="button"
                   className="primary"
+                  data-testid="constructor-soft-add-step"
                   onClick={() => setPlusOpenAt((cur) => (cur === 'flow-start' ? null : 'flow-start'))}
                 >
                   Добавить шаг
@@ -1043,6 +1045,48 @@ export function ActionConstructorSection({
                 )}
               </>
             )}
+
+            {/* Soft protocol: vault channels for pick/sender — never CMS cart. */}
+            <div className="constructor-channels" data-testid="constructor-vault-channels">
+              <h3>Каналы из Подключений</h3>
+              <p className="fine">
+                Ящики и Telegram-боты из Connection Vault. Пустой список не блокирует цепочку — выберите
+                отправителя на квадрате позже.
+              </p>
+              {!vaultEmail.length && !vaultMessaging.length ? (
+                <VaultEmptyCta onOpenConnections={onOpenConnections} />
+              ) : (
+                <ul>
+                  {vaultEmail.map((v) => (
+                    <li key={`em-${String(v.id)}`}>
+                      <span className="channel-kind">Email</span>{' '}
+                      <b>{String(v.label)}</b>
+                      {(v.meta as Row)?.from_address
+                        ? ` · ${String((v.meta as Row).from_address)}`
+                        : ''}
+                    </li>
+                  ))}
+                  {vaultMessaging.map((v) => (
+                    <li key={`tg-${String(v.id)}`}>
+                      <span className="channel-kind">Telegram</span>{' '}
+                      <b>{String(v.label)}</b>
+                      {v.type_label || v.type ? ` · ${String(v.type_label || v.type)}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {onOpenConnections ? (
+                <p className="fine">
+                  <button type="button" className="link" onClick={onOpenConnections}>
+                    Открыть Подключения
+                  </button>
+                </p>
+              ) : (
+                <p className="fine">
+                  <a href="#connections">Открыть Подключения</a>
+                </p>
+              )}
+            </div>
           </section>
 
           <div

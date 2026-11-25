@@ -153,7 +153,11 @@ def constructor_cart(
     cart_id: str | None = None,
     admin=Depends(crm_actor),
 ):
-    """CART-04 BFF: staff session → CMS chain cart via Voronka HMAC (no secrets in browser)."""
+    """Legacy CART-04 BFF (HMAC → CMS cart). Soft protocol: never returns CMS cart/admin URLs.
+
+    Staff constructor builds action chains in CRM first; empty cart/media must not redirect.
+    Endpoint kept for ops/compat — UI must not navigate on cms_cart_url (always null).
+    """
     from app import chain_cart as cc
 
     pid = (project_id or "").strip()
@@ -171,9 +175,7 @@ def constructor_cart(
                 "error": "cms_hmac_unconfigured",
                 "project_id": pid or None,
                 "cart_id": cid or None,
-                "cms_cart_url": (
-                    f"{cc.cms_base_url()}/#/admin/cart/{pid}" if pid else f"{cc.cms_base_url()}/#/admin/cart"
-                ),
+                "cms_cart_url": None,
             }
         )
         return empty
@@ -190,14 +192,13 @@ def constructor_cart(
                 "error": type(exc).__name__[:80],
                 "project_id": pid or None,
                 "cart_id": cid or None,
-                "cms_cart_url": (
-                    f"{cc.cms_base_url()}/#/admin/cart/{pid}" if pid else f"{cc.cms_base_url()}/#/admin/cart"
-                ),
+                "cms_cart_url": None,
             }
         )
         return empty
     cart["configured"] = True
     cart["error"] = None
+    cart["cms_cart_url"] = None
     cart_pid = str(cart.get("project_id") or "").strip()
     if pid and cart_pid and cart_pid != pid:
         raise HTTPException(403, "Корзина принадлежит другому проекту")
@@ -207,7 +208,6 @@ def constructor_cart(
             project_access(db, admin, cart_pid)
     if pid and not cart_pid:
         cart["project_id"] = pid
-        cart["cms_cart_url"] = f"{cc.cms_base_url()}/#/admin/cart/{pid}"
     return cart
 
 
