@@ -9,6 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.crm_deps import Body, Session, crm_actor, encode, must
 from app.crm_models import ActionChain, ActionChainDryRun, Branch
@@ -16,7 +17,13 @@ from app.crm_service import audit, project_access, uid
 from app.db import Funnel, Version, now
 from app.graph import validate_graph
 from app.portals import signal_media_library_url, signal_public_base
-from app.projects_domain import chain_to_funnel_graph, validate_action_nodes
+from app.projects_domain import (
+    base_chain_summary,
+    chain_to_funnel_graph,
+    get_base_action_chain,
+    promote_action_chain_as_base,
+    validate_action_nodes,
+)
 
 router = APIRouter()
 
@@ -192,49 +199,111 @@ def constructor_cart(
     return cart
 
 
+def _normalize_branch_query(branch_id: str | None) -> tuple[bool, str | None]:
+    """Return (filter_applied, branch_id|None). filter_applied=False → no branch filter."""
+    if branch_id is None:
+        return False, None
+    bid = branch_id.strip()
+    if bid == "" or bid.lower() in {"none", "null", "project"}:
+        return True, None
+    return True, bid
+
+
 @router.get("/projects/{pid}/action-chains")
-def list_chains(pid: str, admin=Depends(crm_actor)):
+def list_chains(
+    pid: str,
+    branch_id: str | None = None,
+    base_only: bool = False,
+    admin=Depends(crm_actor),
+):
     with Session() as db:
         project_access(db, admin, pid)
+        filtered, bid = _normalize_branch_query(branch_id)
+        q = select(ActionChain).where(ActionChain.project_id == pid)
+        if filtered:
+            if bid:
+                q = q.where(ActionChain.branch_id == bid)
+            else:
+                q = q.where(ActionChain.branch_id.is_(None))
+        if base_only:
+            q = q.where(ActionChain.is_base.is_(True))
         rows = list(
             db.scalars(
-                select(ActionChain)
-                .where(ActionChain.project_id == pid)
-                .order_by(ActionChain.updated_at.desc(), ActionChain.id)
+                q.order_by(ActionChain.is_base.desc(), ActionChain.updated_at.desc(), ActionChain.id)
             )
         )
-        return {"items": [encode(r) for r in rows]}
+        # Summary: scoped base when branch filtered; else project-level base.
+        summary_bid = bid if filtered else None
+        base = get_base_action_chain(db, pid, summary_bid)
+        return {
+            "items": [encode(r) for r in rows],
+            "base_chain": base_chain_summary(base),
+        }
+
+
+@router.get("/projects/{pid}/base-action-chain")
+def get_project_base_chain(pid: str, branch_id: str | None = None, admin=Depends(crm_actor)):
+    """CRM-R5: base ActionChain for Project (default) or Branch — not fixed funnel template."""
+    with Session() as db:
+        project_access(db, admin, pid)
+        bid = (branch_id or "").strip() or None
+        if bid and bid.lower() in {"none", "null", "project"}:
+            bid = None
+        if bid:
+            br = must(db.get(Branch, bid))
+            if br.project_id != pid:
+                raise HTTPException(422, "Ветка другого проекта")
+        row = get_base_action_chain(db, pid, bid)
+        if not row:
+            return {"base_chain": None, "project_id": pid, "branch_id": bid}
+        return {"base_chain": encode(row), "summary": base_chain_summary(row)}
 
 
 @router.post("/projects/{pid}/action-chains")
 def create_chain(pid: str, body: ChainBody, admin=Depends(crm_actor)):
-    with Session.begin() as db:
-        project_access(db, admin, pid)
-        if body.branch_id:
-            br = must(db.get(Branch, body.branch_id))
-            if br.project_id != pid:
-                raise HTTPException(422, "Ветка другого проекта")
-        try:
-            nodes = validate_action_nodes(body.nodes)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        row = ActionChain(
-            id=uid(),
-            project_id=pid,
-            branch_id=body.branch_id,
-            course_id=(body.course_id or "").strip() or None,
-            name=body.name.strip(),
-            description=(body.description or "").strip(),
-            state="draft",
-            nodes=nodes,
-            revision=1,
-            actor_id=admin.telegram_id,
-            created_at=now(),
-            updated_at=now(),
-        )
-        db.add(row)
-        audit(db, admin, "action_chain.created", project_id=pid, chain_id=row.id)
-        return encode(row)
+    try:
+        with Session.begin() as db:
+            project_access(db, admin, pid)
+            branch_id = (body.branch_id or "").strip() or None
+            if branch_id:
+                br = must(db.get(Branch, branch_id))
+                if br.project_id != pid:
+                    raise HTTPException(422, "Ветка другого проекта")
+            try:
+                nodes = validate_action_nodes(body.nodes)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            row = ActionChain(
+                id=uid(),
+                project_id=pid,
+                branch_id=branch_id,
+                course_id=(body.course_id or "").strip() or None,
+                name=body.name.strip(),
+                description=(body.description or "").strip(),
+                state="draft",
+                is_base=False,
+                nodes=nodes,
+                revision=1,
+                actor_id=admin.telegram_id,
+                created_at=now(),
+                updated_at=now(),
+            )
+            db.add(row)
+            db.flush()
+            # CRM-R5: Сохранить → base chain for Project (or Branch if selected).
+            promote_action_chain_as_base(db, row)
+            audit(
+                db,
+                admin,
+                "action_chain.created",
+                project_id=pid,
+                chain_id=row.id,
+                is_base=True,
+                branch_id=row.branch_id,
+            )
+            return encode(row)
+    except IntegrityError as exc:
+        raise HTTPException(409, "Базовая цепочка уже меняется — повторите сохранение") from exc
 
 
 @router.get("/action-chains/{cid}")
@@ -247,38 +316,51 @@ def get_chain(cid: str, admin=Depends(crm_actor)):
 
 @router.patch("/action-chains/{cid}")
 def patch_chain(cid: str, body: ChainPatch, admin=Depends(crm_actor)):
-    with Session.begin() as db:
-        row = must(db.scalar(select(ActionChain).where(ActionChain.id == cid).with_for_update()))
-        project_access(db, admin, row.project_id)
-        if row.revision != body.revision:
-            raise HTTPException(409, "Цепочка изменена — обновите страницу")
-        if body.name is not None:
-            row.name = body.name.strip()
-        if body.description is not None:
-            row.description = body.description.strip()
-        if body.branch_id is not None:
-            if body.branch_id == "":
-                row.branch_id = None
-            else:
-                br = must(db.get(Branch, body.branch_id))
-                if br.project_id != row.project_id:
-                    raise HTTPException(422, "Ветка другого проекта")
-                row.branch_id = br.id
-        if body.course_id is not None:
-            row.course_id = body.course_id.strip() or None
-        if body.nodes is not None:
-            try:
-                row.nodes = validate_action_nodes(body.nodes)
-            except ValueError as exc:
-                raise HTTPException(422, str(exc)) from exc
-        row.revision += 1
-        row.updated_at = now()
-        row.actor_id = admin.telegram_id
-        if row.state == "published":
-            row.state = "draft"  # edits unpublish until explicit publish
-            row.published_at = None
-        audit(db, admin, "action_chain.updated", project_id=row.project_id, chain_id=cid)
-        return encode(row)
+    try:
+        with Session.begin() as db:
+            row = must(db.scalar(select(ActionChain).where(ActionChain.id == cid).with_for_update()))
+            project_access(db, admin, row.project_id)
+            if row.revision != body.revision:
+                raise HTTPException(409, "Цепочка изменена — обновите страницу")
+            if body.name is not None:
+                row.name = body.name.strip()
+            if body.description is not None:
+                row.description = body.description.strip()
+            if body.branch_id is not None:
+                if body.branch_id == "":
+                    row.branch_id = None
+                else:
+                    br = must(db.get(Branch, body.branch_id))
+                    if br.project_id != row.project_id:
+                        raise HTTPException(422, "Ветка другого проекта")
+                    row.branch_id = br.id
+            if body.course_id is not None:
+                row.course_id = body.course_id.strip() or None
+            if body.nodes is not None:
+                try:
+                    row.nodes = validate_action_nodes(body.nodes)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+            row.revision += 1
+            row.updated_at = now()
+            row.actor_id = admin.telegram_id
+            if row.state == "published":
+                row.state = "draft"  # edits unpublish until explicit publish
+                row.published_at = None
+            # CRM-R5: every Save promotes this chain as Project/Branch base.
+            promote_action_chain_as_base(db, row)
+            audit(
+                db,
+                admin,
+                "action_chain.updated",
+                project_id=row.project_id,
+                chain_id=cid,
+                is_base=True,
+                branch_id=row.branch_id,
+            )
+            return encode(row)
+    except IntegrityError as exc:
+        raise HTTPException(409, "Базовая цепочка уже меняется — повторите сохранение") from exc
 
 
 @router.post("/action-chains/{cid}/publish")

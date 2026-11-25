@@ -1083,6 +1083,34 @@ export default function Workspace() {
                       </article>
                     ))}
                   </div>
+                  <section className="panel" style={{ marginTop: 16 }} data-testid="overview-base-chain">
+                    <div className="panel-title">
+                      <h2>Базовая цепочка</h2>
+                      <button type="button" className="link" onClick={() => goSection('chains')}>
+                        Конструктор →
+                      </button>
+                    </div>
+                    {dashboard?.base_chain ? (
+                      <>
+                        <p>
+                          <b>{String((dashboard.base_chain as Row).name)}</b>{' '}
+                          <span className="badge">{String((dashboard.base_chain as Row).state)}</span>
+                        </p>
+                        <ol className="fine" style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                          {(((dashboard.base_chain as Row).steps as Row[]) || []).map((s, i) => (
+                            <li key={String(s.id || i)}>
+                              {String(s.title || s.kind || `Шаг ${i + 1}`)}
+                            </li>
+                          ))}
+                        </ol>
+                      </>
+                    ) : (
+                      <p className="muted">
+                        Пока нет — откройте Конструктор и нажмите «Сохранить». База проекта = сохранённая цепочка, не
+                        фиксированный шаблон воронки.
+                      </p>
+                    )}
+                  </section>
                   {!!dashboard?.branches?.length && (
                     <section className="panel" style={{ marginTop: 16 }}>
                       <div className="panel-title">
@@ -1781,6 +1809,7 @@ export default function Workspace() {
                 <ActionConstructorSection
                   api={api}
                   pid={pid}
+                  branches={branches}
                   cartId={
                     cartId && (!cartForProject || cartForProject === pid) ? cartId : null
                   }

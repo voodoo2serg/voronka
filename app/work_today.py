@@ -250,10 +250,16 @@ def work_today_for_project(db, admin, pid: str, *, limit: int = 40) -> dict:
     items.sort(key=_sort_key)
     items = items[: max(1, min(limit, 100))]
 
+    # CRM-R5: surface Project base ActionChain (SoR) alongside legacy status chips.
+    from app.projects_domain import base_chain_summary, get_base_action_chain
+
+    base_summary = base_chain_summary(get_base_action_chain(db, pid, None))
+
     return {
         "project_id": pid,
         "contour": list(CONTOUR),
         "labels": LABELS,
+        "base_chain": base_summary,
         "items": items,
         "counts": {
             "queue": len(items),

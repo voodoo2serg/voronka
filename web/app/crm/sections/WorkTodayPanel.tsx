@@ -32,17 +32,33 @@ export function WorkTodayPanel({ data, busy, onOpenPerson, onRefresh }: Props) {
         </div>
       </div>
       <p className="muted">
-        Один контур статусов: лид → касание → оплата → доступ → курс → письмо. Deep-link в Person / SIGNAL / LMS,
-        когда данные есть. Live-деньги и production-маркетинг из UI не включаются.
+        {data?.base_chain
+          ? `Базовая цепочка проекта: «${String((data.base_chain as Row).name || 'цепочка')}» (конструктор). Статусы ниже — операторский контур; SoR шагов = сохранённая цепочка, не фиксированный шаблон.`
+          : 'Пока нет базовой цепочки проекта — задайте её в Конструкторе (Сохранить). Операционный контур: лид → касание → оплата → доступ → курс → письмо.'}{' '}
+        Deep-link в Person / SIGNAL / LMS, когда данные есть. Live-деньги и production-маркетинг из UI не
+        включаются.
       </p>
-      <ol className="contour-legend" aria-label="Этапы контура">
-        {stages.map((id) => (
-          <li key={id}>
-            <span className="contour-dot empty" />
-            {String(labels[id] || CONTOUR_STAGES.find((s) => s.id === id)?.label || id)}
-          </li>
-        ))}
-      </ol>
+      {Array.isArray((data?.base_chain as Row | undefined)?.steps) &&
+        ((data?.base_chain as Row).steps as Row[]).length > 0 && (
+          <ol className="contour-legend" aria-label="Базовая цепочка проекта">
+            {((data?.base_chain as Row).steps as Row[]).map((step, i) => (
+              <li key={String(step.id || i)}>
+                <span className="contour-dot empty" />
+                {String(step.title || step.kind || `Шаг ${i + 1}`)}
+              </li>
+            ))}
+          </ol>
+        )}
+      {!data?.base_chain && (
+        <ol className="contour-legend" aria-label="Этапы контура">
+          {stages.map((id) => (
+            <li key={id}>
+              <span className="contour-dot empty" />
+              {String(labels[id] || CONTOUR_STAGES.find((s) => s.id === id)?.label || id)}
+            </li>
+          ))}
+        </ol>
+      )}
       {!data && <p className="fine">Загрузка контура…</p>}
       {data && !items.length && (
         <div className="empty compact">

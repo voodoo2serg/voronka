@@ -88,6 +88,7 @@ function VaultEmptyCta({ onOpenConnections }: { onOpenConnections?: () => void }
 export function ActionConstructorSection({
   api,
   pid,
+  branches = [],
   busy,
   onBusy,
   onNotice,
@@ -96,6 +97,8 @@ export function ActionConstructorSection({
 }: {
   api: ApiFn;
   pid: string;
+  /** Project branches for CRM-R5 base-chain scope (optional Branch). */
+  branches?: Row[];
   /** @deprecated CRM-R2: CMS cart is no longer a staff path; ignored. */
   cartId?: string | null;
   busy: boolean;
@@ -107,9 +110,12 @@ export function ActionConstructorSection({
 }) {
   const [meta, setMeta] = useState<Row | null>(null);
   const [chains, setChains] = useState<Row[]>([]);
+  const [baseChain, setBaseChain] = useState<Row | null>(null);
   const [chainId, setChainId] = useState('');
   const [revision, setRevision] = useState(1);
   const [name, setName] = useState('Новая цепочка');
+  const [branchId, setBranchId] = useState('');
+  const [isBase, setIsBase] = useState(false);
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [dryEmail, setDryEmail] = useState('');
   const [dryTg, setDryTg] = useState('');
@@ -127,6 +133,7 @@ export function ActionConstructorSection({
     ]);
     setMeta(m);
     setChains(list.items || []);
+    setBaseChain((list.base_chain as Row | null) || null);
   }
 
   useEffect(() => {
@@ -189,22 +196,38 @@ export function ActionConstructorSection({
     });
   }
 
+  function baseScopeLabel(bid: string | null | undefined) {
+    if (!bid) return 'проекта';
+    const br = branches.find((b) => String(b.id) === String(bid));
+    return br ? `ветки «${String(br.name)}»` : 'ветки';
+  }
+
   async function saveChain() {
     await onBusy(async () => {
+      const scopeBranch = branchId || null;
       if (chainId) {
         const row = await api(`/action-chains/${chainId}`, 'PATCH', {
           name,
           nodes,
           revision,
+          branch_id: scopeBranch ?? '',
         });
         setRevision(row.revision);
         setChainId(row.id);
-        onNotice('Цепочка сохранена');
+        setIsBase(Boolean(row.is_base));
+        setBranchId(row.branch_id ? String(row.branch_id) : '');
+        onNotice(`Сохранено как базовая цепочка ${baseScopeLabel(row.branch_id)}`);
       } else {
-        const row = await api(`/projects/${pid}/action-chains`, 'POST', { name, nodes });
+        const row = await api(`/projects/${pid}/action-chains`, 'POST', {
+          name,
+          nodes,
+          branch_id: scopeBranch,
+        });
         setChainId(row.id);
         setRevision(row.revision);
-        onNotice('Цепочка создана');
+        setIsBase(Boolean(row.is_base));
+        setBranchId(row.branch_id ? String(row.branch_id) : '');
+        onNotice(`Создано как базовая цепочка ${baseScopeLabel(row.branch_id)}`);
       }
       await refresh();
     });
@@ -510,7 +533,7 @@ export function ActionConstructorSection({
         <div className="panel-title">
           <div>
             <h2>Цепочки</h2>
-            <p className="muted">Черновики и публикации</p>
+            <p className="muted">База проекта/ветки · черновики</p>
           </div>
           <button
             type="button"
@@ -519,6 +542,8 @@ export function ActionConstructorSection({
               setChainId('');
               setRevision(1);
               setName('Новая цепочка');
+              setBranchId('');
+              setIsBase(false);
               setNodes([]);
               setSelected(null);
               setEditorOpen(false);
@@ -529,6 +554,11 @@ export function ActionConstructorSection({
             + Новая
           </button>
         </div>
+        {baseChain && (
+          <p className="fine constructor-base-hint" data-testid="project-base-chain">
+            База проекта: <b>{String(baseChain.name)}</b>
+          </p>
+        )}
         <ul className="constructor-list">
           {chains.map((c) => (
             <li key={String(c.id)}>
@@ -539,6 +569,8 @@ export function ActionConstructorSection({
                   setChainId(String(c.id));
                   setName(String(c.name));
                   setRevision(Number(c.revision) || 1);
+                  setBranchId(c.branch_id ? String(c.branch_id) : '');
+                  setIsBase(Boolean(c.is_base));
                   const loaded = Array.isArray(c.nodes) ? (c.nodes as NodeRow[]) : [];
                   setNodes(loaded);
                   setSelected(loaded.length ? 0 : null);
@@ -548,7 +580,15 @@ export function ActionConstructorSection({
                 }}
               >
                 {String(c.name)}
-                <small>{String(c.state)}</small>
+                <small>
+                  {c.is_base ? 'база · ' : ''}
+                  {String(c.state)}
+                  {c.branch_id
+                    ? ` · ${
+                        branches.find((b) => String(b.id) === String(c.branch_id))?.name || 'ветка'
+                      }`
+                    : ''}
+                </small>
               </button>
             </li>
           ))}
@@ -565,6 +605,22 @@ export function ActionConstructorSection({
                 Название цепочки
                 <input value={name} onChange={(e) => setName(e.target.value)} />
               </label>
+              <label className="constructor-name-field">
+                Ветка (опционально)
+                <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                  <option value="">Весь проект</option>
+                  {branches.map((b) => (
+                    <option key={String(b.id)} value={String(b.id)}>
+                      {String(b.name)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="fine">
+                {chainId && isBase
+                  ? `Сейчас базовая цепочка ${baseScopeLabel(branchId || null)}`
+                  : 'Сохранить сделает эту цепочку базой выбранного проекта/ветки'}
+              </p>
             </div>
             <div className="constructor-actions">
               <button type="button" disabled={busy} onClick={() => void saveChain()}>
@@ -577,8 +633,8 @@ export function ActionConstructorSection({
           </div>
 
           <p className="fine constructor-hint">
-            Квадраты: <b>+</b> справа — следующий шаг (типы из списка); <b>+</b> сверху — текст / медиатека /
-            детали действия; снизу — From / бот из vault.{' '}
+            Сохранить = базовая цепочка проекта/ветки (не шаблон «лид→касание→оплата…»). Квадраты: <b>+</b>{' '}
+            справа — следующий шаг; <b>+</b> сверху — текст / медиатека / детали; снизу — From / бот из vault.{' '}
             <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
               Открыть в Signal
             </a>

@@ -23,7 +23,9 @@ from app.crm_service import audit, project_access, project_ids, uid
 from app.db import Project, now
 from app.projects_domain import (
     PERSON_ROLES,
+    base_chain_summary,
     ensure_start_project,
+    get_base_action_chain,
     project_board_row,
     start_project_id,
 )
@@ -131,7 +133,7 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             db.scalars(
                 select(ActionChain)
                 .where(ActionChain.project_id == pid)
-                .order_by(ActionChain.updated_at.desc(), ActionChain.id)
+                .order_by(ActionChain.is_base.desc(), ActionChain.updated_at.desc(), ActionChain.id)
                 .limit(20)
             )
         )
@@ -139,6 +141,7 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             db.scalars(select(Branch).where(Branch.project_id == pid).order_by(Branch.name, Branch.id))
         )
         courses = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
+        base = get_base_action_chain(db, pid, None)
         start_clients = 0
         if project.system_key == "start":
             start_clients = board["contacts_count"]
@@ -150,6 +153,8 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             "branches": [encode(b) for b in branches],
             "courses": [encode(c) for c in courses],
             "chains": [encode(c) for c in chains],
+            # CRM-R5: SoR for project steps = saved constructor base, not fixed funnel template.
+            "base_chain": base_chain_summary(base),
             "start_inbox": project.system_key == "start",
             "start_open_count": int(start_clients),
         }

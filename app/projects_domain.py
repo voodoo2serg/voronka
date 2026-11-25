@@ -249,3 +249,71 @@ def chain_to_funnel_graph(nodes: list) -> dict:
     if "finish" in referenced and "finish" not in graph_nodes:
         graph_nodes["finish"] = {"type": "finish", "text": "Готово"}
     return {"start": start_id, "nodes": graph_nodes}
+
+
+def get_base_action_chain(db, project_id: str, branch_id: str | None = None):
+    """CRM-R5: Project (branch_id=None) or Branch base ActionChain, if any."""
+    from app.crm_models import ActionChain
+
+    q = select(ActionChain).where(
+        ActionChain.project_id == project_id,
+        ActionChain.is_base.is_(True),
+    )
+    if branch_id:
+        q = q.where(ActionChain.branch_id == branch_id)
+    else:
+        q = q.where(ActionChain.branch_id.is_(None))
+    return db.scalar(q.order_by(ActionChain.updated_at.desc(), ActionChain.id))
+
+
+def promote_action_chain_as_base(db, row) -> None:
+    """CRM-R5: Сохранить → this chain becomes the base for its Project/Branch scope.
+
+    Locks existing base rows in-scope (FOR UPDATE) before flipping flags.
+    DB partial unique indexes enforce one base even under concurrent Save.
+    """
+    from app.crm_models import ActionChain
+
+    q = (
+        select(ActionChain)
+        .where(
+            ActionChain.project_id == row.project_id,
+            ActionChain.is_base.is_(True),
+        )
+        .with_for_update()
+    )
+    if row.branch_id:
+        q = q.where(ActionChain.branch_id == row.branch_id)
+    else:
+        q = q.where(ActionChain.branch_id.is_(None))
+    for other in db.scalars(q):
+        if other.id != row.id:
+            other.is_base = False
+    # Flush demotions first — SQLite enforces unique indexes per statement.
+    db.flush()
+    row.is_base = True
+
+
+def base_chain_summary(row) -> dict | None:
+    """Compact base-chain payload for dashboard / work-today (not fixed funnel template)."""
+    if row is None:
+        return None
+    nodes = row.nodes if isinstance(row.nodes, list) else []
+    return {
+        "id": row.id,
+        "name": row.name,
+        "branch_id": row.branch_id,
+        "state": row.state,
+        "is_base": bool(getattr(row, "is_base", False)),
+        "revision": row.revision,
+        "funnel_id": row.funnel_id,
+        "steps": [
+            {
+                "id": n.get("id"),
+                "kind": n.get("kind"),
+                "title": n.get("title") or n.get("kind"),
+            }
+            for n in nodes
+            if isinstance(n, dict)
+        ],
+    }
