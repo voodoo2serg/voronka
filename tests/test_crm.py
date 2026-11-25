@@ -752,3 +752,40 @@ def test_portal_payment_providers_mail_analytics_and_filters(crm, monkeypatch):
     matrix = crm.client.get('/api/crm/staff/cms-matrix').json()
     assert matrix['sync'] == 'manual_v1'
     assert any(x['id'] == 'no_learner_matrix' and x['done'] for x in matrix['checklist'])
+
+def test_entitlement_queue_backlog_does_not_starve_ready_job(crm, monkeypatch):
+    from app import entitlement
+    from app.crm_models import EntitlementJob
+    from app.crm_service import uid
+
+    o = order(crm)
+    seen = []
+
+    def apply(db, job):
+        seen.append(job.id)
+        job.state = "applied" if job.id == "ready" else "waiting_grant"
+        job.updated_at = now()
+        return True
+
+    monkeypatch.setattr(entitlement, "process_job", apply)
+    with crm.db.begin() as db:
+        for i in range(121):
+            payment = Payment(id=uid(), order_id=o["id"], provider="manual",
+                              external_id=f"queue-regression-{i}", amount_minor=1)
+            db.add(payment)
+            db.flush()
+            state = "waiting_grant" if i < 100 else "failed" if i < 120 else "pending"
+            stamp = now() - timedelta(days=1, seconds=121-i)
+            db.add(EntitlementJob(
+                id="ready" if i == 120 else uid(), payment_id=payment.id,
+                order_id=o["id"], state=state, attempts=8 if state == "failed" else 0,
+                created_at=stamp, updated_at=stamp,
+            ))
+        db.flush()
+        entitlement.process_pending(db)
+        assert seen[0] == "ready"
+        assert len(seen) == 21
+        assert db.get(EntitlementJob, "ready").state == "applied"
+        assert len(list(db.scalars(select(EntitlementJob).where(
+            EntitlementJob.state == "failed", EntitlementJob.attempts == 8
+        )))) == 20
