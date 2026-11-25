@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — CRM-R4 Constructor «Проверить» end-to-end
+
+- Dry-run sends real test email via vault Mailu SMTP (`email_smtp`) and Telegram via vault `telegram_bot` (env SMTP/bot fallback).
+- API returns `ok` / `status` / `status_message` plus per-delivery messages; probes entered addresses even when canvas has no send nodes.
+- Constructor UI shows clear Доставлено / Частично / Не доставлено status block.
+- Tests: `tests/test_crm_r4_dry_run.py`.
+
 ## Unreleased — VR-482 Overview flicker + constructor canvas / preview
 
 - Fix `#overview` blink/nav trap: hash router + `hashchange`, nav writes section hashes, silent project load (no global busy), `/me`-only 401 logout, CSP allows Google Fonts for staff chrome.

@@ -325,32 +325,250 @@ def publish_chain(cid: str, admin=Depends(crm_actor)):
         return encode(row)
 
 
-def _dry_run_email(to_addr: str, subject: str, body: str, from_addr: str | None) -> dict:
-    host = os.getenv("SMTP_HOST")
-    frm = from_addr or os.getenv("SMTP_FROM") or ""
-    if not host or not frm or not to_addr:
-        return {"ok": False, "channel": "email", "reason": "smtp_or_address_missing", "preview": body[:500]}
+def _reason_ru(code: str, detail: str | None = None) -> str:
+    """Staff-facing fail text for Constructor «Проверить»."""
+    known = {
+        "smtp_or_address_missing": "Нет SMTP: добавьте ящик Mailu в Подключениях или задайте SMTP_HOST/FROM",
+        "bot_or_chat_missing": "Нет бота Telegram в Подключениях или не указан получатель",
+        "vault_inactive": "Подключение выключено — включите его в Подключениях",
+        "vault_secret_missing": "В подключении нет секрета — откройте Подключения и сохраните пароль/токен",
+        "recipient_missing": "Укажите адрес получателя",
+    }
+    base = known.get(code) or code
+    if detail:
+        return f"{base}: {detail}"[:280]
+    return base[:280]
+
+
+def _active_vault(db, project_id: str, vault_type: str):
+    from app.crm_models import ConnectionVault
+
+    return list(
+        db.scalars(
+            select(ConnectionVault)
+            .where(
+                ConnectionVault.project_id == project_id,
+                ConnectionVault.type == vault_type,
+                ConnectionVault.active.is_(True),
+            )
+            .order_by(ConnectionVault.updated_at.desc(), ConnectionVault.id)
+        )
+    )
+
+
+def _pick_email_vault(db, project_id: str, node: dict | None):
+    """Resolve Mailu/SMTP vault for a node (from_vault_id → from_address → first active)."""
+    from app.crm_models import ConnectionVault
+
+    cfg = (node or {}).get("config") if isinstance(node, dict) else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    vault_id = str(cfg.get("from_vault_id") or cfg.get("vault_id") or "").strip()
+    from_addr = str((node or {}).get("from_address") or "").strip() if node else ""
+    rows = _active_vault(db, project_id, "email_smtp")
+    if vault_id:
+        row = db.get(ConnectionVault, vault_id)
+        if row and row.project_id == project_id and row.type == "email_smtp":
+            if not row.active:
+                return None, "vault_inactive"
+            return row, None
+        return None, "smtp_or_address_missing"
+    if from_addr:
+        for row in rows:
+            meta = row.meta if isinstance(row.meta, dict) else {}
+            if str(meta.get("from_address") or "").strip().lower() == from_addr.lower():
+                return row, None
+    if rows:
+        return rows[0], None
+    return None, None
+
+
+def _pick_telegram_vault(db, project_id: str, node: dict | None):
+    from app.crm_models import ConnectionVault
+
+    cfg = (node or {}).get("config") if isinstance(node, dict) else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    vault_id = str(cfg.get("vault_id") or "").strip()
+    rows = _active_vault(db, project_id, "telegram_bot")
+    if vault_id:
+        row = db.get(ConnectionVault, vault_id)
+        if row and row.project_id == project_id and row.type == "telegram_bot":
+            if not row.active:
+                return None, "vault_inactive"
+            return row, None
+        return None, "bot_or_chat_missing"
+    if rows:
+        return rows[0], None
+    return None, None
+
+
+def _email_transport(db, project_id: str, node: dict | None) -> dict[str, Any]:
+    """Build SMTP transport from vault (Mailu) with env SMTP fallback."""
+    from app import connection_vault as cv
+    from app import mailu_client
+
+    row, err = _pick_email_vault(db, project_id, node)
+    if err:
+        return {"ok": False, "reason": err}
+    if row is not None:
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        secrets = cv.reveal_secrets(row)
+        host = str(meta.get("smtp_host") or "").strip()
+        port = str(meta.get("smtp_port") or "587").strip() or "587"
+        user = str(meta.get("smtp_user") or meta.get("from_address") or "").strip()
+        password = str(secrets.get("smtp_password") or "").strip()
+        frm = str(
+            (node or {}).get("from_address")
+            or meta.get("from_address")
+            or user
+            or ""
+        ).strip()
+        if not host:
+            host, port = mailu_client.smtp_defaults()
+        if not host or not frm:
+            return {"ok": False, "reason": "smtp_or_address_missing"}
+        if not password:
+            return {"ok": False, "reason": "vault_secret_missing", "vault_id": row.id}
+        return {
+            "ok": True,
+            "host": host,
+            "port": int(port or "587"),
+            "user": user or frm,
+            "password": password,
+            "from": frm,
+            "vault_id": row.id,
+            "source": "vault",
+        }
+    # Legacy env SMTP (pre-vault / dual-read).
+    host = (os.getenv("SMTP_HOST") or os.getenv("MAILU_SMTP_HOST") or "").strip()
+    frm = str((node or {}).get("from_address") or os.getenv("SMTP_FROM") or "").strip()
+    user = (os.getenv("SMTP_USER") or "").strip()
+    password = (os.getenv("SMTP_PASSWORD") or "").strip()
+    port = int(os.getenv("SMTP_PORT") or os.getenv("MAILU_SMTP_PORT") or "587")
+    if not host or not frm:
+        return {"ok": False, "reason": "smtp_or_address_missing"}
+    return {
+        "ok": True,
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "from": frm,
+        "vault_id": None,
+        "source": "env",
+    }
+
+
+def _telegram_token(db, project_id: str, node: dict | None) -> dict[str, Any]:
+    from app import connection_vault as cv
+
+    row, err = _pick_telegram_vault(db, project_id, node)
+    if err:
+        return {"ok": False, "reason": err}
+    if row is not None:
+        secrets = cv.reveal_secrets(row)
+        token = str(secrets.get("bot_token") or "").strip()
+        if not token:
+            return {"ok": False, "reason": "vault_secret_missing", "vault_id": row.id}
+        return {"ok": True, "token": token, "vault_id": row.id, "source": "vault"}
+    token = (os.getenv("ADMIN_BOT_TOKEN") or os.getenv("TG_MAIN_TOKEN") or "").strip()
+    if not token:
+        return {"ok": False, "reason": "bot_or_chat_missing"}
+    return {"ok": True, "token": token, "vault_id": None, "source": "env"}
+
+
+def _dry_run_email(
+    to_addr: str,
+    subject: str,
+    body: str,
+    transport: dict[str, Any],
+) -> dict:
+    preview = body[:500]
+    if not (to_addr or "").strip():
+        return {
+            "ok": False,
+            "channel": "email",
+            "reason": "recipient_missing",
+            "message": _reason_ru("recipient_missing"),
+            "preview": preview,
+        }
+    if not transport.get("ok"):
+        code = str(transport.get("reason") or "smtp_or_address_missing")
+        return {
+            "ok": False,
+            "channel": "email",
+            "reason": code,
+            "message": _reason_ru(code),
+            "preview": preview,
+            "vault_id": transport.get("vault_id"),
+        }
+    frm = str(transport["from"])
+    host = str(transport["host"])
+    port = int(transport["port"])
+    user = str(transport.get("user") or "")
+    password = str(transport.get("password") or "")
     msg = EmailMessage()
     msg["Subject"] = f"[Проверка] {subject}"
     msg["From"] = frm
     msg["To"] = to_addr
     msg.set_content(body)
     try:
-        with smtplib.SMTP(host, int(os.getenv("SMTP_PORT") or "587"), timeout=20) as smtp:
-            if os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD"):
+        with smtplib.SMTP(host, port, timeout=20) as smtp:
+            smtp.ehlo()
+            try:
                 smtp.starttls()
-                smtp.login(os.getenv("SMTP_USER") or "", os.getenv("SMTP_PASSWORD") or "")
+                smtp.ehlo()
+            except smtplib.SMTPException:
+                pass
+            if user and password:
+                smtp.login(user, password)
             smtp.send_message(msg)
-        return {"ok": True, "channel": "email", "to": to_addr, "from": frm}
+        return {
+            "ok": True,
+            "channel": "email",
+            "to": to_addr,
+            "from": frm,
+            "message": f"Письмо отправлено на {to_addr}",
+            "vault_id": transport.get("vault_id"),
+            "source": transport.get("source"),
+        }
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "channel": "email", "reason": str(exc)[:200], "preview": body[:500]}
+        detail = str(exc)[:200]
+        return {
+            "ok": False,
+            "channel": "email",
+            "reason": detail,
+            "message": f"SMTP ошибка: {detail}",
+            "preview": preview,
+            "vault_id": transport.get("vault_id"),
+            "source": transport.get("source"),
+        }
 
 
-def _dry_run_telegram(to: str, text: str) -> dict:
-    token = os.getenv("ADMIN_BOT_TOKEN") or os.getenv("TG_MAIN_TOKEN")
-    chat = (to or "").strip().lstrip("@")
-    if not token or not chat:
-        return {"ok": False, "channel": "telegram", "reason": "bot_or_chat_missing", "preview": text[:500]}
+def _dry_run_telegram(to: str, text: str, token_info: dict[str, Any]) -> dict:
+    preview = text[:500]
+    chat_raw = (to or "").strip()
+    if not chat_raw:
+        return {
+            "ok": False,
+            "channel": "telegram",
+            "reason": "recipient_missing",
+            "message": _reason_ru("recipient_missing"),
+            "preview": preview,
+        }
+    if not token_info.get("ok"):
+        code = str(token_info.get("reason") or "bot_or_chat_missing")
+        return {
+            "ok": False,
+            "channel": "telegram",
+            "reason": code,
+            "message": _reason_ru(code),
+            "preview": preview,
+            "vault_id": token_info.get("vault_id"),
+        }
+    token = str(token_info["token"])
+    chat = chat_raw.lstrip("@")
     # Numeric chat id preferred; username-only may fail without prior dialog — still attempt.
     try:
         import httpx
@@ -361,13 +579,90 @@ def _dry_run_telegram(to: str, text: str) -> dict:
         else:
             payload["chat_id"] = chat if chat.startswith("@") else f"@{chat}"
         r = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=15)
-        return {"ok": r.is_success, "channel": "telegram", "status": r.status_code, "to": str(payload["chat_id"])}
+        if r.is_success:
+            return {
+                "ok": True,
+                "channel": "telegram",
+                "status": r.status_code,
+                "to": str(payload["chat_id"]),
+                "message": f"Telegram доставлено → {payload['chat_id']}",
+                "vault_id": token_info.get("vault_id"),
+                "source": token_info.get("source"),
+            }
+        detail = ""
+        try:
+            detail = str((r.json() or {}).get("description") or "")[:160]
+        except Exception:  # noqa: BLE001
+            detail = (r.text or "")[:160]
+        reason = detail or f"http_{r.status_code}"
+        return {
+            "ok": False,
+            "channel": "telegram",
+            "status": r.status_code,
+            "reason": reason,
+            "message": f"Telegram не принял: {reason}",
+            "to": str(payload["chat_id"]),
+            "preview": preview,
+            "vault_id": token_info.get("vault_id"),
+            "source": token_info.get("source"),
+        }
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "channel": "telegram", "reason": str(exc)[:200], "preview": text[:500]}
+        detail = str(exc)[:200]
+        return {
+            "ok": False,
+            "channel": "telegram",
+            "reason": detail,
+            "message": f"Telegram ошибка: {detail}",
+            "preview": preview,
+            "vault_id": token_info.get("vault_id"),
+            "source": token_info.get("source"),
+        }
+
+
+def _summarize_dry_run(steps: list[dict], *, email: str, telegram: str) -> dict[str, Any]:
+    send_channels = {"email", "telegram"}
+    deliveries = [
+        d
+        for step in steps
+        for d in (step.get("deliveries") or [])
+        if isinstance(d, dict) and d.get("channel") in send_channels
+    ]
+    ok_n = sum(1 for d in deliveries if d.get("ok"))
+    fail_n = sum(1 for d in deliveries if not d.get("ok"))
+    if not deliveries:
+        status = "fail"
+        ok = False
+        message = "Нет шагов для отправки email/Telegram — добавьте письмо или Telegram на холсте"
+    elif fail_n == 0:
+        status = "ok"
+        ok = True
+        parts = []
+        if email:
+            parts.append(f"email → {email}")
+        if telegram:
+            parts.append(f"Telegram → {telegram}")
+        message = "Доставлено: " + (" · ".join(parts) if parts else f"{ok_n} канал(ов)")
+    elif ok_n == 0:
+        status = "fail"
+        ok = False
+        first = next((d.get("message") or d.get("reason") for d in deliveries if not d.get("ok")), "ошибка")
+        message = f"Не доставлено: {first}"
+    else:
+        status = "partial"
+        ok = False
+        message = f"Частично: ок {ok_n}, ошибок {fail_n}"
+    return {
+        "ok": ok,
+        "status": status,
+        "status_message": message,
+        "deliveries_ok": ok_n,
+        "deliveries_fail": fail_n,
+    }
 
 
 @router.post("/action-chains/{cid}/dry-run")
 def dry_run_chain(cid: str, body: DryRunBody, admin=Depends(crm_actor)):
+    """CRM-R4: really deliver test email/TG via vault Mailu SMTP + vault bot (env fallback)."""
     email = (body.email or "").strip()
     telegram = (body.telegram or "").strip()
     if not email and not telegram:
@@ -376,19 +671,25 @@ def dry_run_chain(cid: str, body: DryRunBody, admin=Depends(crm_actor)):
         row = must(db.get(ActionChain, cid))
         project_access(db, admin, row.project_id)
         nodes = row.nodes if isinstance(row.nodes, list) else []
-        steps = []
+        steps: list[dict[str, Any]] = []
+        email_attempted = False
+        telegram_attempted = False
         for node in nodes:
             kind = node.get("kind")
             cfg = node.get("config") or {}
+            if not isinstance(cfg, dict):
+                cfg = {}
             title = node.get("title") or kind
             text = str(cfg.get("body") or cfg.get("text") or cfg.get("question") or title)
             step: dict[str, Any] = {"id": node.get("id"), "kind": kind, "title": title, "deliveries": []}
             if kind in {"email", "contact"} and email:
-                step["deliveries"].append(
-                    _dry_run_email(email, str(title), text, node.get("from_address"))
-                )
+                transport = _email_transport(db, row.project_id, node)
+                step["deliveries"].append(_dry_run_email(email, str(title), text, transport))
+                email_attempted = True
             if kind in {"telegram", "contact"} and telegram:
-                step["deliveries"].append(_dry_run_telegram(telegram, text))
+                token_info = _telegram_token(db, row.project_id, node)
+                step["deliveries"].append(_dry_run_telegram(telegram, text, token_info))
+                telegram_attempted = True
             if kind == "payment":
                 step["deliveries"].append(
                     {
@@ -397,12 +698,63 @@ def dry_run_chain(cid: str, body: DryRunBody, admin=Depends(crm_actor)):
                         "provider": cfg.get("provider") or "robokassa",
                         "mode": cfg.get("tariff_mode") or "fixed",
                         "note": "Dry-run: ссылка на оплату не создавалась",
+                        "message": "Превью оплаты (ссылка не создавалась)",
                     }
                 )
             if kind in {"survey", "code", "wait", "finish"}:
-                step["deliveries"].append({"ok": True, "channel": "local", "note": f"Шаг «{kind}» — без отправки"})
+                step["deliveries"].append(
+                    {
+                        "ok": True,
+                        "channel": "local",
+                        "note": f"Шаг «{kind}» — без отправки",
+                        "message": f"Шаг «{kind}» — без отправки",
+                    }
+                )
             steps.append(step)
-        report = {"steps": steps, "email": email, "telegram": telegram}
+        # Always attempt delivery to entered addresses (even if canvas has no matching kind).
+        if email and not email_attempted:
+            transport = _email_transport(db, row.project_id, None)
+            steps.append(
+                {
+                    "id": "probe-email",
+                    "kind": "email",
+                    "title": "Проверка email",
+                    "deliveries": [
+                        _dry_run_email(
+                            email,
+                            "Проверка цепочки",
+                            "Тестовое письмо из CRM «Проверить».",
+                            transport,
+                        )
+                    ],
+                }
+            )
+        if telegram and not telegram_attempted:
+            token_info = _telegram_token(db, row.project_id, None)
+            steps.append(
+                {
+                    "id": "probe-telegram",
+                    "kind": "telegram",
+                    "title": "Проверка Telegram",
+                    "deliveries": [
+                        _dry_run_telegram(
+                            telegram,
+                            "Тестовое сообщение из CRM «Проверить».",
+                            token_info,
+                        )
+                    ],
+                }
+            )
+        summary = _summarize_dry_run(steps, email=email, telegram=telegram)
+        report = {
+            "steps": steps,
+            "email": email,
+            "telegram": telegram,
+            "deliveries_ok": summary["deliveries_ok"],
+            "deliveries_fail": summary["deliveries_fail"],
+            "status": summary["status"],
+            "status_message": summary["status_message"],
+        }
         audit_row = ActionChainDryRun(
             id=uid(),
             chain_id=cid,
@@ -413,5 +765,19 @@ def dry_run_chain(cid: str, body: DryRunBody, admin=Depends(crm_actor)):
             created_at=now(),
         )
         db.add(audit_row)
-        audit(db, admin, "action_chain.dry_run", project_id=row.project_id, chain_id=cid)
-        return {"id": audit_row.id, "report": report}
+        audit(
+            db,
+            admin,
+            "action_chain.dry_run",
+            project_id=row.project_id,
+            chain_id=cid,
+            ok=summary["ok"],
+            status=summary["status"],
+        )
+        return {
+            "id": audit_row.id,
+            "ok": summary["ok"],
+            "status": summary["status"],
+            "status_message": summary["status_message"],
+            "report": report,
+        }

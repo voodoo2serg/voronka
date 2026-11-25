@@ -143,6 +143,20 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .constructor-plus-menu-link:hover{background:#f1f1ef;text-decoration:none}
 .constructor-kinds{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .constructor-config,.constructor-dryrun,.creds-form{display:flex;flex-direction:column;gap:10px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.constructor-dryrun-status{margin-top:4px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
+.constructor-dryrun-status b{display:block;margin-bottom:4px;font-size:13px}
+.constructor-dryrun-status p{margin:0 0 8px;font-size:13px;line-height:1.4}
+.constructor-dryrun-status ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.constructor-dryrun-status li{font-size:12px;line-height:1.4;display:flex;gap:8px;align-items:flex-start}
+.constructor-dryrun-status li span{flex:0 0 auto;font-weight:600;min-width:4.5em;text-transform:uppercase;letter-spacing:.02em;font-size:11px;color:var(--muted)}
+.constructor-dryrun-status.is-ok{border-color:#c5d9c8;background:#f3f8f3}
+.constructor-dryrun-status.is-ok b{color:#2f6b3a}
+.constructor-dryrun-status.is-partial{border-color:#e6d4a8;background:#fbf7ee}
+.constructor-dryrun-status.is-partial b{color:#8a6a32}
+.constructor-dryrun-status.is-fail{border-color:#e3c4c4;background:#faf3f3}
+.constructor-dryrun-status.is-fail b{color:#8a3a3a}
+.constructor-dryrun-status li.ok{color:#2f6b3a}
+.constructor-dryrun-status li.fail{color:#8a3a3a}
 .creds-form label.checkbox{display:flex;align-items:center;gap:8px}
 .constructor-cart-ctas{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:0 0 8px;padding:12px 0;border-bottom:1px solid var(--line)}
 .constructor-cart-ctas .fine{flex:1 1 100%;margin:0}
