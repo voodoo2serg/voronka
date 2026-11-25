@@ -113,6 +113,7 @@ export function ActionConstructorSection({
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [dryEmail, setDryEmail] = useState('');
   const [dryTg, setDryTg] = useState('');
+  const [dryResult, setDryResult] = useState<Row | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorFocus, setEditorFocus] = useState<'message' | 'action'>('message');
@@ -224,11 +225,19 @@ export function ActionConstructorSection({
   async function dryRun() {
     await onBusy(async () => {
       if (!chainId) throw new Error('Сначала сохраните цепочку');
+      if (!dryEmail.trim() && !dryTg.trim()) {
+        throw new Error('Укажите email и/или Telegram для проверки');
+      }
       const r = await api(`/action-chains/${chainId}/dry-run`, 'POST', {
         email: dryEmail,
         telegram: dryTg,
       });
-      onNotice(`Проверка запущена · ${r.id?.slice?.(0, 8) || 'ok'}`);
+      setDryResult(r);
+      const status = String(r.status || (r.ok ? 'ok' : 'fail'));
+      const msg = String(r.status_message || (r.ok ? 'Доставлено' : 'Не доставлено'));
+      if (status === 'ok') onNotice(`Проверка: ${msg}`);
+      else if (status === 'partial') onNotice(`Проверка (частично): ${msg}`);
+      else onNotice(`Проверка не прошла: ${msg}`);
     });
   }
 
@@ -514,6 +523,7 @@ export function ActionConstructorSection({
               setSelected(null);
               setEditorOpen(false);
               setPlusOpenAt(null);
+              setDryResult(null);
             }}
           >
             + Новая
@@ -534,6 +544,7 @@ export function ActionConstructorSection({
                   setSelected(loaded.length ? 0 : null);
                   setEditorOpen(Boolean(loaded.length));
                   setPlusOpenAt(null);
+                  setDryResult(null);
                 }}
               >
                 {String(c.name)}
@@ -646,18 +657,64 @@ export function ActionConstructorSection({
 
           <div className="constructor-dryrun">
             <h3>Проверить</h3>
-            <p className="fine">Dry-run по сохранённой цепочке — email и/или Telegram получатель.</p>
+            <p className="fine">
+              Реальная тестовая отправка на указанные адреса через Mailu SMTP и Telegram-бот из Подключений.
+            </p>
             <label>
               Email
-              <input value={dryEmail} onChange={(e) => setDryEmail(e.target.value)} placeholder="you@example.ru" />
+              <input
+                value={dryEmail}
+                onChange={(e) => {
+                  setDryEmail(e.target.value);
+                  setDryResult(null);
+                }}
+                placeholder="you@example.ru"
+              />
             </label>
             <label>
               Telegram
-              <input value={dryTg} onChange={(e) => setDryTg(e.target.value)} placeholder="@username или chat_id" />
+              <input
+                value={dryTg}
+                onChange={(e) => {
+                  setDryTg(e.target.value);
+                  setDryResult(null);
+                }}
+                placeholder="@username или chat_id"
+              />
             </label>
             <button type="button" disabled={busy} onClick={() => void dryRun()}>
               Проверить
             </button>
+            {dryResult ? (
+              <div
+                className={`constructor-dryrun-status ${
+                  dryResult.ok ? 'is-ok' : String(dryResult.status) === 'partial' ? 'is-partial' : 'is-fail'
+                }`}
+                role="status"
+                aria-live="polite"
+              >
+                <b>
+                  {dryResult.ok
+                    ? 'Доставлено'
+                    : String(dryResult.status) === 'partial'
+                      ? 'Частично'
+                      : 'Не доставлено'}
+                </b>
+                <p>{String(dryResult.status_message || '')}</p>
+                <ul>
+                  {(((dryResult.report as Row | undefined)?.steps as Row[] | undefined) || []).flatMap((step) =>
+                    ((step.deliveries as Row[] | undefined) || [])
+                      .filter((d) => d.channel === 'email' || d.channel === 'telegram')
+                      .map((d, i) => (
+                        <li key={`${String(step.id)}-${String(d.channel)}-${i}`} className={d.ok ? 'ok' : 'fail'}>
+                          <span>{String(d.channel)}</span>
+                          {String(d.message || d.reason || (d.ok ? 'ok' : 'ошибка'))}
+                        </li>
+                      )),
+                  )}
+                </ul>
+              </div>
+            ) : null}
           </div>
         </section>
 

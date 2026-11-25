@@ -102,6 +102,9 @@ def test_action_chain_save_publish_dry_run(crm, monkeypatch, tmp_path):
         json={"email": "tester@example.ru", "telegram": ""},
     ).json()
     assert dry["report"]["steps"]
+    assert "status" in dry
+    assert "status_message" in dry
+    assert dry["ok"] is False  # SMTP unset in this test → clear fail, not silent success
     pub = crm.client.post(f"/api/crm/action-chains/{created['id']}/publish").json()
     assert pub["state"] == "published"
     assert pub["funnel_id"]
