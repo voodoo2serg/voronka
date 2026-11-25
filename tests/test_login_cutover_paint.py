@@ -88,10 +88,14 @@ def test_ops_login_auth_l2_empty_state():
 
 def test_crm_empty_state_not_project_wall():
     src = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
+    board = (ROOT / "web" / "app" / "crm" / "sections" / "ProjectsBoardSection.tsx").read_text(encoding="utf-8")
     assert "Начните с проекта" not in src
-    # Linked staff keep section shell; project is optional filter/banner only.
-    assert "project-optional" in src
-    assert "empty-world" in src
+    # CRM-R6: home = projects board only; no lead-wall / «project optional» face on home.
+    assert "data-crm-home=\"projects-board\"" in board or "data-crm-home='projects-board'" in board
+    assert "Ближайшие задачи" in board
+    assert "project-pick" in src
+    assert "section !== 'home'" in src
+    assert "writeHash('#home')" in src
     assert "Запустить цепочку" in src
     assert "goToday" in src
     assert "WorkTodayPanel" in src
@@ -109,6 +113,11 @@ def test_crm_empty_state_not_project_wall():
     assert "['outreach', 'Прогрев']" not in src
     assert "SIGNAL_MEDIA_LIBRARY_URL" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
     assert "view=media" in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(encoding="utf-8")
+    # Home face must not be WorkToday / infinite contacts list.
+    home_block = src.split("section === 'home'")[1].split("section === 'overview'")[0]
+    assert "ProjectsBoardSection" in home_block
+    assert "WorkTodayPanel" not in home_block
+    assert "contacts.map" not in home_block
 
 
 

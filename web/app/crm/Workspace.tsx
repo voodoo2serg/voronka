@@ -9,7 +9,7 @@ import { SystemHelpModal } from './components/SystemHelpModal';
 import { CLIENT_PAGE_SIZES, sections, sectionHints, stateNames } from './constants';
 import { Icon } from './icons';
 import SignalLauncher from '../components/SignalLauncher';
-import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, PORTAL_URLS, voronkaOpsHref } from './portals';
+import { ACCESS_REQUEST, CONTACT_SOURCE_FILTERS, voronkaOpsHref } from './portals';
 import { ActionConstructorSection } from './sections/ActionConstructorSection';
 import { AnalyticsSection } from './sections/AnalyticsSection';
 import { InboxSection } from './sections/InboxSection';
@@ -255,6 +255,13 @@ export default function Workspace() {
     setSection(id);
     setDetail(null);
     setError('');
+    // CRM-R6: «Проекты» = home board face — leave project filter empty on the board.
+    if (id === 'home') {
+      setPid('');
+      setCartId('');
+      setCartForProject('');
+      setWorkToday(null);
+    }
     writeHash(sectionHash(id));
   }
 
@@ -265,6 +272,7 @@ export default function Workspace() {
         const m = await api('/me');
         setMe(m);
         // Keep current project if still allowed; otherwise leave empty until staff picks from board.
+        // Fresh SSO with no deep-link must not auto-enter a project (home = board only).
         setPid((current) => (m.projects.some((p: Row) => p.id === current) ? current : ''));
         await loadHomeBoard().catch(() => setProjectBoard([]));
       } catch {
@@ -277,6 +285,7 @@ export default function Workspace() {
   }, [ready, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hash router: apply on login + listen for deep-links / back-forward.
+  // CRM-R6: empty hash after SSO → #home (project cards), never contacts/WorkToday as face.
   // Nav writes the matching hash so a stuck `#overview` cannot snap the section back.
   useEffect(() => {
     if (!me) return;
@@ -290,6 +299,13 @@ export default function Workspace() {
       }
     } catch {}
     applyLocationHash();
+    const hash = typeof window !== 'undefined' ? window.location.hash || '' : '';
+    const base = hash.split('?')[0] || '';
+    if (!base || base === '#') {
+      writeHash('#home');
+      setSection('home');
+      setPid('');
+    }
     const onHash = () => applyLocationHash();
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -999,21 +1015,29 @@ export default function Workspace() {
               {notice}
             </div>
           )}
-          {!pid && (
-            <div className="notice banner project-optional" role="status">
-              {me.role === 'owner' ? (
+          {/* CRM-R6: home = projects board only — no lead-wall / «project optional» face above cards. */}
+          {!pid && section !== 'home' && (
+            <div className="notice banner project-pick" role="status">
+              {(me.projects || []).length > 0 || projectBoard.length > 0 ? (
                 <>
                   <p>
-                    Проект — необязательный фильтр. Клиенты и сделки можно открыть сразу; создать проект — когда понадобится разделение.
+                    Сначала выберите проект на доске — клиенты, сделки и конструктор открываются внутри проекта, не как бесконечный inbox.
                   </p>
-                  <button type="button" className="primary" onClick={openCreateProject}>
-                    Создать проект
+                  <button type="button" className="primary" onClick={() => goSection('home')}>
+                    К доске проектов
+                  </button>
+                </>
+              ) : me.role === 'owner' ? (
+                <>
+                  <p>Пока нет проектов. Создайте первый на доске — или откройте системный «Старт», когда он появится.</p>
+                  <button type="button" className="primary" onClick={() => goSection('home')}>
+                    К доске проектов
                   </button>
                 </>
               ) : (
                 <>
                   <p>
-                    Аккаунт привязан. Проект ещё не назначен — разделы CRM уже открыты (пока пустые). Запросите назначение проекта или staff у администратора.
+                    Аккаунт привязан, но проект ещё не назначен. Запросите назначение проекта или staff у администратора.
                   </p>
                   <div className="access-actions">
                     <a className="primary" href={ACCESS_REQUEST.signal} target="_blank" rel="noreferrer">
@@ -1025,25 +1049,6 @@ export default function Workspace() {
                   </div>
                 </>
               )}
-              <div className="empty-world" aria-label="Сервисы SIGNAL">
-                {(portalLinks.length
-                  ? portalLinks
-                  : [
-                      { id: 'cms', label: 'CMS', url: PORTAL_URLS.cms + '/admin' },
-                      { id: 'lms', label: 'LMS', url: PORTAL_URLS.lms + '/' },
-                      { id: 'signal', label: 'SIGNAL', url: PORTAL_URLS.signal + '/' },
-                      ...(me.role === 'manager'
-                        ? []
-                        : [{ id: 'voronka', label: 'Боты / Ops', url: voronkaOpsHref({ section: 'bots' }) }]),
-                    ]
-                )
-                  .filter((link: Row) => link.id !== 'crm')
-                  .map((link: Row) => (
-                    <a key={String(link.id)} href={String(link.url)} target="_blank" rel="noreferrer">
-                      {String(link.label)} ↗
-                    </a>
-                  ))}
-              </div>
             </div>
           )}
           <>
@@ -1060,7 +1065,7 @@ export default function Workspace() {
                   {!pid && (
                     <section className="panel">
                       <p className="muted">Выберите проект на доске «Проекты» или в фильтре слева.</p>
-                      <button type="button" className="link" onClick={() => setSection('home')}>
+                      <button type="button" className="link" onClick={() => goSection('home')}>
                         К доске проектов →
                       </button>
                     </section>
@@ -1821,7 +1826,7 @@ export default function Workspace() {
                     соберите цепочку на холсте конструктора.
                   </p>
                   <div className="row" style={{ gap: 10, marginTop: 12 }}>
-                    <button type="button" className="primary" onClick={() => setSection('home')}>
+                    <button type="button" className="primary" onClick={() => goSection('home')}>
                       Выбрать проект на доске
                     </button>
                   </div>
