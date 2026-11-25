@@ -279,8 +279,13 @@ def test_frontend_no_paste_asset_id_and_meta_kinds_plus():
     assert "MediaLibrarySection" in ws
     assert "mediaOverlay" in ws
     assert "#media" in ws
-    # Deep-link cart parsing may remain for compat, but UI must not force CMS cart
+    # CRM-R2 lock: no cart deep-link staff path in Workspace
     assert "корзины CMS" not in ws
+    assert "cartId=" not in ws
+    assert "setCartId" not in ws
+    assert "cmsChainCartHref" not in (ROOT / "web" / "app" / "crm" / "portals.ts").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_meta_exposes_cart_kind_map(crm):

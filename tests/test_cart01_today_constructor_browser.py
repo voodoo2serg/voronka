@@ -84,6 +84,12 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
         expect(page.get_by_role("link", name="Набрать корзину в CMS")).to_have_count(0)
         expect(page.locator(".constructor-plus").first).to_be_visible()
+        expect(page.locator('a[href*="admin/cart"]')).to_have_count(0)
+        expect(page.locator("a.constructor-plus")).to_have_count(0)
+        # Start-square «+» opens kinds menu in CRM (not CMS)
+        page.get_by_test_id("constructor-plus-start").click()
+        expect(page.get_by_role("menu", name="Типы шагов")).to_be_visible()
+        page.get_by_test_id("constructor-plus-start").click()  # close
         # WorkToday sales contour / Q11 ops copy must not be on #today surface
         expect(page.locator("#work-today-contour")).to_have_count(0)
         expect(page.get_by_text("Q11=C", exact=False)).to_have_count(0)

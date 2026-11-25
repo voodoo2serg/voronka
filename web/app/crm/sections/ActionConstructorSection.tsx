@@ -154,8 +154,6 @@ export function ActionConstructorSection({
   pid: string;
   /** Project branches for CRM-R5 base-chain scope (optional Branch). */
   branches?: Row[];
-  /** @deprecated CRM-R2: CMS cart is no longer a staff path; ignored. */
-  cartId?: string | null;
   busy: boolean;
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
@@ -459,6 +457,20 @@ export function ActionConstructorSection({
     openSignalMedia(nodeId);
   }
 
+  /** Empty-canvas / toolbar: browse media in CRM (or Signal tab) — never CMS cart. */
+  function openMediaBrowse() {
+    setPlusOpenAt(null);
+    if (current?.id) {
+      openMediaOverlay(current.id);
+      return;
+    }
+    if (onOpenMediaLibrary) {
+      onOpenMediaLibrary('');
+      return;
+    }
+    window.open(mediaHrefForNode(null), '_blank', 'noopener');
+  }
+
   /** CRM-R10: Signal SSO same-tab (return_to carries node; draft in sessionStorage). */
   function openSignalMedia(nodeId: string) {
     setPlusOpenAt(null);
@@ -478,7 +490,15 @@ export function ActionConstructorSection({
   const previewChannel = channelLabel(current, vaultEmail, vaultMessaging, vaultPayment);
   const previewBody = nodeBody(current);
 
-  function TypeMenu({ menuKey, afterIndex }: { menuKey: string; afterIndex?: number }) {
+  function TypeMenu({
+    menuKey,
+    afterIndex,
+    testId,
+  }: {
+    menuKey: string;
+    afterIndex?: number;
+    testId?: string;
+  }) {
     const open = plusOpenAt === menuKey;
     return (
       <div className="constructor-plus-wrap">
@@ -489,6 +509,7 @@ export function ActionConstructorSection({
           aria-label="Добавить шаг справа"
           aria-expanded={open}
           aria-haspopup="menu"
+          data-testid={testId}
           onClick={() => setPlusOpenAt((cur) => (cur === menuKey ? null : menuKey))}
         >
           +
@@ -850,7 +871,7 @@ export function ActionConstructorSection({
             </div>
 
             <div className="constructor-connector constructor-connector-h">
-              <TypeMenu menuKey="flow-start" afterIndex={-1} />
+              <TypeMenu menuKey="flow-start" afterIndex={-1} testId="constructor-plus-start" />
             </div>
 
             {nodes.map((node, index) => (
@@ -897,7 +918,7 @@ export function ActionConstructorSection({
                 >
                   Добавить шаг
                 </button>
-                <button type="button" className="link" onClick={openMedia}>
+                <button type="button" className="link" onClick={openMediaBrowse}>
                   Из медиатеки
                 </button>
                 {onOpenConnections ? (

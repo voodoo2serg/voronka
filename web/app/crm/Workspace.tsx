@@ -78,9 +78,6 @@ export default function Workspace() {
   const [paymentProviders, setPaymentProviders] = useState<Row | null>(null);
   const [salesRunbook, setSalesRunbook] = useState<Row | null>(null);
   const [workToday, setWorkToday] = useState<Row | null>(null);
-  /** Deep-linked CMS cart id — only valid while `pid` matches `cartForProject`. */
-  const [cartId, setCartId] = useState<string>('');
-  const [cartForProject, setCartForProject] = useState<string>('');
   /** B-03 / CRM-R10: media drawer overlay — keep constructor draft mounted; pick attaches to square. */
   const [mediaOverlay, setMediaOverlay] = useState(false);
   const [mediaPickNodeId, setMediaPickNodeId] = useState<string | null>(null);
@@ -245,21 +242,18 @@ export default function Workspace() {
     const hash = window.location.hash || '';
     const base = hash.split('?')[0] || '';
     // CART-01: #today is constructor-only (not WorkToday sales contour).
-    // CART-04: #today?project=&cart= — project + CMS cart id for Constructor.
+    // CRM-R2: ignore legacy ?cart= — constructor never hops to CMS cart.
     if (base === '#today' || hash.startsWith('#today')) {
       setSection('chains');
       const qIdx = hash.indexOf('?');
       if (qIdx >= 0) {
         const q = new URLSearchParams(hash.slice(qIdx + 1));
         const project = (q.get('project') || '').trim();
-        const cart = (q.get('cart') || '').trim();
         const node = (q.get('node') || '').trim();
         const chain = (q.get('chain') || '').trim();
         const assetId = (q.get('asset_id') || '').trim();
         const contentKind = (q.get('content_kind') || '').trim();
         if (project) setPid(project);
-        setCartId(cart);
-        setCartForProject(cart && project ? project : '');
         if (node) setCtorFocusNodeId(node);
         if (chain) setCtorFocusChainId(chain);
         if (assetId) setCtorPendingAssetId(assetId);
@@ -292,8 +286,6 @@ export default function Workspace() {
     // CRM-R6: «Проекты» = home board face — leave project filter empty on the board.
     if (id === 'home') {
       setPid('');
-      setCartId('');
-      setCartForProject('');
       setWorkToday(null);
     }
     writeHash(sectionHash(id));
@@ -356,13 +348,10 @@ export default function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me]);
 
-  // CART-04 / Codex P2: drop deep-linked cart when staff switches Project (selector / board).
-  // CRM-R7: also reset deals table page so a smaller project is not stuck on an empty page.
+  // CRM-R7: reset deals table page so a smaller project is not stuck on an empty page.
   useEffect(() => {
     const prev = prevPidRef.current;
     if (prev && prev !== pid) {
-      setCartId('');
-      setCartForProject('');
       setDealOffset(0);
     }
     prevPidRef.current = pid;
@@ -443,8 +432,6 @@ export default function Workspace() {
     setOffset(0);
     setDealOffset(0);
     setPid(id);
-    setCartId('');
-    setCartForProject('');
     setSection('overview');
     writeHash('#overview');
   }
@@ -1950,15 +1937,13 @@ export default function Workspace() {
                   api={api}
                   pid={pid}
                   branches={branches}
-                  cartId={
-                    cartId && (!cartForProject || cartForProject === pid) ? cartId : null
-                  }
                   busy={busy}
                   onBusy={act}
                   onNotice={setNotice}
                   onOpenMediaLibrary={(nodeId) => {
-                    setMediaPickNodeId(nodeId);
-                    setCtorFocusNodeId(nodeId);
+                    const nid = (nodeId || '').trim() || null;
+                    setMediaPickNodeId(nid);
+                    if (nid) setCtorFocusNodeId(nid);
                     setMediaOverlay(true);
                     setError('');
                   }}
