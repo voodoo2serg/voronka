@@ -221,6 +221,7 @@ def enqueue_deal_paid(db, *, payment_id: str, order, profile, financial: dict) -
             **_dual_event_fields("deal.paid", event_id),
             "order_id": order.id,
             "payment_id": payment_id,
+            "access_authority": "grant",
             "project_id": order.project_id,
             "profile_id": profile.id,
             "external_id": profile.id,
