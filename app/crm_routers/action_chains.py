@@ -163,7 +163,7 @@ def constructor_cart(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:  # httpx / network
-        # Soft-fail: Constructor still opens; empty cart CTA points staff to CMS.
+        # Soft-fail: Constructor still opens without cart (CRM-R2: cart not staff UX).
         empty = cc.enrich_cart_payload(None)
         empty.update(
             {

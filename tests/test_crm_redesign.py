@@ -171,14 +171,16 @@ def test_nav_and_media_constants_in_frontend():
     )
     assert "Из медиатеки" in ctor
     assert "Открыть в Signal" in ctor
-    assert "Набрать корзину в CMS" in ctor
+    assert "Набрать корзину в CMS" not in ctor
+    assert "Корзина CMS" not in ctor
     assert "Клиент получает" in ctor
     assert "SIGNAL_MEDIA_LIBRARY_URL" in ctor
-    assert "cmsChainCartHref" in ctor or "/#/admin/cart" in ctor
     assert "Настроить в Подключениях" in ctor
-    # CART-04: «+» from CMS cart items; no paste asset_id
-    assert "constructor/cart" in ctor
-    assert "addFromCartItem" in ctor
+    # CRM-R2: «+» from meta node_kinds; no CMS cart staff path; no paste asset_id
+    assert "constructor/meta" in ctor
+    assert "addNodeKind" in ctor
+    assert "addFromCartItem" not in ctor
+    assert "constructor/cart" not in ctor
     assert "вставьте asset_id" not in ctor.lower()
     # B-02: in-CRM media library CTA (not only external Signal tab)
     assert "onOpenMediaLibrary" in ctor

@@ -76,11 +76,13 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         page.get_by_role("button", name="Запустить цепочку", exact=True).first.click()
         expect(page.get_by_role("heading", name="Конструктор", exact=True, level=1)).to_be_visible()
         expect(page.locator("#action-constructor")).to_be_visible()
-        cart = page.get_by_role("group", name="Корзина и медиатека")
-        expect(cart.get_by_text("Медиатека CRM", exact=False)).to_be_visible()
-        expect(cart.get_by_text("Корзина CMS", exact=False)).to_be_visible()
-        expect(cart.get_by_text("Подключения", exact=False)).to_be_visible()
-        expect(page.get_by_role("link", name="Набрать корзину в CMS")).to_be_visible()
+        steps = page.get_by_role("group", name="Медиатека и подключения")
+        expect(steps.get_by_text("Медиатека CRM", exact=False)).to_be_visible()
+        expect(steps.get_by_text("Подключения", exact=False)).to_be_visible()
+        # CRM-R2: CMS cart is not a staff path
+        expect(page.get_by_text("Корзина CMS", exact=False)).to_have_count(0)
+        expect(page.get_by_role("link", name="Набрать корзину в CMS")).to_have_count(0)
+        expect(page.locator(".constructor-plus").first).to_be_visible()
         # WorkToday sales contour / Q11 ops copy must not be on #today surface
         expect(page.locator("#work-today-contour")).to_have_count(0)
         expect(page.get_by_text("Q11=C", exact=False)).to_have_count(0)
@@ -96,7 +98,7 @@ def test_today_hash_opens_constructor_not_work_today(crm):
         page.evaluate("location.hash = '#today'")
         expect(page.locator("#action-constructor")).to_be_visible(timeout=10000)
         expect(
-            page.get_by_role("group", name="Корзина и медиатека").get_by_text("Корзина CMS", exact=False)
+            page.get_by_role("group", name="Медиатека и подключения").get_by_text("Медиатека CRM", exact=False)
         ).to_be_visible()
         page.screenshot(path=str(shot_dir / "cart01_today_hash_deeplink.png"), full_page=True)
 

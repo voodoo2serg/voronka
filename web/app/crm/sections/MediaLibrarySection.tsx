@@ -147,7 +147,7 @@ export function MediaLibrarySection({
           </div>
         </div>
         <p className="fine">
-          Файлы и материалы текущего проекта (Signal SoR). Корзина цепочки по-прежнему в CMS.
+          Файлы и материалы текущего проекта (Signal SoR). Подключайте к шагам конструктора в CRM.
         </p>
         {!configured && (
           <p className="muted">

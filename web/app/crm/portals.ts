@@ -66,8 +66,8 @@ export function signalMediaLibraryHref(opts: {
 }
 
 /**
- * CART-01 ↔ CART-03: Solo-PR CMS «Корзина цепочки».
- * Canonical route (CART-03): `/#/admin/cart/<project_id>` or `/#/admin/cart`.
+ * @deprecated CRM-R2: CMS cart is no longer a staff path. Kept for ops/deep-link compat only.
+ * Canonical route was `/#/admin/cart/<project_id>` or `/#/admin/cart`.
  */
 export function cmsChainCartHref(projectId?: string | null): string {
   const path = projectId

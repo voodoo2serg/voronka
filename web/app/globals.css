@@ -130,8 +130,8 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .constructor-cart-link:hover{background:#f1f1ef;text-decoration:none}
 .constructor-empty-cart{margin-top:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .constructor-empty-cart h3{margin:0 0 8px;color:#555}
-.constructor-cart-ctas-inline{justify-content:center;gap:12px;margin-top:12px}
-.constructor-cart-ctas-inline a:not(.primary){font-size:13px}
+.constructor-cart-ctas-inline,.constructor-start-ctas-inline{justify-content:center;gap:12px;margin-top:12px}
+.constructor-cart-ctas-inline a:not(.primary),.constructor-start-ctas-inline a:not(.primary){font-size:13px}
 .constructor-cart-rail{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
 .constructor-cart-rail h3{margin:0 0 8px;font-size:13px}
 .constructor-cart-items{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}

@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import {
   SIGNAL_MEDIA_LIBRARY_URL,
-  cmsChainCartHref,
   signalMediaLibraryHref,
 } from '../portals';
 import type { ApiFn, Row } from '../types';
@@ -15,27 +14,6 @@ type NodeRow = {
   config: Record<string, unknown>;
   media_asset_id?: string | null;
   from_address?: string | null;
-};
-
-type CartItem = {
-  asset_id: string;
-  kind: string;
-  title: string;
-  node_kind: string | null;
-  kind_label?: string;
-};
-
-type CartState = {
-  cart_id?: string | null;
-  project_id?: string | null;
-  items: CartItem[];
-  kinds: string[];
-  node_kinds: string[];
-  empty: boolean;
-  configured?: boolean;
-  error?: string | null;
-  not_found?: boolean;
-  cms_cart_url?: string;
 };
 
 function uid() {
@@ -100,7 +78,6 @@ function VaultEmptyCta({ onOpenConnections }: { onOpenConnections?: () => void }
 export function ActionConstructorSection({
   api,
   pid,
-  cartId,
   busy,
   onBusy,
   onNotice,
@@ -109,6 +86,7 @@ export function ActionConstructorSection({
 }: {
   api: ApiFn;
   pid: string;
+  /** @deprecated CRM-R2: CMS cart is no longer a staff path; ignored. */
   cartId?: string | null;
   busy: boolean;
   onBusy: (fn: () => Promise<void>) => Promise<void>;
@@ -127,48 +105,22 @@ export function ActionConstructorSection({
   const [dryTg, setDryTg] = useState('');
   const [selected, setSelected] = useState<number | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [cart, setCart] = useState<CartState | null>(null);
   const [plusOpenAt, setPlusOpenAt] = useState<string | null>(null);
 
   async function refresh() {
     if (!pid) return;
-    const qs = new URLSearchParams({ project_id: pid });
-    if (cartId) qs.set('cart_id', cartId);
-    const [m, list, cartRow] = await Promise.all([
+    const [m, list] = await Promise.all([
       api(`/constructor/meta?project_id=${encodeURIComponent(pid)}`),
       api(`/projects/${pid}/action-chains`),
-      api(`/constructor/cart?${qs.toString()}`).catch(() => null),
     ]);
     setMeta(m);
     setChains(list.items || []);
-    if (cartRow && typeof cartRow === 'object') {
-      setCart({
-        cart_id: cartRow.cart_id ?? null,
-        project_id: cartRow.project_id ?? pid,
-        items: Array.isArray(cartRow.items) ? cartRow.items : [],
-        kinds: Array.isArray(cartRow.kinds) ? cartRow.kinds : [],
-        node_kinds: Array.isArray(cartRow.node_kinds) ? cartRow.node_kinds : [],
-        empty: Boolean(cartRow.empty ?? !(cartRow.items || []).length),
-        configured: cartRow.configured,
-        error: cartRow.error ?? null,
-        not_found: cartRow.not_found,
-        cms_cart_url: cartRow.cms_cart_url,
-      });
-    } else {
-      setCart({
-        items: [],
-        kinds: [],
-        node_kinds: [],
-        empty: true,
-        project_id: pid,
-      });
-    }
   }
 
   useEffect(() => {
     void onBusy(refresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid, cartId]);
+  }, [pid]);
 
   function selectStep(index: number) {
     setSelected(index);
@@ -176,22 +128,19 @@ export function ActionConstructorSection({
     setPlusOpenAt(null);
   }
 
-  function addFromCartItem(item: CartItem, atIndex?: number) {
-    const nodeKind = item.node_kind || 'contact';
-    const label =
-      item.title ||
-      item.kind_label ||
-      ((meta?.node_kinds as Row[] | undefined) || []).find((k) => k.id === nodeKind)?.label ||
-      nodeKind;
+  const nodeKinds = ((meta?.node_kinds as Row[] | undefined) || []).filter((k) => k?.id);
+
+  function addNodeKind(kindId: string, atIndex?: number) {
+    const kindMeta = nodeKinds.find((k) => String(k.id) === kindId);
+    const label = kindMeta?.label ? String(kindMeta.label) : kindId;
     const next: NodeRow = {
       id: uid(),
-      kind: nodeKind,
-      title: String(label),
+      kind: kindId,
+      title: label,
       config: {
-        cart_kind: item.kind,
-        ...(nodeKind === 'payment' ? { provider: 'robokassa', tariff_mode: 'fixed' } : {}),
+        ...(kindId === 'payment' ? { provider: 'robokassa', tariff_mode: 'fixed' } : {}),
       },
-      media_asset_id: item.asset_id,
+      media_asset_id: null,
       from_address: null,
     };
     setNodes((prev) => {
@@ -283,36 +232,20 @@ export function ActionConstructorSection({
   const mediaUrl = String(
     meta?.media_library_url || signalMediaLibraryHref({ project: pid }) || SIGNAL_MEDIA_LIBRARY_URL,
   );
-  const cartUrl = String(cart?.cms_cart_url || cmsChainCartHref(pid));
-  const cartItems = (cart?.items || []).filter((i) => i.node_kind);
-  const cartEmpty = !cartItems.length;
   const needsChannel =
     current && (current.kind === 'email' || current.kind === 'telegram' || current.kind === 'payment');
-  const showEmptyGuide = cartEmpty || !nodes.length;
+  const showEmptyGuide = !nodes.length;
   const previewChannel = channelLabel(current, vaultEmail, vaultMessaging, vaultPayment);
   const previewBody = nodeBody(current);
 
   function PlusMenu({ menuKey, afterIndex }: { menuKey: string; afterIndex?: number }) {
     const open = plusOpenAt === menuKey;
-    if (cartEmpty) {
-      return (
-        <a
-          className="constructor-plus constructor-plus-cta"
-          href={cartUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Набрать корзину в CMS"
-        >
-          +
-        </a>
-      );
-    }
     return (
       <div className="constructor-plus-wrap">
         <button
           type="button"
           className="constructor-plus"
-          title="Добавить шаг из корзины"
+          title="Добавить шаг"
           aria-expanded={open}
           aria-haspopup="menu"
           onClick={() => setPlusOpenAt((cur) => (cur === menuKey ? null : menuKey))}
@@ -320,20 +253,24 @@ export function ActionConstructorSection({
           +
         </button>
         {open && (
-          <div className="constructor-plus-menu" role="menu" aria-label="Шаги из корзины">
-            {cartItems.map((item) => (
-              <button
-                key={`${item.asset_id}:${item.kind}`}
-                type="button"
-                role="menuitem"
-                onClick={() => addFromCartItem(item, afterIndex)}
-              >
-                <b>{item.title || item.kind_label || item.kind}</b>
-                <small>
-                  {item.kind_label || item.kind} → {item.node_kind}
-                </small>
-              </button>
-            ))}
+          <div className="constructor-plus-menu" role="menu" aria-label="Типы шагов">
+            {nodeKinds.length ? (
+              nodeKinds.map((kind) => (
+                <button
+                  key={String(kind.id)}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => addNodeKind(String(kind.id), afterIndex)}
+                >
+                  <b>{String(kind.label || kind.id)}</b>
+                  <small>{String(kind.id)}</small>
+                </button>
+              ))
+            ) : (
+              <p className="fine" role="menuitem">
+                Типы шагов загружаются…
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -341,7 +278,7 @@ export function ActionConstructorSection({
   }
 
   return (
-    <div className="constructor-layout" id="action-constructor" data-cart-route="cms/#/admin/cart">
+    <div className="constructor-layout" id="action-constructor">
       <aside className="constructor-rail panel">
         <div className="panel-title">
           <div>
@@ -386,33 +323,6 @@ export function ActionConstructorSection({
           ))}
           {!chains.length && <li className="muted">Пока нет цепочек — создайте новую.</li>}
         </ul>
-
-        <div className="constructor-cart-rail" aria-label="Корзина цепочки">
-          <div className="panel-title constructor-rail-subhead">
-            <h3>Корзина CMS</h3>
-            <a className="link" href={cartUrl} target="_blank" rel="noopener noreferrer">
-              Открыть
-            </a>
-          </div>
-          {cartEmpty ? (
-            <p className="fine">
-              Пусто. Сначала наберите материалы в CMS — меню «+» появится по типам из корзины.
-            </p>
-          ) : (
-            <ul className="constructor-cart-items">
-              {cartItems.map((item) => (
-                <li key={`${item.asset_id}:${item.kind}`}>
-                  <button type="button" onClick={() => addFromCartItem(item)}>
-                    <b>{item.title || item.kind_label || item.kind}</b>
-                    <small>
-                      {item.kind} · {item.asset_id.slice(0, 8)}…
-                    </small>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
       </aside>
 
       <div className="constructor-stage">
@@ -435,39 +345,29 @@ export function ActionConstructorSection({
             </div>
           </div>
 
-          <div className="constructor-next-steps" role="group" aria-label="Корзина и медиатека">
+          <div className="constructor-next-steps" role="group" aria-label="Медиатека и подключения">
             <button type="button" className="constructor-step-card" onClick={openMedia}>
               <span className="eyebrow">1</span>
               <b>Медиатека CRM</b>
               <small>Создать файл и подписать kind + Project</small>
             </button>
-            <a
-              className="constructor-step-card"
-              href={cartUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <span className="eyebrow">2</span>
-              <b>Корзина CMS</b>
-              <small>Набрать ассеты проекта до сборки цепочки</small>
-            </a>
             {onOpenConnections ? (
               <button type="button" className="constructor-step-card" onClick={onOpenConnections}>
-                <span className="eyebrow">3</span>
+                <span className="eyebrow">2</span>
                 <b>Подключения</b>
                 <small>Почта From, боты и платежи — только из vault</small>
               </button>
             ) : (
               <a className="constructor-step-card" href="#connections">
-                <span className="eyebrow">3</span>
+                <span className="eyebrow">2</span>
                 <b>Подключения</b>
                 <small>Почта From, боты и платежи — только из vault</small>
               </a>
             )}
           </div>
           <p className="fine constructor-hint">
-            «+» собирает шаги только из корзины CMS. Клик по шагу открывает правую панель. Превью справа всегда
-            на месте.{' '}
+            «+» добавляет шаг по типу из списка конструктора. Клик по шагу открывает правую панель. Превью справа
+            всегда на месте.{' '}
             <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
               Открыть в Signal
             </a>
@@ -514,20 +414,17 @@ export function ActionConstructorSection({
             ))}
           </div>
 
-          {showEmptyGuide && cartEmpty && (
-            <div className="empty compact constructor-empty-cart">
+          {showEmptyGuide && (
+            <div className="empty compact constructor-empty-guide">
               <h3>С чего начать</h3>
               <p>
-                Корзина пуста для этого проекта. Создайте файл в медиатеке, наберите корзину в CMS — затем меню
-                «+» появится по типам из корзины. Каналы настраиваются в Подключениях.
+                Добавьте шаг кнопкой «+» — типы из списка конструктора (контакт, опрос, письмо, оплата…). Файлы —
+                из медиатеки. Каналы настраиваются в Подключениях.
               </p>
-              <div className="row constructor-cart-ctas-inline">
+              <div className="row constructor-start-ctas-inline">
                 <button type="button" className="primary" onClick={openMedia}>
                   Из медиатеки
                 </button>
-                <a href={cartUrl} target="_blank" rel="noopener noreferrer">
-                  Набрать корзину в CMS
-                </a>
                 {onOpenConnections ? (
                   <button type="button" className="link" onClick={onOpenConnections}>
                     Настроить в Подключениях
@@ -585,14 +482,8 @@ export function ActionConstructorSection({
                       <pre>{previewBody}</pre>
                     ) : current.media_asset_id ? (
                       <p className="fine">
-                        Тело из asset корзины <code>{String(current.media_asset_id).slice(0, 8)}…</code>
-                        {current.config.cart_kind ? (
-                          <>
-                            {' '}
-                            · <code>{String(current.config.cart_kind)}</code>
-                          </>
-                        ) : null}
-                        . Допишите текст в панели справа или оставьте asset как есть.
+                        Тело из asset медиатеки <code>{String(current.media_asset_id).slice(0, 8)}…</code>.
+                        Допишите текст в панели справа или оставьте asset как есть.
                       </p>
                     ) : (
                       <p className="fine">Нет текста — откройте шаг и введите сообщение.</p>
@@ -675,36 +566,6 @@ export function ActionConstructorSection({
                     placeholder="0"
                   />
                 </label>
-
-                {!cartEmpty && (
-                  <label>
-                    Asset из корзины
-                    <select
-                      value={String(current.media_asset_id || '')}
-                      onChange={(e) => {
-                        const assetId = e.target.value;
-                        const item = cartItems.find((i) => i.asset_id === assetId);
-                        updateNode(selected, {
-                          media_asset_id: assetId || null,
-                          config: {
-                            ...current.config,
-                            cart_kind: item?.kind || current.config.cart_kind,
-                          },
-                          ...(item?.node_kind && item.node_kind !== current.kind
-                            ? { kind: item.node_kind, title: item.title || current.title }
-                            : {}),
-                        });
-                      }}
-                    >
-                      <option value="">Без asset…</option>
-                      {cartItems.map((item) => (
-                        <option key={`${item.asset_id}:${item.kind}`} value={item.asset_id}>
-                          {item.title || item.kind_label || item.kind} · {item.kind}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
 
                 {current.kind === 'email' && (
                   <>
@@ -822,7 +683,7 @@ export function ActionConstructorSection({
                 )}
 
                 {needsChannel ? null : (
-                  <p className="fine">Тело и медиа — из корзины CMS или поля «Сообщение» выше.</p>
+                  <p className="fine">Текст — в поле «Сообщение»; файлы — из медиатеки CRM.</p>
                 )}
 
                 <div className="row constructor-editor-actions">

@@ -248,15 +248,19 @@ def test_hmac_empty_body_matches_cms_contract(monkeypatch):
     assert normalize_signature(sig) == sign_payload("shared-secret", b"", ts)
 
 
-def test_frontend_no_paste_asset_id_and_cart_driven_plus():
+def test_frontend_no_paste_asset_id_and_meta_kinds_plus():
+    """CRM-R2: constructor «+» uses meta node_kinds; CMS cart is not a staff path."""
     ctor = (ROOT / "web" / "app" / "crm" / "sections" / "ActionConstructorSection.tsx").read_text(
         encoding="utf-8"
     )
-    assert "constructor/cart" in ctor
-    assert "addFromCartItem" in ctor
-    assert "Набрать корзину в CMS" in ctor
-    assert "Шаги из корзины" in ctor
-    assert "media_asset_id: item.asset_id" in ctor or "media_asset_id: item.asset_id," in ctor
+    assert "constructor/meta" in ctor
+    assert "addNodeKind" in ctor
+    assert "Типы шагов" in ctor
+    assert "Набрать корзину в CMS" not in ctor
+    assert "Корзина CMS" not in ctor
+    assert "Шаги из корзины" not in ctor
+    assert "addFromCartItem" not in ctor
+    assert "constructor/cart" not in ctor
     assert "onOpenMediaLibrary" in ctor
     assert "Медиатека CRM" in ctor
     assert "Из медиатеки" in ctor
@@ -266,15 +270,12 @@ def test_frontend_no_paste_asset_id_and_cart_driven_plus():
     assert "Настроить в Подключениях" in ctor
     assert "smtp_password" not in ctor
     ws = (ROOT / "web" / "app" / "crm" / "Workspace.tsx").read_text(encoding="utf-8")
-    assert "cartId" in ws
-    assert "q.get('cart')" in ws
     assert "onOpenMediaLibrary" in ws
     assert "MediaLibrarySection" in ws
     assert "mediaOverlay" in ws
     assert "#media" in ws
-    # Codex P2: deep-linked cart must not stick after project switch
-    assert "cartForProject" in ws
-    assert "setCartId('')" in ws or 'setCartId("")' in ws
+    # Deep-link cart parsing may remain for compat, but UI must not force CMS cart
+    assert "корзины CMS" not in ws
 
 
 def test_meta_exposes_cart_kind_map(crm):
