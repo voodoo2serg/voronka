@@ -1,7 +1,7 @@
 """Payment → entitlement job. Payment is never rolled back on job failure."""
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 
 from app.crm_models import AccessGrant, EntitlementJob, Order, Payment, Profile
 from app.crm_service import balance, uid
@@ -85,8 +85,18 @@ def process_pending(db, limit: int = 20) -> int:
     rows = list(
         db.scalars(
             select(EntitlementJob)
-            .where(EntitlementJob.state.in_(["pending", "waiting_grant", "failed"]))
-            .order_by(EntitlementJob.created_at)
+            .where(
+                or_(
+                    EntitlementJob.state.in_(["pending", "waiting_grant"]),
+                    (EntitlementJob.state == "failed") & (EntitlementJob.attempts < 8),
+                )
+            )
+            .order_by(
+                case((EntitlementJob.state == "waiting_grant", 1), else_=0),
+                EntitlementJob.updated_at,
+                EntitlementJob.created_at,
+                EntitlementJob.id,
+            )
             .with_for_update(skip_locked=True)
             .limit(limit)
         )
