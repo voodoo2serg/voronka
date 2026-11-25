@@ -51,18 +51,53 @@ export function signalHref(opts: {
   return PORTAL_URLS.signal + '/' + (qs ? `?${qs}` : '');
 }
 
-/** CRM-A15: Constructor «Медиатека» — SSO preserves return_to (Signal PR #57). */
+/** CRM-A15 / CRM-R10: Constructor «Медиатека» — SSO deep-link; Signal honors return_to. */
 export const SIGNAL_MEDIA_LIBRARY_URL = PORTAL_URLS.signal + '/?view=media';
+
+/**
+ * Absolute CRM Constructor URL for a Project square (Signal return_to target).
+ * Query (not hash) so Signal can append asset_id / content_kind on return.
+ * Contract: /crm/?project=&node=<squareId>&section=chains
+ */
+export function crmConstructorSquareHref(opts: {
+  project: string;
+  node?: string | null;
+  chain?: string | null;
+}): string {
+  const q = new URLSearchParams();
+  q.set('project', opts.project);
+  q.set('section', 'chains');
+  if (opts.node) q.set('node', opts.node);
+  if (opts.chain) q.set('chain', opts.chain);
+  let origin = PORTAL_URLS.crm;
+  let path = '/crm/';
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    origin = window.location.origin;
+    const p = window.location.pathname || '/crm/';
+    path = p.startsWith('/crm') ? (p.endsWith('/') ? p : `${p}/`) : '/crm/';
+  }
+  return `${origin}${path}?${q.toString()}`;
+}
 
 export function signalMediaLibraryHref(opts: {
   brand?: string | null;
   person?: string | null;
   project?: string | null;
+  /** Absolute CRM URL; Signal shows «Вернуться» back to this square. */
+  returnTo?: string | null;
 } = {}): string {
-  const base = signalHref({ view: 'media', brand: opts.brand, person: opts.person });
-  if (!opts.project) return base;
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}project=${encodeURIComponent(opts.project)}`;
+  // Build query manually so return_to is always fully percent-encoded.
+  // URLSearchParams is fine in modern browsers, but a raw `&node=` / `&section=`
+  // inside an unencoded return_to would be truncated as sibling Signal params
+  // (Signal R10 Codex P1 / tip 8cb6ad3).
+  const parts: string[] = ['view=media'];
+  if (opts.brand) parts.push(`brand=${encodeURIComponent(opts.brand)}`);
+  if (opts.person) parts.push(`person=${encodeURIComponent(opts.person)}`);
+  if (opts.project) parts.push(`project=${encodeURIComponent(opts.project)}`);
+  if (opts.returnTo) {
+    parts.push(`return_to=${encodeURIComponent(opts.returnTo)}`);
+  }
+  return `${PORTAL_URLS.signal}/?${parts.join('&')}`;
 }
 
 /**

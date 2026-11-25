@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { SIGNAL_MEDIA_LIBRARY_URL, signalMediaLibraryHref } from '../portals';
+import {
+  SIGNAL_MEDIA_LIBRARY_URL,
+  crmConstructorSquareHref,
+  signalMediaLibraryHref,
+} from '../portals';
 import type { ApiFn, Row } from '../types';
 
 const DEFAULT_KINDS: { id: string; label: string }[] = [
@@ -32,6 +36,7 @@ export function MediaLibrarySection({
   onNotice,
   pickMode,
   onPick,
+  returnNodeId,
 }: {
   api: ApiFn;
   pid: string;
@@ -40,14 +45,20 @@ export function MediaLibrarySection({
   onNotice: (v: string) => void;
   pickMode?: boolean;
   onPick?: (assetId: string, item?: MediaItem) => void;
+  /** CRM-R10: square id embedded in Signal return_to (fully encoded). */
+  returnNodeId?: string | null;
 }) {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [kindFilter, setKindFilter] = useState('');
   const [kinds, setKinds] = useState(DEFAULT_KINDS);
   const [fileKinds, setFileKinds] = useState<string[]>(['image', 'tg_cover', 'tg_circle', 'file']);
-  const [signalOpenUrl, setSignalOpenUrl] = useState(
-    () => signalMediaLibraryHref({ project: pid }) || SIGNAL_MEDIA_LIBRARY_URL,
-  );
+  const [signalOpenUrl, setSignalOpenUrl] = useState(() => {
+    const returnTo = crmConstructorSquareHref({
+      project: pid,
+      node: returnNodeId || undefined,
+    });
+    return signalMediaLibraryHref({ project: pid, returnTo }) || SIGNAL_MEDIA_LIBRARY_URL;
+  });
   const [configured, setConfigured] = useState(true);
   const [contentKind, setContentKind] = useState('tg_post');
   const [title, setTitle] = useState('');
@@ -63,7 +74,14 @@ export function MediaLibrarySection({
     ]);
     setItems(Array.isArray(list.items) ? list.items : []);
     setConfigured(list.configured !== false);
-    if (list.signal_open_url) setSignalOpenUrl(String(list.signal_open_url));
+    // Prefer square-scoped return_to (encoded) over BFF generic open URL.
+    const returnTo = crmConstructorSquareHref({
+      project: pid,
+      node: returnNodeId || undefined,
+    });
+    const scoped = signalMediaLibraryHref({ project: pid, returnTo });
+    if (scoped) setSignalOpenUrl(scoped);
+    else if (list.signal_open_url) setSignalOpenUrl(String(list.signal_open_url));
     if (meta) {
       const labels = (meta.content_kind_labels || {}) as Record<string, string>;
       const ids = (meta.content_kinds as string[]) || Object.keys(labels);
@@ -73,14 +91,13 @@ export function MediaLibrarySection({
       if (Array.isArray(meta.file_required_kinds)) {
         setFileKinds(meta.file_required_kinds.map(String));
       }
-      if (meta.signal_open_url) setSignalOpenUrl(String(meta.signal_open_url));
     }
   }
 
   useEffect(() => {
     void onBusy(refresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid, kindFilter]);
+  }, [pid, kindFilter, returnNodeId]);
 
   const needsFile = fileKinds.includes(contentKind);
 
@@ -139,7 +156,15 @@ export function MediaLibrarySection({
             <a
               className="constructor-cart-link"
               href={signalOpenUrl}
-              target="_blank"
+              data-testid="media-open-signal"
+              onClick={(e) => {
+                // CRM-R10: same-tab when returning to a square (draft in sessionStorage).
+                if (returnNodeId) {
+                  e.preventDefault();
+                  window.location.assign(signalOpenUrl);
+                }
+              }}
+              target={returnNodeId ? undefined : '_blank'}
               rel="noopener noreferrer"
             >
               Открыть в Signal

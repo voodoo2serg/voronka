@@ -15,7 +15,15 @@ from app import media_bridge
 from app import signal_media
 from app.crm_deps import Body, Session, crm_actor
 from app.crm_service import project_access
-from app.portals import signal_media_library_url
+from app.portals import crm_constructor_square_url, signal_media_library_url
+
+
+def _signal_open_url(pid: str) -> str:
+    """CRM-R10: Signal media SSO deep-link with return_to → same Constructor square/project."""
+    return_to = crm_constructor_square_url(project_id=pid)
+    return signal_media_library_url(project=pid, return_to=return_to) or (
+        f"https://signal.vodopetov.ru/?view=media&project={pid}"
+    )
 
 router = APIRouter()
 
@@ -86,15 +94,10 @@ def list_signal_media(
         data = signal_media.list_project_assets(pid, content_kind=content_kind)
     except signal_media.SignalMediaError as exc:
         raise _http_from_signal(exc) from exc
-    media_url = signal_media_library_url() or "https://signal.vodopetov.ru/?view=media"
-    if "?" in media_url:
-        open_url = f"{media_url}&project={pid}"
-    else:
-        open_url = f"{media_url}?view=media&project={pid}"
     return {
         **data,
         "project_id": pid,
-        "signal_open_url": open_url,
+        "signal_open_url": _signal_open_url(pid),
         "configured": signal_media.media_library_bff_configured(),
     }
 
@@ -104,16 +107,12 @@ def signal_media_meta(pid: str, admin=Depends(crm_actor)):
     """Static kinds + Signal deep-link for the embedded library chrome."""
     with Session() as db:
         project_access(db, admin, pid)
-    media_url = signal_media_library_url() or "https://signal.vodopetov.ru/?view=media"
-    if "project=" not in media_url:
-        sep = "&" if "?" in media_url else "?"
-        media_url = f"{media_url}{sep}project={pid}"
     return {
         "project_id": pid,
         "content_kinds": sorted(signal_media.CONTENT_KINDS),
         "content_kind_labels": dict(signal_media.CONTENT_KIND_LABELS_RU),
         "file_required_kinds": sorted(signal_media.FILE_REQUIRED_KINDS),
-        "signal_open_url": media_url,
+        "signal_open_url": _signal_open_url(pid),
         "configured": signal_media.media_library_bff_configured(),
     }
 

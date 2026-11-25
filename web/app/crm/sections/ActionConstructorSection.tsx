@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   SIGNAL_MEDIA_LIBRARY_URL,
+  crmConstructorSquareHref,
   signalMediaLibraryHref,
 } from '../portals';
 import type { ApiFn, Row } from '../types';
@@ -15,6 +16,55 @@ type NodeRow = {
   media_asset_id?: string | null;
   from_address?: string | null;
 };
+
+const DRAFT_STORAGE_PREFIX = 'crm-ctor-draft:';
+
+type CtorDraft = {
+  nodeId?: string;
+  chainId?: string;
+  name?: string;
+  branchId?: string;
+  revision?: number;
+  isBase?: boolean;
+  nodes?: NodeRow[];
+  selectedIndex?: number | null;
+};
+
+function readDraft(pid: string): CtorDraft {
+  if (typeof window === 'undefined' || !pid) return {};
+  try {
+    const raw = sessionStorage.getItem(DRAFT_STORAGE_PREFIX + pid);
+    if (!raw) return {};
+    return JSON.parse(raw) as CtorDraft;
+  } catch {
+    return {};
+  }
+}
+
+function writeDraft(pid: string, draft: CtorDraft) {
+  if (typeof window === 'undefined' || !pid) return;
+  try {
+    sessionStorage.setItem(DRAFT_STORAGE_PREFIX + pid, JSON.stringify(draft));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** Strip one-shot Signal return query (asset_id / content_kind) after attach. */
+function clearReturnQueryParams() {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const key of ['asset_id', 'content_kind']) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) {
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+  }
+}
 
 type MenuKey = string | null;
 
@@ -94,6 +144,11 @@ export function ActionConstructorSection({
   onNotice,
   onOpenConnections,
   onOpenMediaLibrary,
+  focusNodeId,
+  focusChainId,
+  pendingAssetId,
+  pendingContentKind,
+  onConsumedReturnAsset,
 }: {
   api: ApiFn;
   pid: string;
@@ -105,8 +160,15 @@ export function ActionConstructorSection({
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   onNotice: (v: string) => void;
   onOpenConnections?: () => void;
-  /** B-02/B-03: open CRM media panel (Workspace overlay keeps canvas mounted). */
-  onOpenMediaLibrary?: () => void;
+  /** B-02: open CRM media overlay in pickMode for the focused square. */
+  onOpenMediaLibrary?: (nodeId: string) => void;
+  /** CRM-R10: restore square from Signal return_to query. */
+  focusNodeId?: string | null;
+  focusChainId?: string | null;
+  /** CRM-R10: asset picked in Signal — attach to focusNodeId square. */
+  pendingAssetId?: string | null;
+  pendingContentKind?: string | null;
+  onConsumedReturnAsset?: () => void;
 }) {
   const [meta, setMeta] = useState<Row | null>(null);
   const [chains, setChains] = useState<Row[]>([]);
@@ -124,6 +186,8 @@ export function ActionConstructorSection({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorFocus, setEditorFocus] = useState<'message' | 'action'>('message');
   const [plusOpenAt, setPlusOpenAt] = useState<MenuKey>(null);
+  const [pendingFocusNode, setPendingFocusNode] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
 
   async function refresh() {
     if (!pid) return;
@@ -136,16 +200,134 @@ export function ActionConstructorSection({
     setBaseChain((list.base_chain as Row | null) || null);
   }
 
+  function persistDraft(extra: Partial<CtorDraft> = {}) {
+    const nodeId =
+      extra.nodeId ||
+      (selected !== null ? nodes[selected]?.id : undefined) ||
+      pendingFocusNode ||
+      undefined;
+    writeDraft(pid, {
+      nodeId,
+      chainId: extra.chainId ?? chainId,
+      name: extra.name ?? name,
+      branchId: extra.branchId ?? branchId,
+      revision: extra.revision ?? revision,
+      isBase: extra.isBase ?? isBase,
+      nodes: extra.nodes ?? nodes,
+      selectedIndex: extra.selectedIndex !== undefined ? extra.selectedIndex : selected,
+    });
+  }
+
   useEffect(() => {
+    const draft = readDraft(pid);
+    const nodeHint = (focusNodeId || draft.nodeId || '').trim() || null;
+    const chainHint = (focusChainId || draft.chainId || '').trim() || null;
+    if (draft.nodes && Array.isArray(draft.nodes) && draft.nodes.length) {
+      setNodes(draft.nodes);
+      setName(String(draft.name || 'Новая цепочка'));
+      setRevision(Number(draft.revision) || 1);
+      setBranchId(draft.branchId ? String(draft.branchId) : '');
+      setIsBase(Boolean(draft.isBase));
+      if (draft.chainId) setChainId(String(draft.chainId));
+      setDraftRestored(true);
+    }
+    if (nodeHint) setPendingFocusNode(nodeHint);
+    if (chainHint) setChainId(chainHint);
     void onBusy(refresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid]);
+  }, [pid, focusNodeId, focusChainId]);
+
+  /** CRM-R10: after Signal return_to, load saved chain then focus the square. */
+  useEffect(() => {
+    if (draftRestored) return;
+    if (!chains.length || !chainId || !pendingFocusNode) return;
+    if (nodes.length) return;
+    const row = chains.find((c) => String(c.id) === chainId);
+    if (!row) return;
+    setName(String(row.name));
+    setRevision(Number(row.revision) || 1);
+    setBranchId(row.branch_id ? String(row.branch_id) : '');
+    setIsBase(Boolean(row.is_base));
+    const loaded = Array.isArray(row.nodes) ? (row.nodes as NodeRow[]) : [];
+    setNodes(loaded);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chains, chainId, pendingFocusNode, draftRestored]);
+
+  useEffect(() => {
+    if (!pendingFocusNode || !nodes.length) return;
+    const idx = nodes.findIndex((n) => String(n.id) === pendingFocusNode);
+    if (idx >= 0) {
+      setSelected(idx);
+      setEditorFocus('message');
+      setEditorOpen(true);
+      persistDraft({ nodeId: pendingFocusNode, selectedIndex: idx });
+      setPendingFocusNode(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFocusNode, nodes]);
 
   function selectStep(index: number, focus: 'message' | 'action' = 'message') {
     setSelected(index);
     setEditorFocus(focus);
     setEditorOpen(true);
     setPlusOpenAt(null);
+    const node = nodes[index];
+    if (node) persistDraft({ nodeId: node.id, selectedIndex: index });
+  }
+
+  function attachMediaToNode(
+    nodeId: string,
+    assetId: string,
+    contentKind?: string | null,
+  ) {
+    const idx = nodes.findIndex((n) => String(n.id) === nodeId);
+    if (idx < 0) return false;
+    const kind = (contentKind || '').trim();
+    setNodes((prev) =>
+      prev.map((n, i) =>
+        i === idx
+          ? {
+              ...n,
+              media_asset_id: assetId,
+              config: {
+                ...n.config,
+                ...(kind ? { content_kind: kind, media_content_kind: kind } : {}),
+              },
+            }
+          : n,
+      ),
+    );
+    setSelected(idx);
+    setEditorOpen(true);
+    setEditorFocus('message');
+    persistDraft({ nodeId, selectedIndex: idx });
+    onNotice(`Медиа привязано · ${assetId.slice(0, 8)}…`);
+    return true;
+  }
+
+  /** CRM-R10: Signal return / overlay pick → attach asset_id to square. */
+  useEffect(() => {
+    const asset = (pendingAssetId || '').trim();
+    if (!asset || !nodes.length) return;
+    const nodeId = (focusNodeId || pendingFocusNode || '').trim();
+    if (!nodeId) return;
+    if (!attachMediaToNode(nodeId, asset, pendingContentKind)) return;
+    clearReturnQueryParams();
+    onConsumedReturnAsset?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAssetId, pendingContentKind, nodes.length, focusNodeId]);
+
+  function mediaHrefForNode(nodeId: string | null | undefined): string {
+    const returnTo = crmConstructorSquareHref({
+      project: pid,
+      node: nodeId || undefined,
+      chain: chainId || undefined,
+    });
+    return (
+      signalMediaLibraryHref({ project: pid, returnTo }) ||
+      String(meta?.media_library_url || '') ||
+      SIGNAL_MEDIA_LIBRARY_URL
+    );
   }
 
   const nodeKinds = ((meta?.node_kinds as Row[] | undefined) || []).filter((k) => k?.id);
@@ -264,22 +446,32 @@ export function ActionConstructorSection({
     });
   }
 
-  function openMedia() {
+  /** B-02 primary: CRM overlay pick for this square. */
+  function openMediaOverlay(nodeId: string) {
     setPlusOpenAt(null);
+    const idx = nodes.findIndex((n) => n.id === nodeId);
+    if (idx >= 0) selectStep(idx, 'message');
+    else persistDraft({ nodeId });
     if (onOpenMediaLibrary) {
-      onOpenMediaLibrary();
+      onOpenMediaLibrary(nodeId);
       return;
     }
-    window.open(mediaUrl, '_blank', 'noopener');
+    openSignalMedia(nodeId);
+  }
+
+  /** CRM-R10: Signal SSO same-tab (return_to carries node; draft in sessionStorage). */
+  function openSignalMedia(nodeId: string) {
+    setPlusOpenAt(null);
+    persistDraft({ nodeId });
+    const href = mediaHrefForNode(nodeId);
+    window.location.assign(href);
   }
 
   const current = selected !== null ? nodes[selected] : undefined;
   const vaultEmail = (meta?.vault_email as Row[] | undefined) || [];
   const vaultPayment = (meta?.vault_payment as Row[] | undefined) || [];
   const vaultMessaging = (meta?.vault_messaging as Row[] | undefined) || [];
-  const mediaUrl = String(
-    meta?.media_library_url || signalMediaLibraryHref({ project: pid }) || SIGNAL_MEDIA_LIBRARY_URL,
-  );
+  const mediaUrl = mediaHrefForNode(current?.id);
   const needsChannel =
     current && (current.kind === 'email' || current.kind === 'telegram' || current.kind === 'payment');
   const showEmptyGuide = !nodes.length;
@@ -329,6 +521,7 @@ export function ActionConstructorSection({
   function TopMenu({ index, node }: { index: number; node: NodeRow }) {
     const menuKey = `top-${node.id}`;
     const open = plusOpenAt === menuKey;
+    const squareMediaUrl = mediaHrefForNode(node.id);
     return (
       <div className="constructor-plus-wrap constructor-plus-top">
         <button
@@ -352,10 +545,28 @@ export function ActionConstructorSection({
               <b>Текст / детали</b>
               <small>Сообщение и пауза</small>
             </button>
-            <button type="button" role="menuitem" onClick={openMedia}>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="square-media-library"
+              onClick={() => openMediaOverlay(node.id)}
+            >
               <b>Медиатека</b>
               <small>Файл из Signal (SSO)</small>
             </button>
+            <a
+              href={squareMediaUrl}
+              role="menuitem"
+              className="constructor-plus-menu-link"
+              data-testid="square-media-sso"
+              onClick={(e) => {
+                e.preventDefault();
+                openSignalMedia(node.id);
+              }}
+            >
+              <b>Открыть в Signal</b>
+              <small>SSO · вернуться в квадрат</small>
+            </a>
             {kindHasActionDetails(node.kind) && (
               <button
                 type="button"
@@ -372,17 +583,6 @@ export function ActionConstructorSection({
                 </small>
               </button>
             )}
-            <a
-              href={mediaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              role="menuitem"
-              className="constructor-plus-menu-link"
-              onClick={() => setPlusOpenAt(null)}
-            >
-              <b>Открыть в Signal</b>
-              <small>Медиатека во вкладке</small>
-            </a>
           </div>
         )}
       </div>
@@ -1104,16 +1304,35 @@ export function ActionConstructorSection({
                 )}
 
                 {needsChannel ? null : (
-                  <p className="fine">Текст — в поле «Сообщение»; файлы — из медиатеки CRM.</p>
+                  <p className="fine">Текст — в поле «Сообщение»; файлы — из медиатеки (CRM или Signal SSO).</p>
                 )}
+
+                {current?.media_asset_id ? (
+                  <p className="fine" data-testid="square-media-asset">
+                    Медиа: <code>{String(current.media_asset_id).slice(0, 12)}…</code>
+                    {current.config?.media_content_kind || current.config?.content_kind
+                      ? ` · ${String(current.config.media_content_kind || current.config.content_kind)}`
+                      : ''}
+                  </p>
+                ) : null}
 
                 <div className="row constructor-editor-actions">
                   <button type="button" className="link danger-text" onClick={() => removeNode(selected)}>
                     Удалить шаг
                   </button>
-                  <button type="button" onClick={openMedia}>
+                  <button type="button" onClick={() => current && openMediaOverlay(current.id)}>
                     Из медиатеки
                   </button>
+                  <a
+                    className="link"
+                    href={mediaUrl}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (current) openSignalMedia(current.id);
+                    }}
+                  >
+                    Открыть в Signal
+                  </a>
                 </div>
               </div>
             )}

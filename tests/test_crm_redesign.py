@@ -321,8 +321,11 @@ def test_nav_and_media_constants_in_frontend():
     assert "addFromCartItem" not in ctor
     assert "constructor/cart" not in ctor
     assert "вставьте asset_id" not in ctor.lower()
-    # B-02: in-CRM media library CTA (not only external Signal tab)
+    # B-02 / CRM-R10: in-CRM media overlay pick + Signal SSO return_to
     assert "onOpenMediaLibrary" in ctor
+    assert "openMediaOverlay" in ctor
+    assert "pendingAssetId" in ctor
+    assert "encodeURIComponent(opts.returnTo)" in portals
     # CRM-R3: square IA — right type menu, top content menu, bottom vault sender
     assert "constructor-flow-squares" in ctor
     assert "Добавить шаг справа" in ctor
