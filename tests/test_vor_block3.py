@@ -1181,7 +1181,8 @@ def test_ops104_legacy_enrollment_rN_reused_not_duplicated(crm):
         db.flush()
         row = integ.enqueue_enrollment(db, grant=grant, order=order_row, profile=profile, revision=2, revoke=False)
         assert row.event_id == legacy_id
-        assert row.payload.get("revision") == 2
+        # Repair preserves the original revision; a new transition gets a new ID.
+        assert row.payload.get("revision") == 1
         assert len(list(db.scalars(select(IntegrationOutbox).where(IntegrationOutbox.kind == "enrollment.desired")))) == 1
     apply = crm.client.post(
         "/api/crm/projects/p/reconcile/apply",
