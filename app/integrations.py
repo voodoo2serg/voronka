@@ -630,6 +630,20 @@ def enqueue_enrollment(db, *, grant, order, profile, revision: int, revoke: bool
         payload["keycloak_sub"] = keycloak_sub
     if hints.get("club"):
         payload["club"] = hints["club"]
+    # An incomplete legacy dead row may have been staged before the wire
+    # contract existed. Repair it without creating a second logical event.
+    if latest and latest.kind == kind and latest.state == "dead":
+        previous = latest.payload or {}
+        if not previous.get("course_id") and not previous.get("commerce_product_id"):
+            legacy_revision = int(previous.get("revision") or 1)
+            latest.payload = {
+                **payload,
+                **_dual_event_fields(kind, latest.event_id),
+                "revision": legacy_revision,
+            }
+            latest.updated_at = now()
+            db.flush()
+            return latest
     # Identical desired state is a retry, not a new business transition.
     if latest and latest.kind == kind:
         previous = latest.payload or {}
