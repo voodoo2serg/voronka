@@ -15,6 +15,8 @@ START_PROJECT_DESCRIPTION = (
 )
 
 # CRM-R8: ordinary commercial project — not a special module / not is_system.
+# system_key is a stable seed marker only (unique); staff may rename the display name.
+PROGREV_SYSTEM_KEY = "progrev"
 PROGREV_PROJECT_NAME = "Прогрев"
 PROGREV_PROJECT_GOAL = "Прогрев аудитории как обычный коммерческий проект"
 PROGREV_PROJECT_DESCRIPTION = (
@@ -87,15 +89,24 @@ def start_project_id(db) -> str:
 
 
 def ensure_progrev_project(db) -> Project:
-    """Idempotent seed of ordinary Project «Прогрев» (CRM-R8). Not system, not a module."""
+    """Idempotent seed of ordinary Project «Прогрев» (CRM-R8).
+
+    Stable identity is ``system_key=progrev`` (unique), not the mutable display name.
+    ``is_system`` stays False — not a special module; staff may rename/archive like any project.
+    """
+    row = db.scalar(select(Project).where(Project.system_key == PROGREV_SYSTEM_KEY))
+    if row:
+        row.is_system = False
+        return row
+    # One-time adopt of an existing name-matched row that has no system_key yet.
     row = db.scalar(
-        select(Project).where(Project.name == PROGREV_PROJECT_NAME).order_by(Project.created_at.asc(), Project.id)
+        select(Project)
+        .where(Project.name == PROGREV_PROJECT_NAME, Project.system_key.is_(None))
+        .order_by(Project.created_at.asc(), Project.id)
     )
     if row:
-        # Keep whatever staff already configured; never promote to system.
+        row.system_key = PROGREV_SYSTEM_KEY
         row.is_system = False
-        if getattr(row, "system_key", None):
-            row.system_key = None
         return row
     row = Project(
         id=uid(),
@@ -104,7 +115,7 @@ def ensure_progrev_project(db) -> Project:
         description=PROGREV_PROJECT_DESCRIPTION,
         status="active",
         is_system=False,
-        system_key=None,
+        system_key=PROGREV_SYSTEM_KEY,
         created_at=now(),
     )
     db.add(row)

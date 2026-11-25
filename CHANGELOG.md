@@ -3,7 +3,7 @@
 ## Unreleased — CRM-R8 Drop «Прогрев» module
 
 - Remove CRM product surface: no outreach nav, no «Прогрев (dry_run)» on clients, no outreach section UI.
-- Seed ordinary Project «Прогрев» (`is_system=false`) on `/me` and home board — not a special module.
+- Seed ordinary Project «Прогрев» (`system_key=progrev`, `is_system=false`) on `/me` and home board — stable seed marker, not a special module.
 - Docs: OUTREACH / OPERATIONS mark product deprecated; legacy outreach API retained for ops/tests.
 - Tests: `tests/test_crm_r8_drop_progrev.py`.
 
