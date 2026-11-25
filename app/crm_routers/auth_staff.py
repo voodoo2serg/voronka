@@ -57,9 +57,10 @@ def logout(request: Request, response: Response, admin=Depends(crm_actor)):
 @router.get("/me")
 def me(admin=Depends(crm_actor)):
     with Session.begin() as db:
-        from app.projects_domain import ensure_start_project, start_project_id
+        from app.projects_domain import ensure_progrev_project, ensure_start_project, start_project_id
 
         ensure_start_project(db)
+        ensure_progrev_project(db)
         projects = [
             encode(p)
             for p in db.scalars(
