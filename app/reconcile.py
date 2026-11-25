@@ -185,9 +185,33 @@ def detect_enrollment(db, project_id: str | None = None, limit: int = 100) -> li
         for grant in grants:
             if grant.capability not in {"course.view", "course.enter"}:
                 continue
-            if financial["paid_minor"] * 100 < order.total_minor * grant.min_paid_percent:
+            expiry = grant.expires_at
+            if expiry and expiry.tzinfo is None:
+                from datetime import timezone
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            allowed = (
+                order.state == "open"
+                and (not expiry or expiry > now())
+                and financial["paid_minor"] * 100 >= order.total_minor * grant.min_paid_percent
+            )
+            desired_kind = "enrollment.desired" if allowed else "enrollment.revoked"
+            history = (_outbox_for_grant(db, grant.id, "enrollment.desired")
+                       + _outbox_for_grant(db, grant.id, "enrollment.revoked"))
+            latest = max(history, key=lambda r: (
+                int((r.payload or {}).get("revision") or 1), r.created_at, r.event_id
+            ), default=None)
+            if not allowed and not latest:
                 continue
-            rows = _outbox_for_grant(db, grant.id, "enrollment.desired")
+            if latest and latest.kind != desired_kind:
+                findings.append(_finding(
+                    finding_id=f"enrollment_state_mismatch:{grant.id}",
+                    scope="enrollment", code="enrollment_state_mismatch",
+                    summary="Latest enrollment event differs from current CRM access decision",
+                    correlation_id=order.id, action="reconcile_grant_state",
+                    refs={"grant_id": grant.id, "order_id": order.id},
+                ))
+                continue
+            rows = [latest] if latest else []
             sent = [r for r in rows if r.state == "sent"]
             dead = [r for r in rows if r.state == "dead"]
             pending = [r for r in rows if r.state in {"pending", "failed"}]
@@ -224,6 +248,8 @@ def detect_enrollment(db, project_id: str | None = None, limit: int = 100) -> li
                         refs={"grant_id": grant.id, "order_id": order.id},
                     )
                 )
+            if not allowed:
+                continue
             # Dead access.granted tied to same grant (solo_pr wire key still uses dots).
             access_event_id = f"access.granted:{grant.id}"
             access_row = db.scalar(
@@ -500,6 +526,29 @@ def apply_findings(
             # Signal requeue adopts dotted → CE-safe event_id inside requeue_outbox_row.
             results = [requeue_outbox_row(db, r) for r in targets]
             applied.append({"finding_id": finding["finding_id"], "result": "requeued_outbox", "rows": results})
+        elif action == "reconcile_grant_state":
+            order = db.scalar(select(Order).where(Order.id == refs["order_id"]).with_for_update())
+            grant = db.get(AccessGrant, refs["grant_id"])
+            if not order or not grant or grant.order_id != order.id:
+                skipped.append({**finding, "reason": "grant_or_order_missing"})
+                continue
+            profile = db.get(Profile, order.profile_id)
+            if not profile:
+                skipped.append({**finding, "reason": "profile_missing"})
+                continue
+            from datetime import timezone
+            expiry = grant.expires_at
+            if expiry and expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            financial = balance(db, order)
+            allowed = (order.state == "open" and (not expiry or expiry > now())
+                       and financial["paid_minor"] * 100 >= order.total_minor * grant.min_paid_percent)
+            integrations.enqueue_access_event(
+                db, kind="access.granted" if allowed else "access.revoked",
+                grant=grant, order=order, profile=profile, financial=financial)
+            integrations.enqueue_enrollment(
+                db, grant=grant, order=order, profile=profile, revision=1, revoke=not allowed)
+            applied.append({"finding_id": finding["finding_id"], "result": "reconciled_grant", "grant_id": grant.id})
         elif action == "enqueue_enrollment":
             grant = db.get(AccessGrant, refs["grant_id"])
             order = db.get(Order, refs["order_id"])
