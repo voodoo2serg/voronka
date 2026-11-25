@@ -1,7 +1,7 @@
 """Payment → entitlement job. Payment is never rolled back on job failure."""
 from __future__ import annotations
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import or_, select
 
 from app.crm_models import AccessGrant, EntitlementJob, Order, Payment, Profile
 from app.crm_service import balance, uid
@@ -81,34 +81,33 @@ def process_job(db, job: EntitlementJob) -> bool:
 
 
 def process_pending(db, limit: int = 20) -> int:
-    # Re-check waiting_grant jobs so late AccessGrant creation unlocks neighbors.
-    rows = list(
-        db.scalars(
-            select(EntitlementJob)
-            .where(
-                or_(
-                    EntitlementJob.state.in_(["pending", "waiting_grant"]),
-                    (EntitlementJob.state == "failed") & (EntitlementJob.attempts < 8),
-                )
-            )
-            .order_by(
-                case((EntitlementJob.state == "waiting_grant", 1), else_=0),
-                EntitlementJob.updated_at,
-                EntitlementJob.created_at,
-                EntitlementJob.id,
-            )
-            .with_for_update(skip_locked=True)
-            .limit(limit)
-        )
-    )
+    # Reserve a separate bounded batch for waiting grants. A backlog in
+    # either class must not starve the other, even with exhausted retries.
+    if limit <= 0:
+        return 0
+    active = list(db.scalars(
+        select(EntitlementJob)
+        .where(or_(
+            EntitlementJob.state == "pending",
+            (EntitlementJob.state == "failed") & (EntitlementJob.attempts < 8),
+        ))
+        .order_by(EntitlementJob.updated_at, EntitlementJob.created_at, EntitlementJob.id)
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+    ))
+    waiting = list(db.scalars(
+        select(EntitlementJob)
+        .where(EntitlementJob.state == "waiting_grant")
+        .order_by(EntitlementJob.updated_at, EntitlementJob.created_at, EntitlementJob.id)
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+    ))
     done = 0
-    for job in rows:
-        if job.state == "failed" and job.attempts >= 8:
-            continue
+    for job in active + waiting:
         if job.state == "waiting_grant":
             job.state = "pending"
-        process_job(db, job)
-        done += 1
+        if process_job(db, job):
+            done += 1
     return done
 
 
