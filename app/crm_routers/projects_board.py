@@ -5,7 +5,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import Field
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 
 from app.crm_deps import Body, Session, crm_actor, encode, must, staff_owner
 from app.crm_models import (
@@ -19,15 +19,25 @@ from app.crm_models import (
     ProjectCourse,
     WorkItem,
 )
-from app.crm_service import audit, project_access, project_ids, uid
+from app.crm_service import (
+    audit,
+    get_profile,
+    manager_scope,
+    project_access,
+    project_ids,
+    uid,
+)
 from app.db import Project, now
 from app.projects_domain import (
     PERSON_ROLES,
     base_chain_summary,
+    convert_profile_from_start,
     ensure_progrev_project,
     ensure_start_project,
     get_base_action_chain,
+    is_start_project,
     project_board_row,
+    start_inbox_metrics,
     start_project_id,
 )
 
@@ -59,6 +69,14 @@ class CourseBind(Body):
 
 
 class ProfileBranchBody(Body):
+    branch_id: str | None = None
+    person_role: Literal["lead", "client", "alumni"] | None = None
+
+
+class ConvertBody(Body):
+    """CRM-R7: move a «Старт» lead into a commercial Project (+ optional Branch)."""
+
+    project_id: str = Field(min_length=1, max_length=36)
     branch_id: str | None = None
     person_role: Literal["lead", "client", "alumni"] | None = None
 
@@ -121,12 +139,21 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
         project_access(db, admin, pid)
         project = must(db.get(Project, pid))
         board = project_board_row(db, project)
-        deals = db.scalar(select(func.count()).select_from(Deal).where(Deal.project_id == pid)) or 0
+        deal_filter = [Deal.project_id == pid]
+        if manager_scope(admin):
+            # Same visibility as GET /projects/{pid}/deals.
+            deal_filter.append(
+                or_(Deal.owner_id == admin.telegram_id, Profile.owner_id == admin.telegram_id)
+            )
+        deal_count_q = select(func.count()).select_from(Deal)
+        recent_q = select(Deal).where(Deal.project_id == pid)
+        if manager_scope(admin):
+            deal_count_q = deal_count_q.join(Profile, Profile.id == Deal.profile_id)
+            recent_q = recent_q.join(Profile, Profile.id == Deal.profile_id)
+        deals = db.scalar(deal_count_q.where(*deal_filter)) or 0
         open_deals = (
             db.scalar(
-                select(func.count())
-                .select_from(Deal)
-                .where(Deal.project_id == pid, Deal.stage.notin_(["won", "lost"]))
+                deal_count_q.where(*deal_filter, Deal.stage.notin_(["won", "lost"]))
             )
             or 0
         )
@@ -144,9 +171,14 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
         )
         courses = list(db.scalars(select(ProjectCourse).where(ProjectCourse.project_id == pid)))
         base = get_base_action_chain(db, pid, None)
-        start_clients = 0
-        if project.system_key == "start":
-            start_clients = board["contacts_count"]
+        if manager_scope(admin):
+            recent_q = recent_q.where(
+                or_(Deal.owner_id == admin.telegram_id, Profile.owner_id == admin.telegram_id)
+            )
+        recent_deals = list(
+            db.scalars(recent_q.order_by(Deal.created_at.desc(), Deal.id.desc()).limit(8))
+        )
+        start_extra = start_inbox_metrics(db, project, admin=admin)
         return {
             **board,
             "deals_count": int(deals),
@@ -157,8 +189,8 @@ def project_dashboard(pid: str, admin=Depends(crm_actor)):
             "chains": [encode(c) for c in chains],
             # CRM-R5: SoR for project steps = saved constructor base, not fixed funnel template.
             "base_chain": base_chain_summary(base),
-            "start_inbox": project.system_key == "start",
-            "start_open_count": int(start_clients),
+            "recent_deals": [encode(d) for d in recent_deals],
+            **start_extra,
         }
 
 
@@ -286,3 +318,41 @@ def place_contact(profile_id: str, body: ProfileBranchBody, admin=Depends(crm_ac
         row.revision += 1
         audit(db, admin, "profile.placement", project_id=row.project_id, profile_id=profile_id)
         return encode(row)
+
+
+@router.post("/contacts/{profile_id}/convert")
+def convert_contact(profile_id: str, body: ConvertBody, admin=Depends(crm_actor)):
+    """CRM-R7: convert a «Старт» lead into a commercial Project / Branch."""
+    target_project_id = body.project_id.strip()
+    with Session.begin() as db:
+        # get_profile enforces project_access + profile_visible (manager scope).
+        row = get_profile(db, admin, profile_id)
+        project_access(db, admin, target_project_id)
+        source = must(db.get(Project, row.project_id))
+        if not is_start_project(source):
+            raise HTTPException(422, "Конвертация только из системного проекта «Старт»")
+        try:
+            dest = convert_profile_from_start(
+                db,
+                row,
+                target_project_id=target_project_id,
+                branch_id=(body.branch_id.strip() if body.branch_id else None),
+                person_role=body.person_role,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        audit(
+            db,
+            admin,
+            "profile.converted_from_start",
+            project_id=target_project_id,
+            profile_id=dest.id,
+            start_profile_id=profile_id,
+        )
+        return {
+            "ok": True,
+            "start_profile": encode(row),
+            "profile": encode(dest),
+            "project_id": dest.project_id,
+            "branch_id": dest.branch_id,
+        }
