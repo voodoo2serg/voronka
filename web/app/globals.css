@@ -108,11 +108,14 @@ a.auth-secondary:hover{background:#f1f1ef;text-decoration:none}
 .constructor-hint{margin:0 0 4px}
 .constructor-flow{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:18px 0;padding:16px;border:1px solid var(--line);border-radius:9px;background:#fcfcfb}
 .constructor-flow-vertical{flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:0;padding:20px 18px 24px;background:linear-gradient(180deg,#fafaf8 0%,#f3f3f0 100%)}
-/* CRM-R3: horizontal square IA — fixed «Клиент получает» left, + right / + top / sender bottom */
-.constructor-flow-squares{flex-direction:row;flex-wrap:nowrap;align-items:stretch;gap:0;padding:28px 20px 24px;overflow-x:auto;background:linear-gradient(90deg,#fafaf8 0%,#f3f3f0 100%)}
+/* CRM-R3: horizontal square IA — fixed «Клиент получает» left, + right / + top / sender bottom.
+   Wrap instead of overflow-x:auto so type/content menus are not clipped (overflow-x forces overflow-y). */
+.constructor-flow-squares{flex-direction:row;flex-wrap:wrap;align-items:flex-start;gap:12px 0;padding:28px 20px 48px;overflow:visible;background:linear-gradient(90deg,#fafaf8 0%,#f3f3f0 100%)}
 .constructor-flow-squares .constructor-fixed{flex:0 0 auto;width:160px;min-width:140px;max-width:180px;margin:0;align-self:center;padding:18px 14px}
 .constructor-step-block{display:flex;flex-direction:row;align-items:center;flex:0 0 auto}
-.constructor-flow-squares .constructor-step-block{width:auto}
+.constructor-flow-squares .constructor-step-block{width:auto;position:relative;z-index:1}
+.constructor-flow-squares .constructor-plus-wrap{z-index:6}
+.constructor-flow-squares .constructor-plus-menu{z-index:7}
 .constructor-connector{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:36px;width:100%;position:relative}
 .constructor-connector-h{flex-direction:row;min-height:0;min-width:44px;width:auto;height:auto;align-self:center}
 .constructor-connector::before{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;margin-left:-1px;background:#d8d8d2;z-index:0}

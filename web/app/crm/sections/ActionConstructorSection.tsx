@@ -747,40 +747,44 @@ export function ActionConstructorSection({
                 </label>
 
                 {(editorFocus === 'message' || !kindHasActionDetails(current.kind)) && (
-                  <>
-                    <label>
-                      Сообщение
-                      <textarea
-                        rows={6}
-                        value={previewBody}
-                        onChange={(e) =>
-                          updateNode(selected, {
-                            config: { ...current.config, body: e.target.value, text: e.target.value },
-                          })
-                        }
-                        placeholder="Текст сообщения без тяжёлой загрузки файлов…"
-                      />
-                    </label>
-                    <label>
-                      Пауза перед шагом (мин)
-                      <input
-                        type="number"
-                        min={0}
-                        value={String(current.config.wait_minutes ?? '')}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          const wait = raw === '' ? undefined : Number(raw);
-                          updateNode(selected, {
-                            config: {
-                              ...current.config,
-                              wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
-                            },
-                          });
-                        }}
-                        placeholder="0"
-                      />
-                    </label>
-                  </>
+                  <label>
+                    Сообщение
+                    <textarea
+                      rows={6}
+                      value={previewBody}
+                      onChange={(e) =>
+                        updateNode(selected, {
+                          config: { ...current.config, body: e.target.value, text: e.target.value },
+                        })
+                      }
+                      placeholder="Текст сообщения без тяжёлой загрузки файлов…"
+                    />
+                  </label>
+                )}
+
+                {/* Pause: always for wait; otherwise when editing message / kinds without action pane */}
+                {(current.kind === 'wait' ||
+                  editorFocus === 'message' ||
+                  !kindHasActionDetails(current.kind)) && (
+                  <label>
+                    {current.kind === 'wait' ? 'Пауза (мин)' : 'Пауза перед шагом (мин)'}
+                    <input
+                      type="number"
+                      min={0}
+                      value={String(current.config.wait_minutes ?? '')}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const wait = raw === '' ? undefined : Number(raw);
+                        updateNode(selected, {
+                          config: {
+                            ...current.config,
+                            wait_minutes: wait === undefined || Number.isNaN(wait) ? undefined : wait,
+                          },
+                        });
+                      }}
+                      placeholder={current.kind === 'wait' ? 'например 60' : '0'}
+                    />
+                  </label>
                 )}
 
                 {(editorFocus === 'action' || current.kind === 'payment') && current.kind === 'payment' && (

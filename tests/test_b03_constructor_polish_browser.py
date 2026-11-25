@@ -70,11 +70,11 @@ def test_b03_constructor_media_overlay_and_activate(crm, monkeypatch, tmp_path):
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.route("http://crm.test/**", serve)
-        # CRM-R1: local login only behind ?breakglass=1
+        # CRM-R1: local login only behind ?breakglass=1 («Аварийный вход»)
         page.goto("http://crm.test/crm/?breakglass=1")
         page.get_by_label("Логин", exact=True).fill("owner")
         page.get_by_label("Пароль", exact=True).fill("owner-password-123")
-        page.get_by_role("button", name="Войти", exact=True).click()
+        page.get_by_role("button", name="Аварийный вход", exact=True).click()
         expect(page.get_by_role("heading", name="Проекты", exact=True, level=1)).to_be_visible()
         page.locator("button.project-card").filter(has_text="Соло-PR").click()
         expect(page.get_by_role("heading", name="Обзор", exact=True, level=1)).to_be_visible()

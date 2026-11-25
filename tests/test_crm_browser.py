@@ -39,8 +39,8 @@ def test_browser_login_create_contact_deal_and_import(crm,width):
         page.goto('http://crm.test/crm/?breakglass=1')
         page.get_by_label('Логин',exact=True).fill('owner')
         page.get_by_label('Пароль',exact=True).fill('owner-password-123')
-        # AUTH-M2 / FE-U3: guest primary CTA label is short «Войти» (local form submit).
-        page.get_by_role('button',name='Войти',exact=True).click()
+        # Break-glass submit label is «Аварийный вход» (OIDC CTA is a link «Войти через Keycloak»).
+        page.get_by_role('button',name='Аварийный вход',exact=True).click()
         # CRM redesign: default section is home «Проекты»; open a project → Обзор.
         # Page heading is h1; board also has h2 «Проекты» — scope level=1 for strict mode.
         # Sidebar «Проект» <select> is display:none under 650px — use the board card instead.
