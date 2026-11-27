@@ -8,7 +8,7 @@
 |---|---|---|
 | Боты, воронки, CRM, Person/ContactPoint/Consent/Journey/Agreement, media volume, Payment/Order/OrderLine/Receivable/Allocation/Refund/Invoice/AccessGrant, статистика продаж | **voronka** (home) | Писать ledger или Person graph в Signal/сайте/LMS; shared Postgres |
 | Регистрации, согласия 152‑ФЗ, ЛК, CMS, lead store | **solo_pr** (RU cloud) | Shared Postgres с home; Cloudflare D1 для ПДн |
-| ПРИЗМА 5: полная анкета, открытые ответы, точные личные показатели, versioned snapshot, receipts и report grants | **solo_pr SQLite** | Копировать анкеты в Signal/CRM; публичный PDF в Media Registry; привязывать гостя к чужому аккаунту по email |
+| ПРИЗМА 5: полный завершённый отчёт, ответы, точные показатели, версия вопросов и согласия | **Voronka Interaction — постоянный архив после ACK; solo_pr SQLite — атомарное сохранение, рабочая копия и browser grants** | Копировать анкеты в PostgreSQL Signal; публичный PDF в Media Registry; привязывать гостя к чужому аккаунту по совпадению email |
 | Курсы, группы OpenOlat, enrollment adapter | **lms_end** (home) | Создавать Robokassa-заказы; FK в CRM money tables |
 | AI prompts / draft context | **voronka** | Автоотправка клиенту без действия менеджера |
 

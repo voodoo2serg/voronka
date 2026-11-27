@@ -10,3 +10,6 @@ web/node_modules
 web/.next
 web/out
 app/crm_static
+compose*.yaml
+compose*.yml
+.deploy-*
