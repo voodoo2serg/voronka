@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from app.media_request_auth import MediaRequestAuth
 
 
 class SignalMediaError(RuntimeError):
@@ -96,7 +97,9 @@ def fetch_registry_bytes(asset_id: str, *, profile: str | None = None) -> Fetche
     if profile:
         body["rendition_profile"] = profile
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, auth=MediaRequestAuth(base,
+                os.getenv("MEDIA_REGISTRY_SERVICE_ID", "voronka"),
+                os.environ["MEDIA_REGISTRY_M2M_SECRET"])) as client:
             meta = None
             try:
                 got = client.get(f"{base}/v1/assets/{asset_id}", headers=_registry_headers())
@@ -235,7 +238,9 @@ def link_communication_asset(
     if meta_json:
         payload["meta_json"] = meta_json
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, auth=MediaRequestAuth(base,
+                os.getenv("MEDIA_REGISTRY_SERVICE_ID", "voronka"),
+                os.environ["MEDIA_REGISTRY_M2M_SECRET"])) as client:
             r = client.post(
                 f"{base}/v1/links/communication",
                 headers=_registry_headers(),

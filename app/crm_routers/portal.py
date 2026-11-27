@@ -356,20 +356,22 @@ async def yookassa_webhook(request: Request):
         if not hmac.compare_digest(supplied.strip(), expected):
             raise HTTPException(403, "Неверная подпись webhook")
 
+    from app.yookassa_verification import verified_payment, amount_minor as verified_amount_minor
+
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid notification")
     event_type = str(payload.get("event") or payload.get("type") or "")
     obj = payload.get("object") if isinstance(payload.get("object"), dict) else {}
     external_id = str(obj.get("id") or payload.get("id") or "")
+    obj = await verified_payment(external_id)
     status = str(obj.get("status") or "")
+    if event_type != f"payment.{status}":
+        return {"ok": True, "ignored": "stale_notification"}
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
     invoice_id = str(metadata.get("invoice_id") or metadata.get("InvId") or "")
-    amount_obj = obj.get("amount") if isinstance(obj.get("amount"), dict) else {}
-    try:
-        amount_major = float(amount_obj.get("value") or 0)
-    except (TypeError, ValueError):
-        amount_major = 0.0
-    amount_minor = int(round(amount_major * 100))
+    amount_minor = verified_amount_minor(obj)
     event_key = f"yookassa:{external_id}:{event_type}:{status}"
-    paid = event_type in {"payment.succeeded", "payment.waiting_for_capture"} or status == "succeeded"
+    paid = status == "succeeded" and obj.get("paid") is True
 
     with Session.begin() as db:
         prior = db.scalar(
@@ -378,7 +380,11 @@ async def yookassa_webhook(request: Request):
         if prior:
             return {"ok": True, "duplicate": True}
         order_id = None
-        invoice = db.get(Invoice, invoice_id) if invoice_id else None
+        invoice = db.scalar(select(Invoice).where(Invoice.id == invoice_id).with_for_update()) if invoice_id else None
+        if not invoice or invoice.amount_minor != amount_minor:
+            raise HTTPException(409, "Invoice or amount mismatch")
+        if obj.get("test") is not invoice.test:
+            raise HTTPException(409, "Payment mode mismatch")
         if invoice:
             order_id = invoice.order_id
         row = ProviderEvent(
@@ -400,6 +406,10 @@ async def yookassa_webhook(request: Request):
         )
         db.add(row)
         db.flush()
+        if os.getenv("YOOKASSA_ENABLED", "0") != "1" or invoice.test:
+            row.state = "processed"
+            row.processed_at = db_now()
+            return {"ok": True, "sandbox": True}
         project_id = None
         order_row = db.get(Order, order_id) if order_id else None
         if order_row:
@@ -441,7 +451,7 @@ async def yookassa_webhook(request: Request):
                     paid=True,
                     provider="yookassa",
                 )
-        elif not paid and order_id:
+        elif status == "canceled" and order_id:
             staff_alerts.fire_payment_alerts(
                 db,
                 kind="not_paid",

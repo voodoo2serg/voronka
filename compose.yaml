@@ -46,7 +46,7 @@ services:
     volumes: [media:/data/media]
     mem_limit: 768m
     restart: unless-stopped
-  worker:
+  worker: &worker
     <<: *logging
     build: .
     env_file: .env
@@ -56,6 +56,15 @@ services:
     volumes: [media:/data/media]
     mem_limit: 512m
     restart: unless-stopped
+  delivery-site:
+    <<: *worker
+    command: python -m app.integration_worker solo_pr
+  delivery-lms:
+    <<: *worker
+    command: python -m app.integration_worker lms_end
+  delivery-signal:
+    <<: *worker
+    command: python -m app.integration_worker signal
   proxy:
     <<: *logging
     image: caddy:2

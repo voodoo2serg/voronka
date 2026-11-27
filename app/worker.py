@@ -194,14 +194,11 @@ def sweep():
             event(db, "message.unknown", row.connection_id, run_id=row.run_id, outbox_id=row.id)
 
 def integrations_tick():
-    """Entitlement jobs + signed neighbor outbox. Failures never delete Payments."""
+    """Commit entitlement decisions independently of remote delivery."""
     from app.entitlement import process_pending
-    from app.integrations import drain_outbox
     from app.observability import queue_metrics, metrics_log_line
-    did = False
     with Session.begin() as db:
-        did = process_pending(db) > 0 or did
-        did = drain_outbox(db) > 0 or did
+        did = process_pending(db) > 0
         # Periodic structured metrics line (no secrets).
         if int(time.time()) % 60 < 2:
             print(metrics_log_line(queue_metrics(db)), flush=True)

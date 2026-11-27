@@ -238,13 +238,13 @@ def test_robokassa_fail_fires_not_paid(crm):
         assert list(db.scalars(select(StaffAlertEvent)))
 
 
-def test_yookassa_webhook_paid_and_canceled(crm):
+def test_yookassa_webhook_paid_and_canceled(crm, monkeypatch):
     payment_vault.apply_updates(
         {
             "YOOKASSA_SHOP_ID": "shop-yk",
             "YOOKASSA_SECRET_KEY": "secret-yk",
             "YOOKASSA_WEBHOOK_SECRET": "whsec",
-            "YOOKASSA_ENABLED": "0",
+            "YOOKASSA_ENABLED": "1",
         }
     )
     crm.client.post("/api/crm/staff-alert-rules", json={"kind": "paid", "channel": "telegram"})
@@ -258,11 +258,18 @@ def test_yookassa_webhook_paid_and_canceled(crm):
             order_id=o["id"],
             number="yk-inv-9",
             amount_minor=20000,
-            test=True,
+            test=False,
             state="pending",
         )
         db.add(inv)
         inv_id = inv.id
+    verified = {"id": "yk-pay-1", "status": "succeeded", "paid": True, "test": False,
+                "amount": {"value": "200.00", "currency": "RUB"},
+                "metadata": {"invoice_id": inv_id}}
+    async def verify(payment_id):
+        assert payment_id == verified["id"]
+        return verified
+    monkeypatch.setattr("app.yookassa_verification.verified_payment", verify)
     paid = crm.client.post(
         "/api/crm/yookassa/webhook",
         headers={"x-yookassa-signature": "whsec"},
@@ -286,11 +293,13 @@ def test_yookassa_webhook_paid_and_canceled(crm):
             order_id=o["id"],
             number="yk-inv-10",
             amount_minor=5000,
-            test=True,
+            test=False,
             state="pending",
         )
         db.add(inv2)
         inv2_id = inv2.id
+    verified.update(id="yk-pay-2", status="canceled", paid=False,
+                    amount={"value": "50.00", "currency": "RUB"}, metadata={"invoice_id": inv2_id})
     canceled = crm.client.post(
         "/api/crm/yookassa/webhook",
         headers={"x-yookassa-signature": "whsec"},
