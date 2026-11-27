@@ -169,6 +169,9 @@ def test_snapshot_backfill_and_existing_revocation(diagnostic):
     payload["report"]["id"] = legacy["diagnostic_id"]
     assert send(diagnostic, payload).json()["person_id"] == person
     with diagnostic.db.begin() as db:
+        assert len(db.scalars(select(Interaction).where(Interaction.kind == "diagnostic.completed")).all()) == 1
+        archive = db.scalar(select(Interaction).where(Interaction.external_event_key == payload["event_id"]))
+        assert archive.kind == "diagnostic.archived" and archive.payload["report"] == payload["report"]
         point = db.scalar(select(ContactPoint).where(ContactPoint.person_id == person, ContactPoint.channel == "email"))
         db.add(Consent(id="already-revoked", contact_point_id=point.id, purpose="marketing", status="revoked"))
     assert send(diagnostic, proof(legacy)).status_code == 200
