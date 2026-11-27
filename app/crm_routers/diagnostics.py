@@ -1,0 +1,167 @@
+"""Dedicated diagnostic claims intake. Email equality never proves ownership."""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import re
+import time
+from datetime import timedelta
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError
+
+from app.crm_models import (
+    ContactPoint,
+    IntegrationInbox,
+    Interaction,
+    MergeReview,
+    Person,
+    PersonLink,
+    Profile,
+)
+from app.crm_service import uid
+from app.db import Contact as FunnelContact
+from app.db import Project, Session, now
+from app.person_graph import address_hash, upsert_contact_point
+
+router = APIRouter()
+
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Contact(Strict):
+    name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=250)
+    telegram: str = Field(default="", max_length=100)
+    email_verified: Literal[False]
+
+
+class ConsentReceipt(Strict):
+    processing: Literal[True]
+    marketing: bool
+    version: str = Field(min_length=1, max_length=80)
+    processing_text_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    marketing_text_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class Summary(Strict):
+    current_total: int = Field(ge=0, le=50)
+    target_total: int = Field(ge=0, le=50)
+    effort: int = Field(ge=0, le=20)
+    priorities: list[Literal["pr_asset", "personal_asset", "smart", "business", "meaning"]] = Field(max_length=5)
+
+
+class Completion(Strict):
+    event_id: str = Field(max_length=80)
+    kind: Literal["prisma5.completed"]
+    diagnostic_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    methodology_version: Literal["1.1"]
+    project_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    cohort: str = Field(max_length=80)
+    completed_at: str = Field(max_length=40)
+    contact: Contact
+    consents: ConsentReceipt
+    summary: Summary
+
+
+class Deletion(Strict):
+    event_id: str = Field(max_length=80)
+    kind: Literal["prisma5.deleted"]
+    diagnostic_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    project_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+
+
+@router.post("/integrations/solo_pr/diagnostics")
+async def receive_diagnostic(request: Request):
+    if os.getenv("PRISMA5_ENABLED") != "1":
+        raise HTTPException(404, "Not enabled")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 16384:
+            raise HTTPException(413, "Request too large")
+    secret = os.getenv("PRISMA_CRM_SECRET", "")
+    ts = request.headers.get("x-prisma-timestamp", "")
+    nonce = request.headers.get("x-prisma-nonce", "")
+    if not secret or not re.fullmatch(r"[0-9]{10,12}", ts) or abs(time.time() - int(ts)) > 300 or not re.fullmatch(r"[0-9a-f]{48}", nonce):
+        raise HTTPException(401, "Invalid signature")
+    digest = hashlib.sha256(raw).hexdigest()
+    message = f"v1\n{ts}\n{nonce}\nPOST\n{request.url.path}\n{digest}"
+    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    if request.url.query or not hmac.compare_digest(expected, request.headers.get("x-prisma-signature", "")):
+        raise HTTPException(401, "Invalid signature")
+    try:
+        payload = json.loads(raw)
+        body = (Deletion if payload.get("kind") == "prisma5.deleted" else Completion).model_validate(payload)
+    except (ValidationError, ValueError, AttributeError) as exc:
+        raise HTTPException(422, "Invalid diagnostic") from exc
+    if body.project_id not in {p.strip() for p in os.getenv("PRISMA_PROJECT_IDS", "").split(",") if p.strip()}:
+        raise HTTPException(403, "Project not allowed")
+    prefix = "prisma5-delete:" if isinstance(body, Deletion) else "prisma5:"
+    if body.event_id != prefix + body.diagnostic_id:
+        raise HTTPException(422, "Invalid event identity")
+    if isinstance(body, Completion) and (not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", body.contact.email) or body.summary.target_total - body.summary.current_total != body.summary.effort):
+        raise HTTPException(422, "Invalid summary or email")
+    with Session.begin() as db:
+        if db.get_bind().dialect.name == "postgresql":
+            lock_key = int.from_bytes(hashlib.sha256(body.diagnostic_id.encode()).digest()[:8], signed=True)
+            db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+        if not db.get(Project, body.project_id):
+            raise HTTPException(404, "Project not found")
+        # Existing durable inbox supplies a unique nonce constraint without a new database.
+        db.execute(delete(IntegrationInbox).where(IntegrationInbox.source == "prisma_nonce", IntegrationInbox.created_at < now() - timedelta(seconds=601)))
+        nonce_key = hashlib.sha256(nonce.encode()).hexdigest()
+        try:
+            with db.begin_nested():
+                db.add(IntegrationInbox(id=uid(), source="prisma_nonce", event_key=nonce_key, kind="nonce", payload={}, state="applied"))
+                db.flush()
+        except IntegrityError as exc:
+            raise HTTPException(401, "Replayed request") from exc
+        previous = db.scalar(select(IntegrationInbox).where(IntegrationInbox.source == "solo_pr_prisma", IntegrationInbox.event_key == body.event_id))
+        if previous:
+            if previous.payload.get("body_hash") != digest:
+                raise HTTPException(409, "Diagnostic identity conflict")
+            return {"diagnostic_id": body.diagnostic_id, "person_id": previous.payload.get("person_id"), "duplicate": True}
+        deleted = db.scalar(select(IntegrationInbox).where(IntegrationInbox.source == "solo_pr_prisma", IntegrationInbox.event_key == "prisma5-delete:" + body.diagnostic_id))
+        if isinstance(body, Completion) and deleted:
+            raise HTTPException(410, "Diagnostic deleted")
+        if isinstance(body, Deletion):
+            db.add(IntegrationInbox(id=uid(), source="solo_pr_prisma", event_key=body.event_id, kind="subject.delete", payload={"body_hash": digest, "diagnostic_id": body.diagnostic_id, "project_id": body.project_id, "user_id": "prisma5:" + body.diagnostic_id}, state="pending_review"))
+            return {"diagnostic_id": body.diagnostic_id, "status": "recorded_for_review"}
+        native = "prisma5:" + body.diagnostic_id
+        link = db.scalar(select(PersonLink).where(PersonLink.service == "solo_pr", PersonLink.native_id == native))
+        if link:
+            person = db.get(Person, link.person_id)
+        else:
+            person = Person(id=uid(), lifecycle_stage="provisional", display_name=body.contact.name, extra={"source": "prisma5", "identity_status": "unverified_claim"})
+            db.add(person)
+            db.flush()
+            db.add(PersonLink(id=uid(), person_id=person.id, service="solo_pr", native_id=native, verified_by="unverified_claim"))
+            local_contact = FunnelContact(id=uid(), person_id=person.id)
+            db.add(local_contact)
+            db.flush()
+            db.add(Profile(id=uid(), contact_id=local_contact.id, person_id=person.id, project_id=body.project_id, name=body.contact.name, email=body.contact.email.strip().lower(), source="prisma5", tags=["ПРИЗМА 5", "неподтверждённый контакт"], extra={"diagnostic_id": body.diagnostic_id, "identity_status": "unverified_claim"}, stopped=True))
+            email = body.contact.email.strip().lower()
+            digest_address = address_hash("email", email)
+            contact = ContactPoint(id=uid(), person_id=person.id, channel="email", raw_value=email, normalized_value=email, address_hash=digest_address, verified=False)
+            db.add(contact)
+            if body.contact.telegram:
+                upsert_contact_point(db, person, channel="telegram", value=body.contact.telegram, verified=False)
+            # Existing marketing/transactional permissions are never changed by a guest claim.
+            for match in db.scalars(select(ContactPoint).where(ContactPoint.channel == "email", ContactPoint.address_hash == digest_address, ContactPoint.person_id != person.id).limit(5)):
+                db.add(MergeReview(id=uid(), source_person_id=person.id, target_person_id=match.person_id, reason="Unverified diagnostic email claim", evidence={"source": native, "verified": False}))
+        receipt = body.consents.model_dump()
+        db.add(Interaction(id=uid(), person_id=person.id, project_id=body.project_id, kind="diagnostic.completed", direction="system", channel="web", evidence_status="unverified_claim", source_service="solo_pr", external_event_key=body.event_id, payload={"diagnostic_id": body.diagnostic_id, "methodology_version": body.methodology_version, "cohort": body.cohort, "summary": body.summary.model_dump(), "consent_receipt": receipt, "marketing_permission": "not_granted_without_address_proof"}))
+        db.add(IntegrationInbox(id=uid(), source="solo_pr_prisma", event_key=body.event_id, kind=body.kind, payload={"body_hash": digest, "person_id": person.id, "diagnostic_id": body.diagnostic_id, "project_id": body.project_id}, state="applied"))
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            raise HTTPException(503, "Retry diagnostic delivery") from exc
+        return {"diagnostic_id": body.diagnostic_id, "person_id": person.id, "identity_status": "provisional"}

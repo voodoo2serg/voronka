@@ -22,6 +22,7 @@ from app.crm_routers.action_chains import router as action_chains_router
 from app.crm_routers.payment_settings import router as payment_settings_router
 from app.crm_routers.connection_vault import router as connection_vault_router
 from app.crm_routers.signal_media_bff import router as signal_media_bff_router
+from app.crm_routers.diagnostics import router as diagnostics_router
 
 
 def build_router() -> APIRouter:
@@ -33,6 +34,7 @@ def build_router() -> APIRouter:
     router.include_router(payment_settings_router)
     router.include_router(connection_vault_router)
     router.include_router(signal_media_bff_router)
+    router.include_router(diagnostics_router)
     router.include_router(contacts_router)
     router.include_router(commerce_router)
     router.include_router(campaigns_router)

@@ -8,6 +8,7 @@
 |---|---|---|
 | Боты, воронки, CRM, Person/ContactPoint/Consent/Journey/Agreement, media volume, Payment/Order/OrderLine/Receivable/Allocation/Refund/Invoice/AccessGrant, статистика продаж | **voronka** (home) | Писать ledger или Person graph в Signal/сайте/LMS; shared Postgres |
 | Регистрации, согласия 152‑ФЗ, ЛК, CMS, lead store | **solo_pr** (RU cloud) | Shared Postgres с home; Cloudflare D1 для ПДн |
+| ПРИЗМА 5: полная анкета, открытые ответы, точные личные показатели, versioned snapshot, receipts и report grants | **solo_pr SQLite** | Копировать анкеты в Signal/CRM; публичный PDF в Media Registry; привязывать гостя к чужому аккаунту по email |
 | Курсы, группы OpenOlat, enrollment adapter | **lms_end** (home) | Создавать Robokassa-заказы; FK в CRM money tables |
 | AI prompts / draft context | **voronka** | Автоотправка клиенту без действия менеджера |
 
@@ -32,6 +33,7 @@ Chatwoot и EspoCRM **не** входят в стек.
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/api/crm/integrations/solo_pr/leads` | `lead.created` (идемпотентно по `event_id`\|`idempotency_key`; dual-read `type`\|`kind`, nested `data`\|flat) |
+| `POST` | `/api/crm/integrations/solo_pr/diagnostics` | Отдельная PRISMA подпись path/body/nonce: provisional Person + непроверенный project Profile + краткая история, без merge/доступа по совпадению email |
 | `POST` | `/api/crm/integrations/leads` | то же; `source=solo_pr\|raga\|raga_site` (маркетинговые лиды RAGA → Person, без shared DB) |
 | `POST` | `/api/crm/integrations/commerce/quote` | Checkout quote / Order в ledger voronka |
 | `GET\|POST` | `/api/crm/robokassa/result` | ResultURL провайдера (или proxy с сайта на этот URL) |
