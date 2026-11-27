@@ -561,6 +561,10 @@ async def webhook(cid: str, request: Request):
             msg = normalize(c.platform, raw)
         except (KeyError, TypeError, ValueError):
             raise HTTPException(400, "Событие не соответствует контракту")
+        if msg and c.platform == "telegram" and msg.get("start") and (msg.get("payload") or "").startswith("p5_"):
+            from app.prisma_telegram import bind_prisma_chat
+            await bind_prisma_chat(cid, msg)
+            return "ok"
         if msg:
             db.add(Inbox(id=uid(), connection_id=cid, external_event_id=msg["event_id"], payload=msg))
             if msg.get("callback_id"):
