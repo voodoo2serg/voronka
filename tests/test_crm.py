@@ -705,7 +705,11 @@ def test_portal_payment_providers_mail_analytics_and_filters(crm, monkeypatch):
     assert crm.client.post('/api/crm/yookassa/webhook', json={}).status_code == 503
     monkeypatch.setenv('YOOKASSA_SHOP_ID', 'shop')
     monkeypatch.setenv('YOOKASSA_SECRET_KEY', 'secret')
-    assert crm.client.post('/api/crm/yookassa/webhook', json={'event': 'payment.waiting_for_capture', 'object': {'id': 'yk-1', 'status': 'pending'}}).status_code == 200
+    from fastapi import HTTPException
+    async def unavailable(payment_id):
+        raise HTTPException(503, 'Payment verification unavailable')
+    monkeypatch.setattr('app.yookassa_verification.verified_payment', unavailable)
+    assert crm.client.post('/api/crm/yookassa/webhook', json={'event': 'payment.waiting_for_capture', 'object': {'id': 'yk-1', 'status': 'pending'}}).status_code == 503
 
     mail = crm.client.get('/api/crm/projects/p/mail-status').json()
     assert mail['smtp_configured'] is True

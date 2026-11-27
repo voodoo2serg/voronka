@@ -22,6 +22,57 @@ from app.integrations import verify_bearer_or_hmac
 router = APIRouter()
 
 
+class PrivacyRequest(Body):
+    event_id: str = Field(min_length=8, max_length=160)
+    type: Literal["subject.delete"]
+    source: Literal["solo_pr"]
+    data: dict[str, Any]
+
+
+@router.get("/integrations/privacy-requests")
+def privacy_requests(admin=Depends(crm_actor)):
+    staff_owner(admin)
+    with Session() as db:
+        rows = db.scalars(select(IntegrationInbox).where(
+            IntegrationInbox.kind == "subject.delete", IntegrationInbox.state == "pending_review"
+        ).order_by(IntegrationInbox.created_at).limit(200)).all()
+        return {"items": [encode(row) for row in rows]}
+
+
+@router.post("/integrations/solo_pr/privacy", status_code=202)
+async def record_privacy_request(request: Request):
+    from app.integrations import verify_signed_request
+    from sqlalchemy.exc import IntegrityError
+    raw = await request.body()
+    if len(raw) > 16384:
+        raise HTTPException(413, "Request too large")
+    secret = os.getenv("SOLO_PR_WEBHOOK_SECRET", "")
+    if not verify_signed_request(secret, raw, request.headers.get("x-solo-timestamp", ""),
+                                 request.headers.get("x-solo-signature", "")):
+        raise HTTPException(401, "Invalid site signature")
+    try:
+        body = PrivacyRequest.model_validate_json(raw)
+    except ValidationError as exc:
+        raise HTTPException(422, "Invalid privacy request") from exc
+    if not isinstance(body.data.get("user_id"), str) or not body.data["user_id"]:
+        raise HTTPException(422, "Subject reference required")
+    with Session.begin() as db:
+        existing = db.scalar(select(IntegrationInbox).where(
+            IntegrationInbox.source == "solo_pr", IntegrationInbox.event_key == body.event_id))
+        if existing:
+            if existing.kind != body.type or existing.payload != body.model_dump():
+                raise HTTPException(409, "Privacy event identity conflict")
+            return {"status": "recorded_for_review", "event_id": body.event_id, "duplicate": True}
+        try:
+            with db.begin_nested():
+                db.add(IntegrationInbox(id=uid(), source="solo_pr", event_key=body.event_id,
+                                        kind=body.type, payload=body.model_dump(), state="pending_review"))
+                db.flush()
+        except IntegrityError as exc:
+            raise HTTPException(503, "Retry privacy request") from exc
+    return {"status": "recorded_for_review", "event_id": body.event_id}
+
+
 LEAD_SOURCES = Literal["solo_pr", "raga", "raga_site"]
 
 

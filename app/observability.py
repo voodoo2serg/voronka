@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app import auth as auth_mod
 from app.crm_models import EntitlementJob, IntegrationOutbox
 from app.db import Outbox, Session, now
+from app.integrations import DEST_LMS, DEST_SIGNAL, DEST_SOLO
 from app import media as media_mod
 
 
@@ -50,6 +51,25 @@ def queue_metrics(db=None) -> dict:
         integ_dead = session.scalar(
             select(func.count()).select_from(IntegrationOutbox).where(IntegrationOutbox.state == "dead")
         ) or 0
+        directions = {}
+        for destination in (DEST_LMS, DEST_SIGNAL, DEST_SOLO):
+            pending_count, oldest, retrying = session.execute(
+                select(func.count(), func.min(IntegrationOutbox.created_at),
+                       func.count().filter(IntegrationOutbox.last_error != ""))
+                .where(IntegrationOutbox.destination == destination, IntegrationOutbox.state == "pending")
+            ).one()
+            oldest = oldest.replace(tzinfo=timezone.utc) if oldest and not oldest.tzinfo else oldest
+            prefix = f"integration_{destination}"
+            directions[f"{prefix}_pending"] = pending_count
+            directions[f"{prefix}_retrying"] = retrying
+            directions[f"{prefix}_oldest_pending_age_seconds"] = (
+                max(0, int((now() - oldest).total_seconds())) if oldest else None
+            )
+            directions[f"{prefix}_dead"] = session.scalar(
+                select(func.count()).select_from(IntegrationOutbox).where(
+                    IntegrationOutbox.destination == destination, IntegrationOutbox.state == "dead",
+                )
+            ) or 0
         entitlement_pending = session.scalar(
             select(func.count()).select_from(EntitlementJob).where(EntitlementJob.state.in_(["pending", "waiting_grant"]))
         ) or 0
@@ -71,6 +91,7 @@ def queue_metrics(db=None) -> dict:
         "outbox_oldest_pending_age_seconds": oldest_age,
         "integration_outbox_pending": integ_pending,
         "integration_outbox_dead": integ_dead,
+        **directions,
         "entitlement_jobs_pending": entitlement_pending,
         "entitlement_jobs_failed": entitlement_failed,
         "worker_heartbeat_age_seconds": None if age is None else int(age),
